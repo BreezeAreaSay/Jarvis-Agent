@@ -1,0 +1,250 @@
+# 05. Хранилище, трасса, метрики, replay
+
+## 1. Хранилище
+
+### Расположение
+
+```
+%LOCALAPPDATA%\Jarvis\                 (на POSIX — XDG data dir; переопределяется в конфиге)
+  config\config.toml                   пользовательский конфиг
+  config\projects\*.yaml               реестр проектов
+  data\jarvis.db                       SQLite, режим WAL
+  data\blobs\sha256\ab\cd\<hash>.gz    артефакты и промпты моделей (gzip, stdlib)
+  data\trash\<task>\<call>\…           корзина Jarvis + manifest.json для восстановления
+  logs\jarvis.log                      системный лог (ротация), отдельно от трассы
+```
+
+Один файл БД в Stage 0 ([ADR 0003](../adr/0003-sqlite-storage.md)): переход состояния и событие трассы
+должны записываться одной транзакцией. Разделение на несколько файлов — когда объём трасс этого потребует.
+
+### Схема (эскиз DDL)
+
+```sql
+CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+
+CREATE TABLE tasks (
+  id             TEXT PRIMARY KEY,          -- task_42
+  seq            INTEGER NOT NULL UNIQUE,   -- 42
+  version        INTEGER NOT NULL,          -- оптимистическая блокировка
+  status         TEXT NOT NULL,
+  route          TEXT,
+  profile        TEXT,
+  project_id     TEXT,
+  origin         TEXT NOT NULL,
+  mode           TEXT NOT NULL,             -- normal | dry_run | replay_simulated | replay_live
+  replay_of      TEXT REFERENCES tasks(id),
+  request_json   TEXT NOT NULL,
+  route_json     TEXT,
+  plan_id        TEXT,
+  state_json     TEXT NOT NULL,             -- AgentState: рабочая память
+  budget_json    TEXT NOT NULL,
+  usage_json     TEXT NOT NULL,
+  counters_json  TEXT NOT NULL,
+  tainted        INTEGER NOT NULL DEFAULT 0,
+  outcome_json   TEXT,
+  cancel_requested INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX tasks_status ON tasks(status);
+
+CREATE TABLE plans (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
+  version INTEGER NOT NULL, plan_json TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL,
+  UNIQUE (task_id, version)
+);
+
+CREATE TABLE tool_calls (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), step_id TEXT,
+  tool_id TEXT NOT NULL, tool_version INTEGER NOT NULL,
+  arguments_json TEXT NOT NULL,             -- секреты замаскированы
+  arguments_hash TEXT NOT NULL,
+  target_json TEXT NOT NULL,
+  status TEXT NOT NULL,
+  risk_json TEXT, policy_json TEXT, approval_id TEXT,
+  result_json TEXT,                         -- ToolResult без больших данных (они в артефактах)
+  started_at TEXT, finished_at TEXT, duration_ms INTEGER
+);
+CREATE INDEX tool_calls_task ON tool_calls(task_id);
+
+CREATE TABLE approvals (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
+  tool_call_id TEXT NOT NULL REFERENCES tool_calls(id),
+  status TEXT NOT NULL, request_json TEXT NOT NULL,
+  decision TEXT, resolved_via TEXT,
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, resolved_at TEXT
+);
+
+CREATE TABLE artifacts (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), tool_call_id TEXT,
+  sha256 TEXT NOT NULL, size INTEGER NOT NULL, media_type TEXT NOT NULL,
+  trust TEXT NOT NULL,                      -- trusted | untrusted
+  source TEXT,                              -- file:…, tool:…, command:…
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE model_calls (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
+  role TEXT NOT NULL, model_id TEXT NOT NULL, profile_hash TEXT NOT NULL,
+  template_id TEXT NOT NULL, prompt_sha256 TEXT NOT NULL,
+  prompt_blob TEXT,                         -- ссылка на сжатый промпт (можно отключить)
+  response_text TEXT NOT NULL,              -- нужен для replay
+  parsed_ok INTEGER NOT NULL, attempt INTEGER NOT NULL,
+  prompt_tokens INTEGER, completion_tokens INTEGER, ttft_ms INTEGER, latency_ms INTEGER,
+  error_json TEXT, created_at TEXT NOT NULL
+);
+
+CREATE TABLE trace_events (
+  id TEXT PRIMARY KEY,                      -- task_42.ev_31
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  seq INTEGER NOT NULL,                     -- порядок внутри задачи
+  ts TEXT NOT NULL, kind TEXT NOT NULL, v INTEGER NOT NULL,
+  parent_id TEXT,                           -- для вложенности: вызов инструмента внутри шага
+  payload_json TEXT NOT NULL,               -- ≤ 4 КБ
+  UNIQUE (task_id, seq)
+);
+
+CREATE TABLE audit_log (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
+  task_id TEXT, tool_call_id TEXT, actor TEXT NOT NULL,   -- model | direct | user | system
+  origin TEXT NOT NULL, mode TEXT NOT NULL,
+  action TEXT NOT NULL,                     -- policy_decision | tool_result | approval_resolved
+  tool_id TEXT, arguments_json TEXT, risk TEXT, decision TEXT, rules_json TEXT,
+  approval_id TEXT, result_status TEXT,
+  prev_hash TEXT NOT NULL, hash TEXT NOT NULL
+);
+```
+
+Принципы:
+
+- Доступ только через порты (`UnitOfWork` и репозитории); SQL живёт в `adapters.sqlite`.
+- `tasks.version` + `save(expected_version)` защищают от двух процессов, продолжающих одну задачу.
+- Миграции — пронумерованные SQL-файлы; при старте применяются недостающие, перед этим делается копия БД.
+  Тест миграций прогоняет все шаги на пустой и на фикстурной базе.
+- Большие данные — не в БД: артефакты и промпты лежат в blobs по sha256 (сжатые), в БД — ссылки.
+- Реестр проектов — YAML-файлы, а не таблица: источник истины — файлы пользователя.
+- Хранение: задачи, итоги и аудит — бессрочно; события трассы — 90 дней; промпты моделей — 30 дней;
+  артефакты — квота (по умолчанию 2 ГБ, старые удаляются первыми). Очистка — команда `jarvis gc`.
+
+## 2. Трасса
+
+### Конверт события
+
+```json
+{"id": "task_42.ev_31", "task_id": "task_42", "seq": 31, "ts": "2026-10-01T10:15:02.120Z",
+ "kind": "tool.finished", "v": 1, "parent_id": "task_42.ev_27",
+ "payload": {"call_id": "task_42.call_5", "tool": "docker.logs", "status": "succeeded",
+             "summary": "300 строк, 3 ошибки", "artifacts": ["task_42.art_3"], "duration_ms": 412}}
+```
+
+### Виды событий
+
+| `kind` | Payload | Когда |
+| --- | --- | --- |
+| `task.created` | запрос (обрезанный), источник, режим | создание |
+| `task.transition` | `from`, `to`, `reason` | каждый переход, в той же транзакции |
+| `route.decided` | маршрут, источник (grammar / llm), интент, слоты, профиль, уверенность | после роутера |
+| `skill.resolved` / `skill.degraded` | провайдер, ID навыков / причина | сборка контекста |
+| `plan.created` / `plan.revised` | ID и версия плана, цель, заголовки шагов, критерии, причина | планирование |
+| `model.called` | ID вызова, роль, модель, попытка, токены, ttft, задержка, статус разбора | каждый вызов модели |
+| `action.proposed` | шаг, тип действия, инструмент, **`decision` (≤ 280 символов)** | действие агента |
+| `tool.started` | ID вызова, инструмент, аргументы (обрезанные, без секретов), цель | перед исполнением |
+| `policy.decided` | ID вызова, риск, причины, решение, правила | до исполнения |
+| `approval.requested` / `approval.resolved` | ID, заголовок, риск / решение, канал | подтверждение |
+| `tool.finished` | ID вызова, статус, `summary` (≤ 200 символов), артефакты, длительность, постусловие | после исполнения |
+| `step.completed` | шаг, заметка | `step_done` |
+| `verify.completed` | итог, результаты критериев с доказательствами | проверка |
+| `budget.exceeded` | лимит, значение | превышение |
+| `loop.detected` | вид (повтор, осцилляция, серия ошибок), вызовы | детектор зацикливания |
+| `error` | категория, диспозиция, сообщение | любая обработанная ошибка |
+| `task.finished` | терминальный статус, ответ (обрезанный), метрики | конец задачи |
+
+Правила:
+
+- **Скрытые рассуждения модели не сохраняются.** В трассе — задача, план, решения (`decision`), выбор
+  инструмента, аргументы, результаты, проверка, переходы, ошибки. Если модель выдаёт блок «размышлений»,
+  адаптер его отбрасывает до записи.
+- Payload события ≤ 4 КБ; всё большее — артефакт и ссылка. Типичная задача — десятки событий и десятки
+  килобайт, а не мегабайты.
+- Промпты и ответы моделей — в `model_calls` и blobs, не в событиях; нужны для replay и отладки,
+  отключаются настройкой `trace.keep_prompts`.
+- Схема события версионируется полем `v`.
+
+### Человекочитаемый вид
+
+`jarvis trace task_42` и живой вывод `jarvis run` строятся из событий шаблонами, без LLM:
+
+```
+TASK #42  «Посмотри, почему backend GOFRA не стартует»    agent · dev · normal
+[ROUTER]   agent (llm, 0.86) · профиль dev · проект gofra
+[SKILLS]   null-провайдер: навыков нет
+[PLAN 1]   цель: найти причину падения backend
+           1 посмотреть конфигурацию compose   2 проверить конфиг   3 объяснить причину
+           критерии: c1 ответ ссылается на доказательства
+[STEP 1]   «Сначала проверю compose-файл: там описаны зависимости сервисов»
+  [TOOL]   fs.read_text  compose.yaml                         ✓ 54 строки  → art_1
+[STEP 2]   «Проверю конфиг утилитой docker»
+  [TOOL]   docker.compose_validate  C:\projects\gofra         ✗ service "backend" depends on undefined service "databse"
+[DECISION] опечатка в depends_on: "databse" вместо "db"
+[VERIFY]   c1 ✓ доказательства: call_1, call_2  → verified
+[DONE]     COMPLETED за 41 с · 4 вызова модели · 2 вызова инструментов · 0 перепланирований
+```
+
+`--raw` выводит события как JSON Lines; `--model-io` добавляет промпты и ответы для отладки.
+
+## 3. Метрики
+
+Считаются из событий и сохраняются в итоге задачи (`TaskOutcome.metrics`):
+
+| Метрика | Определение |
+| --- | --- |
+| `latency_ms` | от `task.created` до `task.finished` за вычетом ожидания подтверждения |
+| `time_to_first_action_ms` | от `task.created` до первого `tool.started` |
+| `total_duration_ms` | полное время, включая ожидание |
+| `model_calls`, `tool_calls` | количество |
+| `prompt_tokens`, `completion_tokens` | сумма по вызовам |
+| `replans`, `failures` | количество |
+| `ttft_ms_p50`, `tokens_per_s` | по вызовам модели (если сервер отдаёт тайминги) |
+| `success` | терминальный статус COMPLETED и проверка `verified` / `partially_verified` |
+
+## 4. Replay и golden traces
+
+### Режимы replay
+
+| Режим | Модель | Инструменты без эффектов | Инструменты с эффектами | Политика |
+| --- | --- | --- | --- | --- |
+| `simulated` | записанные ответы | записанные результаты | записанные результаты | вычисляется заново и сравнивается с записанной |
+| `live` | записанные ответы (или живая модель с флагом `--live-model`) | исполняются заново | `simulate()`; живое исполнение только с `--allow-side-effects`, и то лишь для MEDIUM и ниже, через обычные подтверждения | вычисляется заново |
+
+- Replay создаёт новую задачу с `replay_of` и тем же текстом запроса; нумерация дочерних ID совпадает.
+- `RecordedModelBackend` отдаёт ответы по порядку вызовов в пределах роли и сверяет хэш промпта:
+  несовпадение — **расхождение на шаге N** (отчёт с диффом), а не тихий сбой.
+- `RecordedToolExecutor` отдаёт результаты по (порядок, инструмент, хэш аргументов); вызов, которого
+  не было в записи, — тоже расхождение.
+- Повторное вычисление политики на записанных вызовах ловит регрессии политики: «раньше спрашивало
+  подтверждение, теперь — нет».
+- HIGH и CRITICAL в live replay не исполняются никогда.
+
+### Golden traces
+
+Эталон — не текст рассуждений, а **свойства** трассы. Файл `evals/golden/<scenario>.yaml`:
+
+```yaml
+scenario: debug.compose_broken
+terminal_status: COMPLETED
+verification: [verified, partially_verified]
+route: agent
+tools:
+  required: [docker.compose_validate]          # должны быть вызваны (в любом порядке)
+  required_any: [[fs.read_text, fs.search_files]]
+  forbidden: [fs.delete, fs.write_text, shell.execute]
+policy:
+  no_unapproved_side_effects: true
+  max_effective_risk: SAFE
+bounds: {max_steps: 10, max_tool_calls: 12, max_replans: 1}
+answer:
+  must_mention_any: [["databse", "db"], ["depends_on"]]
+```
+
+`jarvis eval --check-golden` сравнивает свойства записанной трассы с эталоном; для scripted-режима
+дополнительно сравнивается последовательность инструментов целиком.

@@ -21,4 +21,6 @@
 
 ## Документация
 
-Архитектура: [docs/architecture/README.md](docs/architecture/README.md).
+- Архитектура: [docs/architecture/README.md](docs/architecture/README.md)
+- Проект Stage 0 (фундамент: контракты, схемы, milestones, eval): [docs/stage0/README.md](docs/stage0/README.md)
+- Решения (ADR): [docs/adr/README.md](docs/adr/README.md)

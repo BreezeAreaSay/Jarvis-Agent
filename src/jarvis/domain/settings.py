@@ -71,7 +71,14 @@ class RuntimeSettings(BaseModel, frozen=True, extra="forbid"):
     lease_ttl_s: PositiveFloat = 30.0
 
 
+class PolicySettings(BaseModel, frozen=True, extra="forbid"):
+    # Папки, где запись допустима с подтверждением; вне их запись запрещена (Policy Engine v1).
+    workspace_roots: list[str] = []
+    approval_ttl_s: PositiveFloat = 1800.0  # срок запроса подтверждения
+
+
 class JarvisConfig(BaseModel, frozen=True, extra="forbid"):
     schema_version: Literal[1] = 1
     budgets: BudgetsSettings = BudgetsSettings()
     runtime: RuntimeSettings = RuntimeSettings()
+    policy: PolicySettings = PolicySettings()

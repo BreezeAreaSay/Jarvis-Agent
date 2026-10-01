@@ -92,6 +92,71 @@ class TaskInterrupted(JarvisError):
     category = "interrupted"
 
 
+class ToolError(JarvisError):
+    """Сбой вызова инструмента. По умолчанию — обратная связь стадии (агенту), а не конец задачи."""
+
+    category = "tool_error"
+    disposition = Disposition.FEEDBACK
+
+
+class ToolNotFound(ToolError):
+    category = "tool_not_found"
+
+
+class InvalidToolArguments(ToolError):
+    category = "invalid_tool_arguments"
+
+
+class ToolPreviewFailed(ToolError):
+    category = "tool_preview_failed"
+
+
+class UnsupportedTarget(ToolError):
+    category = "unsupported_target"
+
+
+class ToolDenied(ToolError):
+    """Категория отказа политики или человека. Отказ — исход-значение; исключение поднимает стадия,
+    которой без этого вызова продолжать нельзя."""
+
+    category = "tool_denied"
+
+
+class ApprovalRequired(ToolError):
+    """Категория вызова, которому нужно подтверждение человека (в трассе и аудите)."""
+
+    category = "approval_required"
+    disposition = Disposition.ASK_USER
+
+
+class ToolExecutionFailed(ToolError):
+    category = "tool_execution_failed"
+
+
+class ToolTimeout(ToolError):
+    category = "tool_timeout"
+
+
+class ToolCancelled(ToolError):
+    category = "tool_cancelled"
+    disposition = Disposition.STOP
+
+
+class ToolVerificationFailed(ToolError):
+    category = "tool_verification_failed"
+    disposition = Disposition.REPLAN
+
+
+class ApprovalNotFound(JarvisError):
+    category = "approval_not_found"
+
+
+class ApprovalClosed(JarvisError):
+    """Запрос уже решён, истёк или задача больше его не ждёт."""
+
+    category = "approval_closed"
+
+
 class InvalidTransition(JarvisError):
     category = "invalid_transition"
 

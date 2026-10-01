@@ -21,6 +21,13 @@ class EventKind(StrEnum):
     BUDGET_EXCEEDED = "budget.exceeded"
     ERROR = "error"
     TASK_FINISHED = "task.finished"
+    TOOL_PREVIEWED = "tool.previewed"
+    POLICY_DECIDED = "policy.decided"
+    APPROVAL_REQUESTED = "approval.requested"
+    APPROVAL_RESOLVED = "approval.resolved"
+    TOOL_STARTED = "tool.started"
+    TOOL_FINISHED = "tool.finished"
+    TOOL_VERIFIED = "tool.verified"
 
 
 class TraceEvent(BaseModel, frozen=True, extra="forbid"):

@@ -50,6 +50,8 @@ def check_route_target(route: Route | None, target: TaskStatus) -> None:
 class TaskRequest(BaseModel, frozen=True, extra="forbid"):
     text: str = Field(min_length=1)
     origin: Origin
+    working_directory: str | None = None  # папка клиента; от неё инструменты считают относительные пути
+    dry_run: bool = False  # всё, кроме исполнения инструментов
 
 
 class TaskOutcome(BaseModel, frozen=True, extra="forbid"):

@@ -29,7 +29,6 @@ Storage = InMemoryStorage | SqliteStorage
 class App:
     config: JarvisConfig
     tasks: TaskService
-    owner: str  # кем этот процесс подписывает аренды задач
 
 
 def database_path(home: Path) -> Path:
@@ -76,4 +75,4 @@ def build_app(
         clock=clock,
         leases=leases,
     )
-    return App(config=config, tasks=tasks, owner=owner)
+    return App(config=config, tasks=tasks)

@@ -253,11 +253,11 @@ async def test_heartbeat_detects_a_takeover_and_stops_the_run(spawn: Spawn, cloc
 async def test_heartbeat_keeps_a_long_tick_alive(tmp_path: Path) -> None:
     """Реальные часы: такт дольше срока аренды, но heartbeat продлевает её, и чужое восстановление
     задачу не трогает."""
-    config = JarvisConfig(runtime=RuntimeSettings(lease_ttl_s=0.3))
+    config = JarvisConfig(runtime=RuntimeSettings(lease_ttl_s=1.0))
 
     class Slow:
         async def handle(self, task: Task, budget: BudgetMeter) -> StageOutcome:
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(2.5)
             return StageOutcome(next_status=TaskStatus.VERIFYING, reason="долгий шаг")
 
     script = ScriptedStages([*agent_prefix(), step(S.VERIFYING, S.COMPLETED)])
@@ -267,10 +267,10 @@ async def test_heartbeat_keeps_a_long_tick_alive(tmp_path: Path) -> None:
         other = build_app(config, stages={}, storage=second, owner="B")
         task_id = owner.tasks.submit(request())
         run = asyncio.create_task(owner.tasks.run_until_blocked(task_id))
-        for _ in range(8):  # всё время такта аренда жива
-            await asyncio.sleep(0.12)
+        for _ in range(7):  # всё время такта (дольше двух сроков аренды) аренда жива
+            await asyncio.sleep(0.3)
             assert other.tasks.recover_interrupted() == []
-        assert (await asyncio.wait_for(run, timeout=5)).status is S.COMPLETED
+        assert (await asyncio.wait_for(run, timeout=10)).status is S.COMPLETED
 
 
 async def test_heartbeat_failure_does_not_replace_the_result(

@@ -108,7 +108,7 @@ def test_killed_process_leaves_an_interrupted_task(tmp_path: Path, monkeypatch: 
     monkeypatch.setenv("JARVIS_HOME", str(tmp_path))
     monkeypatch.delenv("JARVIS_CONFIG", raising=False)
     database = database_path(tmp_path)
-    ttl_s = 1.5
+    ttl_s = 3.0  # с запасом на медленный старт CLI (антивирус на Windows CI)
     process = subprocess.Popen(
         python(HANG_FOREVER, str(database), str(ttl_s)), stdout=subprocess.PIPE, text=True
     )

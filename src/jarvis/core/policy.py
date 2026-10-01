@@ -7,7 +7,7 @@
 import fnmatch
 from dataclasses import dataclass
 
-from jarvis.domain.paths import OsFamily, is_absolute, is_within, name_of
+from jarvis.domain.paths import OsFamily, is_absolute, is_within, name_of, unsupported_form
 from jarvis.domain.tools import (
     EffectKind,
     PolicyDecision,
@@ -58,6 +58,10 @@ class PolicyZones:
         return any(is_within(path, root, self.os_family) for root in self.workspaces)
 
 
+def _looks_like_path(resource: str) -> bool:
+    return "/" in resource or "\\" in resource
+
+
 class PolicyEngine:
     def __init__(self, zones: PolicyZones) -> None:
         self._zones = zones
@@ -76,6 +80,12 @@ class PolicyEngine:
 
     def _effect(self, effect: ToolEffect) -> tuple[PolicyOutcome, str, str]:
         zones, resource = self._zones, effect.resource
+        path_like = _looks_like_path(resource)
+        if path_like and (
+            unsupported_form(resource, zones.os_family) or not is_absolute(resource, zones.os_family)
+        ):
+            # Такой путь может указывать в любую зону в обход сравнения строк — решать по нему нельзя.
+            return PolicyOutcome.DENY, "path.unsupported_form", f"форма пути не поддерживается: {resource}"
         if zones.is_internal(resource):
             return PolicyOutcome.DENY, "zone.internal", f"данные Jarvis недоступны инструментам: {resource}"
         if effect.kind in _FORBIDDEN:

@@ -128,3 +128,33 @@ def test_preview_for_another_target_is_denied() -> None:
 def test_zone_roots_must_be_absolute(root: str) -> None:
     with pytest.raises(ValueError, match="абсолютным"):
         PolicyZones(os_family="posix", secrets=(root,))
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "\\\\?\\C:\\Users\\U\\AppData\\Local\\Jarvis\\data",  # префикс \\?\ обходит сравнение строк
+        "\\\\?\\UNC\\localhost\\C$\\Users\\U\\.ssh\\id_rsa",
+        "\\\\localhost\\C$\\Users\\U\\.kube\\config",  # UNC на тот же диск
+        "\\\\.\\PhysicalDrive0",
+        "C:\\work\\.env::$DATA",  # поток NTFS: имя секрета не совпадёт с шаблоном
+        "\\Users\\U\\.ssh\\id_rsa",  # без буквы диска
+    ],
+)
+def test_windows_path_forms_that_dodge_zones_are_denied(resource: str) -> None:
+    zones = PolicyZones(
+        os_family="windows",
+        internal=("C:\\Users\\U\\AppData\\Local\\Jarvis",),
+        secrets=("C:\\Users\\U\\.ssh", "C:\\Users\\U\\.kube"),
+        secret_names=(".env",),
+    )
+    target = ExecutionTarget(kind=TargetKind.HOST, os_family="windows", name="local")
+    assert decide((EffectKind.READ, resource), target=target, zones=zones) == (
+        DENY,
+        ["path.unsupported_form"],
+    )
+
+
+def test_relative_posix_path_is_denied_but_named_resources_are_not_paths() -> None:
+    assert decide((EffectKind.READ, "relative/notes.txt")) == (DENY, ["path.unsupported_form"])
+    assert decide((EffectKind.READ, "process-table")) == (ALLOW, ["effect.read"])

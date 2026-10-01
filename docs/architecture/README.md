@@ -30,6 +30,42 @@ Jarvis — локальный **Agent Runtime** для ПК: демон, кот�
 
 Если времени мало: этот файл → [01](01-critique.md) → [02](02-overview.md) → [13](13-roadmap.md).
 
+### Где ответ на каждый пункт исходного запроса
+
+| # | Пункт | Раздел |
+| --- | --- | --- |
+| 1 | High-level architecture | [02 §2–3](02-overview.md#2-слои) |
+| 2 | Разделение на модули | [02 §5](02-overview.md#5-модули-и-границы-ответственности) |
+| 3 | Границы ответственности | [02 §5–6](02-overview.md#5-модули-и-границы-ответственности) |
+| 4 | Потоки данных | [02 §7](02-overview.md#7-потоки-данных) |
+| 5 | Agent Core | [03](03-agent-core.md) |
+| 6 | Model Router | [03 §5](03-agent-core.md#5-model-gateway-model-router) |
+| 7 | Planner / Executor / Verifier | [03 §6](03-agent-core.md#6-цикл-planner--executor--verifier) |
+| 8 | Tool API | [04 §1](04-tools-and-skills.md#1-tool-api) |
+| 9 | Skill API | [04 §2–4](04-tools-and-skills.md#2-skills-руководства-и-рецепты) |
+| 10 | Интеграция с AI-Dev-System | [05](05-ai-dev-system.md) |
+| 11 | Memory architecture | [06 §1](06-memory-and-projects.md#1-память) |
+| 12 | Project context | [06 §2](06-memory-and-projects.md#2-контекст-проектов) |
+| 13 | Voice pipeline | [07](07-voice.md) |
+| 14 | Computer-use layer | [08 §1–4](08-computer-use.md) |
+| 15 | Vision / UI grounding | [08 §5](08-computer-use.md#5-vision-и-ui-grounding) |
+| 16 | Event architecture | [10 §1](10-platform.md#1-события) |
+| 17 | Permissions / security | [09](09-security.md) |
+| 18 | Storage | [10 §2](10-platform.md#2-хранилище) |
+| 19 | Config | [10 §3](10-platform.md#3-конфигурация) |
+| 20 | Plugins / extensibility | [10 §4](10-platform.md#4-плагины-и-расширяемость) |
+| 21 | Model independence | [10 §5](10-platform.md#5-независимость-от-моделей) |
+| 22 | Тестирование агента | [11 §1–3](11-quality.md#1-пирамида-тестов-агента) |
+| 23 | Воспроизводимое выполнение | [11 §4](11-quality.md#4-воспроизводимость) |
+| 24 | Логирование reasoning и действий | [11 §5](11-quality.md#5-логирование-и-трассировка) |
+| 25 | Защита от бесконечных циклов | [03 §8](03-agent-core.md#8-бюджеты-лимиты-и-защита-от-зацикливания) |
+| 26 | Лимиты токенов, вызовов, времени, ресурсов | [03 §8](03-agent-core.md#8-бюджеты-лимиты-и-защита-от-зацикливания) |
+| 27 | Восстановление после ошибок | [03 §9](03-agent-core.md#9-ошибки-и-восстановление) |
+| 28 | История задач | [03 §10](03-agent-core.md#10-история-задач) |
+| 29 | Фоновые задачи | [03 §11](03-agent-core.md#11-фоновые-задачи) |
+| 30 | Проактивное поведение | [03 §12](03-agent-core.md#12-проактивное-поведение-будущее) |
+| — | Поставка `.exe` и обновления из GitHub | [10 §6](10-platform.md#6-дистрибуция-и-обновления) |
+
 ## Резюме
 
 1. **Jarvis = демон `jarvisd` + тонкие клиенты.** CLI, голос и desktop UI общаются с

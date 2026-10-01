@@ -56,14 +56,16 @@ def check_core_source(source: str, path: str = "<source>") -> list[Violation]:
     """Нарушения для модуля из `domain`, `ports` или `core`."""
     violations: list[Violation] = []
     for node in ast.walk(ast.parse(source)):
-        modules: list[str] = []
         if isinstance(node, ast.Import):
-            modules = [alias.name for alias in node.names]
+            modules, line = [alias.name for alias in node.names], node.lineno
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             modules = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
+            line = node.lineno
+        else:
+            modules, line = [], 0
         for module in modules:
             if (name := _forbidden(module)) is not None:
-                violations.append(Violation(path, node.lineno, "import", name))
+                violations.append(Violation(path, line, "import", name))
                 break
         if isinstance(node, ast.Call):
             func = node.func

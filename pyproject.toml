@@ -35,6 +35,8 @@ dev = [
 line-length = 110
 target-version = "py312"
 src = ["src", "tests"]
+# Код в документации — эскизы интерфейсов, а не модули для форматирования.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "C4", "PIE", "PT", "RET"]

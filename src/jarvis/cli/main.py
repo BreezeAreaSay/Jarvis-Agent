@@ -60,7 +60,9 @@ def config_check() -> None:
 
 @config_app.command("show")
 def config_show(
-    sources: Annotated[bool, typer.Option("--sources", help="Показать слой, откуда пришло значение.")] = False,
+    sources: Annotated[
+        bool, typer.Option("--sources", help="Показать слой, откуда пришло значение.")
+    ] = False,
 ) -> None:
     """Показать итоговые значения конфига."""
     loaded = _load()

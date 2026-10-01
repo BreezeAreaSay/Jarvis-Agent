@@ -41,6 +41,10 @@ class ErrorInfo(BaseModel, frozen=True):
 | `ConcurrentModification` | задачу продолжает другой процесс | нет | FATAL для текущего запуска | состояние не меняется |
 | `ModelError` → `ModelUnavailable`, `ModelTimeout` | сервер моделей не отвечает | да, ≤ 2 с задержкой | RETRY, затем FATAL | FAILED |
 | `InvalidModelOutput` | ответ не прошёл схему после всех попыток ремонта | нет | FEEDBACK (executor) / FATAL (planner, router без запасного пути) | остаётся / FAILED |
+| `TaskNotFound` | `jarvis trace task_999` | нет | ошибка команды | — |
+| `TaskBusy` | `jarvis cancel` для задачи, которую ведёт другой процесс | нет | ошибка команды | состояние не меняется |
+| `LeaseLost` | процесс завис дольше срока аренды, задачу забрали | нет | FATAL для текущего запуска | состояние не меняется |
+| `ProjectRegistryError` | запись реестра не прошла схему | нет | DEGRADE | запись недоступна, остальные работают |
 | `ToolNotFound`, `ToolNotAllowed` | модель выбрала инструмент вне профиля | нет | FEEDBACK | остаётся EXECUTING |
 | `InvalidToolArguments` | аргументы не прошли схему инструмента | нет | FEEDBACK | остаётся EXECUTING |
 | `ToolExecutionFailed` | процесс завершился с ошибкой, файл занят | если инструмент пометил ошибку как повторяемую и он идемпотентен | RETRY или FEEDBACK | остаётся EXECUTING |
@@ -55,8 +59,12 @@ class ErrorInfo(BaseModel, frozen=True):
 | `ProjectNotFound`, `AmbiguousEntity` | «запусти проект» при двух проектах | нет | ASK_USER | ROUTING → COMPLETED с вопросом |
 | `InvalidTransition` | стадия вернула недопустимый переход | нет | FATAL | FAILED (это баг) |
 
-Каждый сбой с диспозицией FEEDBACK увеличивает `usage.failures`; при `max_failures` задача переходит
-в BUDGET_EXCEEDED. Три одинаковые ошибки подряд — сигнал детектору зацикливания.
+Ошибки инструментов (`ToolNotFound`, `ToolNotAllowed`, `InvalidToolArguments`, `ToolExecutionFailed`,
+`ToolTimeout`, `UnsupportedTarget`) наследуют общий `ToolError`, ошибки модели — `ModelError`.
+
+Каждый сбой с диспозицией FEEDBACK увеличивает `usage.failures`; когда сбоев становится больше
+`max_failures`, задача переходит в BUDGET_EXCEEDED. Три одинаковые ошибки подряд — сигнал детектору
+зацикливания.
 
 ## 2. Конфигурация
 
@@ -73,13 +81,19 @@ runtime overrides   флаги CLI, параметры сценария eval    
 ```
 
 - Слияние — глубокое, по ключам; результат валидируется **один раз** одной схемой `JarvisConfig`.
+- Схема — чистые pydantic-модели в `jarvis.domain.settings`; загрузчик (чтение файлов и окружения) — в
+  `jarvis.config`. Ядро получает готовый объект настроек и `jarvis.config` не импортирует.
+- **Умолчания:** у каждого поля есть значение по умолчанию, кроме назначения моделей. Пустой конфиг
+  валиден; команда, которой нужна модель, сообщает `ConfigError` «роли router не назначена модель».
 - Неизвестный ключ — ошибка (`extra="forbid"`): опечатка в настройке политики не должна молча игнорироваться.
 - Переменные окружения читаются только загрузчиком и только две: `JARVIS_HOME` (где данные) и
   `JARVIS_CONFIG` (путь к конфигу). Остальной код окружение не читает (проверяется тестом архитектуры).
 - **Файлы конфигурации внутри репозиториев не читаются.** Проектный слой — это раздел `overrides` в
-  записи реестра, которую пишет сам пользователь, и он может только ужесточать безопасность.
+  записи реестра, которую пишет сам пользователь. Разрешённые ключи: `budgets.<маршрут>.<лимит>`,
+  `policy.shell.model_access` (только строже: `catalog` → `confirm_all` → `disabled`),
+  `policy.large_change_files` (только меньше). Любой другой ключ — ошибка записи реестра.
 - `jarvis config show --sources` показывает итоговое значение каждого ключа и слой, откуда оно пришло;
-  `jarvis config check` проверяет конфиг, реестр, доступность модели и требования ролей.
+  `jarvis config check` проверяет конфиг; с M3 — ещё доступность модели и требования ролей, с M5 — реестр.
 
 ### Схема (эскиз)
 
@@ -89,7 +103,7 @@ class JarvisConfig(BaseModel, extra="forbid"):
     paths: PathsConfig                         # home, database, blobs, trash, logs, projects_dir
     models: ModelsConfig                       # endpoints и назначение ролей
     model_profiles: dict[str, ModelProfile]
-    budgets: BudgetsConfig                     # по маршрутам: direct, chat, agent
+    budgets: BudgetsConfig                     # routing и маршруты direct, chat, agent
     policy: PolicyConfig
     tools: ToolsConfig
     skills: SkillsConfig
@@ -154,7 +168,6 @@ max_output_tokens = 2048
 router = "main"
 planner = "main"
 executor = "main"
-verifier = "main"
 responder = "main"
 
 [model_profiles.default]
@@ -173,7 +186,7 @@ max_tool_calls = 30
 max_failures = 5
 max_replans = 3
 max_wall_time_s = 300
-max_model_calls = 40
+max_model_calls = 60
 max_model_tokens = 250000
 
 [policy.shell]
@@ -192,7 +205,7 @@ id: gofra
 name: GOFRA
 aliases: [гофра, gofra]
 root:
-  target: host                     # host | wsl
+  target: host                     # host | "wsl:<distro>"
   path: 'C:\projects\gofra'
 repository: https://github.com/<owner>/gofra
 stack: [node, react, postgres, docker-compose]

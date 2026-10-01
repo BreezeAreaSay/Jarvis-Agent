@@ -48,17 +48,24 @@ def test_config_show_with_sources(runner: CliRunner, tmp_path: Path) -> None:
     assert f"# JARVIS_HOME: {tmp_path}" in result.output
 
 
-def test_eval_runs_scenarios_and_writes_a_report(runner: CliRunner, tmp_path: Path) -> None:
-    report = tmp_path / "reports" / "eval.json"
-    result = runner.invoke(app, ["eval", str(SCENARIOS), "--report", str(report)])
+def test_eval_runs_scenarios_and_writes_reports(runner: CliRunner, tmp_path: Path) -> None:
+    reports = tmp_path / "reports"
+    result = runner.invoke(app, ["eval", str(SCENARIOS), "--report-dir", str(reports)])
     assert result.exit_code == 0, result.output
     assert "Итого: 5 из 5" in result.output
-    data = json.loads(report.read_text(encoding="utf-8"))
+    (json_report,) = reports.glob("*-scripted.json")
+    (markdown_report,) = reports.glob("*-scripted.md")
+    data = json.loads(json_report.read_text(encoding="utf-8"))
     assert {item["id"] for item in data["results"]} >= {"runtime.agent_path", "runtime.cancel"}
+    markdown = markdown_report.read_text(encoding="utf-8")
+    assert "Прошли 5 из 5 сценариев." in markdown
+    assert "| `runtime.budget_steps` | ✓ | BUDGET_EXCEEDED | 2 |" in markdown
 
 
-def test_eval_selects_scenarios_by_id(runner: CliRunner) -> None:
-    result = runner.invoke(app, ["eval", str(SCENARIOS), "-s", "runtime.cancel"])
+def test_eval_selects_scenarios_by_id(runner: CliRunner, tmp_path: Path) -> None:
+    result = runner.invoke(
+        app, ["eval", str(SCENARIOS), "-s", "runtime.cancel", "--report-dir", str(tmp_path)]
+    )
     assert result.exit_code == 0
     assert "Итого: 1 из 1" in result.output
     unknown = runner.invoke(app, ["eval", str(SCENARIOS), "-s", "runtime.nope"])
@@ -73,7 +80,7 @@ def test_eval_fails_on_a_failing_scenario(runner: CliRunner, tmp_path: Path) -> 
         "expect: {status: FAILED}\n",
         encoding="utf-8",
     )
-    result = runner.invoke(app, ["eval", str(path)])
+    result = runner.invoke(app, ["eval", str(path), "--report-dir", str(tmp_path / "reports")])
     assert result.exit_code == 1
     assert "✗ test.bad" in result.output
 

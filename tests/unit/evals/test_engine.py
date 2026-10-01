@@ -5,6 +5,7 @@ import pytest
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
 from jarvis.evals.engine import run_scenario, run_scenarios
+from jarvis.evals.report import render_markdown
 from jarvis.evals.scenario import Scenario, ScenarioError, load_scenarios
 
 pytestmark = pytest.mark.anyio
@@ -83,11 +84,6 @@ async def test_hanging_scenario_times_out() -> None:
     assert any("не завершился" in problem for problem in result.problems)
 
 
-def test_scenario_budget_overrides_route_budgets() -> None:
-    item = scenario(budget={"max_steps": 2})
-    assert item.budget == {"max_steps": 2}
-
-
 @pytest.mark.parametrize(
     ("content", "fragment"),
     [
@@ -116,3 +112,26 @@ def test_duplicate_ids_and_missing_paths_are_rejected(tmp_path: Path) -> None:
         load_scenarios([tmp_path])
     with pytest.raises(ScenarioError, match="нет такого"):
         load_scenarios([tmp_path / "missing"])
+
+
+async def test_markdown_report_lists_problems() -> None:
+    report = await run_scenarios([scenario(expect={"status": "FAILED"})], JarvisConfig())
+    markdown = render_markdown(report)
+    assert "Прошли 0 из 1 сценариев." in markdown
+    assert "- `test.case`: статус COMPLETED, ожидался FAILED" in markdown
+
+
+async def test_scenario_budget_limits_the_task() -> None:
+    result = await run_scenario(
+        scenario(
+            budget={"max_steps": 1},
+            script=[
+                {"status": "ROUTING", "next": "EXECUTING", "route": "direct"},
+                {"status": "EXECUTING", "next": "EXECUTING", "charge": {"steps": 1}},
+                {"status": "EXECUTING", "next": "VERIFYING", "charge": {"steps": 1}},
+            ],
+            expect={"status": "BUDGET_EXCEEDED", "budget_limit": "steps", "usage": {"steps": 1}},
+        ),
+        JarvisConfig(),
+    )
+    assert result.passed, result.problems

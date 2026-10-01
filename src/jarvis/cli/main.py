@@ -15,9 +15,11 @@ from jarvis.config import LoadedConfig, load_config
 from jarvis.domain.errors import ConfigError
 from jarvis.domain.settings import JarvisConfig
 from jarvis.evals.engine import run_scenarios
+from jarvis.evals.report import write_report
 from jarvis.evals.scenario import ScenarioError, load_scenarios
 
 DEFAULT_SCENARIOS = Path("evals/scenarios")
+DEFAULT_REPORTS = Path("evals/reports")
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="Jarvis — локальный Agent Runtime.")
 config_app = typer.Typer(no_args_is_help=True, help="Конфигурация: проверка и итоговые значения.")
@@ -84,7 +86,9 @@ def eval_command(
     scenario: Annotated[
         list[str] | None, typer.Option("--scenario", "-s", help="Запустить только сценарии с этими ID.")
     ] = None,
-    report: Annotated[Path | None, typer.Option("--report", help="Записать отчёт в JSON-файл.")] = None,
+    report_dir: Annotated[
+        Path, typer.Option("--report-dir", help="Куда записать отчёт (JSON и Markdown).")
+    ] = DEFAULT_REPORTS,
 ) -> None:
     """Прогнать сценарии eval в scripted-режиме."""
     try:
@@ -111,10 +115,8 @@ def eval_command(
             typer.echo(f"    {problem}")
     passed = sum(item.passed for item in result.results)
     typer.echo(f"Итого: {passed} из {len(result.results)} сценариев прошли.")
-    if report is not None:
-        report.parent.mkdir(parents=True, exist_ok=True)
-        report.write_text(result.model_dump_json(indent=2), encoding="utf-8")
-        typer.echo(f"Отчёт: {report}")
+    json_path, markdown_path = write_report(result, report_dir)
+    typer.echo(f"Отчёт: {json_path}, {markdown_path}")
     if not result.passed:
         raise typer.Exit(1)
 

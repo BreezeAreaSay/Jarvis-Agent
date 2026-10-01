@@ -3,6 +3,7 @@
 import asyncio
 import time
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
@@ -31,6 +32,7 @@ class ScenarioResult(BaseModel, frozen=True):
 
 class EvalReport(BaseModel, frozen=True):
     mode: str = "scripted"
+    started_at: datetime
     results: list[ScenarioResult]
 
     @property
@@ -39,7 +41,9 @@ class EvalReport(BaseModel, frozen=True):
 
 
 async def run_scenarios(scenarios: Sequence[Scenario], config: JarvisConfig) -> EvalReport:
-    return EvalReport(results=[await run_scenario(scenario, config) for scenario in scenarios])
+    started_at = datetime.now(UTC)
+    results = [await run_scenario(scenario, config) for scenario in scenarios]
+    return EvalReport(started_at=started_at, results=results)
 
 
 async def run_scenario(

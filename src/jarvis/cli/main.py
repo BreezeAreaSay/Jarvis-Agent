@@ -1,4 +1,4 @@
-"""Точка входа `jarvis`: --version, config, eval, tasks, trace, cancel."""
+"""Точка входа `jarvis`: --version, config, eval, tasks, trace, cancel, tools."""
 
 import asyncio
 import io
@@ -13,6 +13,7 @@ import typer
 
 from jarvis.cli.common import load_or_exit
 from jarvis.cli.tasks import cancel_command, tasks_command, trace_command
+from jarvis.cli.tools import tools_app
 from jarvis.domain.settings import JarvisConfig
 from jarvis.evals.engine import run_scenarios
 from jarvis.evals.report import write_report
@@ -27,6 +28,7 @@ app.add_typer(config_app, name="config")
 app.command("tasks")(tasks_command)
 app.command("trace")(trace_command)
 app.command("cancel")(cancel_command)
+app.add_typer(tools_app, name="tools")
 
 
 def _print_version(value: bool) -> None:

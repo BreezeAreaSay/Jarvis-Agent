@@ -122,3 +122,34 @@ async def test_same_task_cannot_run_twice_at_once() -> None:
 def with_stage(status: TaskStatus, stage: StageHandler) -> dict[TaskStatus, StageHandler]:
     """Scripted-путь до EXECUTING, а дальше — заданная стадия."""
     return {**ScriptedStages(agent_prefix()).handlers(), status: stage}
+
+
+async def test_cancel_requested_during_shutdown_is_recorded() -> None:
+    hangs = Hangs()
+    app = make_app(with_stage(S.EXECUTING, hangs))
+    task_id = app.tasks.submit(request())
+
+    run = asyncio.create_task(app.tasks.run_until_blocked(task_id))
+    await asyncio.wait_for(hangs.started.wait(), timeout=5)
+    # Ctrl+C: клиент отменяет задачу, и в том же обороте цикла завершается сам прогон.
+    app.tasks.cancel(task_id, "Ctrl+C")
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    assert app.tasks.get(task_id).status is S.CANCELLED
+
+
+async def test_run_cancelled_without_a_cancel_request_keeps_the_checkpoint() -> None:
+    hangs = Hangs()
+    app = make_app(with_stage(S.EXECUTING, hangs))
+    task_id = app.tasks.submit(request())
+
+    run = asyncio.create_task(app.tasks.run_until_blocked(task_id))
+    await asyncio.wait_for(hangs.started.wait(), timeout=5)
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    assert hangs.interrupted
+    assert app.tasks.get(task_id).status is S.EXECUTING

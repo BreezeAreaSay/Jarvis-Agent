@@ -4,6 +4,7 @@
 признак заражения добавят milestone, которые их используют.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
 from typing import Self
@@ -11,7 +12,7 @@ from typing import Self
 from pydantic import BaseModel, Field, PositiveInt, model_validator
 
 from jarvis.domain.budget import Budget, BudgetUsage
-from jarvis.domain.errors import ErrorInfo
+from jarvis.domain.errors import ErrorInfo, InvalidTransition
 from jarvis.domain.ids import TaskId
 from jarvis.domain.states import TaskStatus, is_terminal
 
@@ -26,6 +27,25 @@ class Route(StrEnum):
     AGENT = "agent"
     CHAT = "chat"
     CLARIFY = "clarify"
+
+
+# Куда ведёт решение роутера (02-domain.md §3): из ROUTING стадия может уйти только так или в FAILED.
+ROUTE_TARGETS: Mapping[Route, TaskStatus] = {
+    Route.AGENT: TaskStatus.PLANNING,
+    Route.DIRECT: TaskStatus.EXECUTING,
+    Route.CHAT: TaskStatus.EXECUTING,
+    Route.CLARIFY: TaskStatus.COMPLETED,
+}
+
+
+def check_route_target(route: Route | None, target: TaskStatus) -> None:
+    """Результат ROUTING: маршрут обязателен и определяет следующее состояние."""
+    if target is TaskStatus.FAILED:
+        return
+    if route is None:
+        raise InvalidTransition(f"ROUTING → {target} без решения о маршруте")
+    if ROUTE_TARGETS[route] is not target:
+        raise InvalidTransition(f"маршрут {route} ведёт в {ROUTE_TARGETS[route]}, а не в {target}")
 
 
 class TaskRequest(BaseModel, frozen=True, extra="forbid"):

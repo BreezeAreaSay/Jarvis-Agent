@@ -5,6 +5,7 @@ import pytest
 from jarvis.domain.errors import InvalidTransition
 from jarvis.domain.states import (
     ALLOWED_TRANSITIONS,
+    RUNNER_ONLY_TARGETS,
     TERMINAL_STATUSES,
     TaskStatus,
     check_transition,
@@ -100,3 +101,7 @@ def test_table_covers_every_status() -> None:
 def test_forbidden_transitions_raise(source: TaskStatus, target: TaskStatus) -> None:
     with pytest.raises(InvalidTransition):
         check_transition(source, target)
+
+
+def test_cancel_and_budget_exceeded_are_runner_only() -> None:
+    assert {S.CANCELLED, S.BUDGET_EXCEEDED} == RUNNER_ONLY_TARGETS

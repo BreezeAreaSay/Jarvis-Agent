@@ -123,11 +123,10 @@ PREFIX_TO = {
 
 
 @pytest.mark.parametrize("source", list(PREFIX_TO))
-@pytest.mark.parametrize("target", [S.FAILED, S.CANCELLED, S.BUDGET_EXCEEDED])
-async def test_stage_can_end_task_from_any_active_state(source: TaskStatus, target: TaskStatus) -> None:
-    app, _ = scripted(*PREFIX_TO[source], step(source, target, reason="конец"))
+async def test_stage_can_fail_the_task_from_any_active_state(source: TaskStatus) -> None:
+    app, _ = scripted(*PREFIX_TO[source], step(source, S.FAILED, reason="конец"))
     task_id = app.tasks.submit(request())
     snapshot = await app.tasks.run_until_blocked(task_id)
 
-    assert snapshot.status is target
-    assert transitions(app, task_id)[-2:] == [source, target]
+    assert snapshot.status is S.FAILED
+    assert transitions(app, task_id)[-2:] == [source, S.FAILED]

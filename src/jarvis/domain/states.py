@@ -47,6 +47,10 @@ ALLOWED_TRANSITIONS: Mapping[TaskStatus, frozenset[TaskStatus]] = {
     for status in TaskStatus
 }
 
+# Эти переходы выполняет только runner: стадия сообщает об отмене и превышении бюджета исключениями
+# TaskCancelled и BudgetExceeded, чтобы в трассе и итоге всегда были причина и событие.
+RUNNER_ONLY_TARGETS: frozenset[TaskStatus] = frozenset({S.CANCELLED, S.BUDGET_EXCEEDED})
+
 # Состояния, в которых такт может закончиться без перехода: шаги агента внутри EXECUTING
 # фиксируются событиями, а не переходами.
 STAY_ALLOWED: frozenset[TaskStatus] = frozenset({S.EXECUTING})

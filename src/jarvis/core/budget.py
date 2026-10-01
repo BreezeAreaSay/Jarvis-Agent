@@ -34,7 +34,7 @@ class BudgetMeter:
             raise ValueError(f"списание должно быть положительным: {amount}")
         current = int(self._usage.value(limit))
         if current + amount > self._budget.maximum(limit):
-            raise self._exceeded(limit, current)
+            raise self._exceeded(limit, current + amount)  # value — сколько было бы после действия
         self._usage = self._usage.model_copy(update={limit.value: current + amount})
 
     def require_tokens(self) -> None:
@@ -60,6 +60,12 @@ class BudgetMeter:
     def check_time(self) -> None:
         if self._usage.active_time_s >= self._budget.max_wall_time_s:
             raise self._exceeded(BudgetLimit.WALL_TIME, self._usage.active_time_s)
+
+    def exhaust_time(self, elapsed: float) -> BudgetExceeded:
+        """Такт прерван по лимиту времени: время фазы исчерпано независимо от погрешности таймера."""
+        spent = max(self._usage.active_time_s + max(0.0, elapsed), self._budget.max_wall_time_s)
+        self._usage = self._usage.model_copy(update={"active_time_s": spent})
+        return self._exceeded(BudgetLimit.WALL_TIME, spent)
 
     def add_active_time(self, seconds: float) -> None:
         self._usage = self._usage.model_copy(

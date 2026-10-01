@@ -30,7 +30,7 @@ def test_counted_limits_are_inclusive(limit: CountedLimit, maximum: int) -> None
         meter.charge(limit)
     with pytest.raises(BudgetExceeded) as raised:
         meter.charge(limit)
-    assert raised.value.details == {"limit": limit.value, "value": maximum, "maximum": maximum}
+    assert raised.value.details == {"limit": limit.value, "value": maximum + 1, "maximum": maximum}
     assert meter.usage.value(limit) == maximum  # отклонённое действие не списано
 
 
@@ -63,6 +63,13 @@ def test_failures_stop_when_above_the_limit() -> None:
         meter.record_failure()
     assert raised.value.details == {"limit": "failures", "value": 2, "maximum": 1}
     assert meter.usage.failures == 2
+
+
+def test_exhausted_time_is_never_below_the_limit() -> None:
+    meter = BudgetMeter(BUDGET.model_copy(update={"max_wall_time_s": 0.3}), BudgetUsage(active_time_s=0.0476))
+    error = meter.exhaust_time(0.3 - 0.0476 - 1e-9)  # таймер сработал чуть раньше остатка
+    assert meter.usage.active_time_s == 0.3
+    assert error.details["limit"] == "wall_time"
 
 
 def test_wall_time() -> None:

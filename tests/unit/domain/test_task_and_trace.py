@@ -3,11 +3,19 @@ from datetime import UTC, datetime
 import pytest
 
 from jarvis.domain.budget import BudgetUsage
-from jarvis.domain.errors import TaskCancelled
+from jarvis.domain.errors import InvalidTransition, TaskCancelled
 from jarvis.domain.ids import TaskId
 from jarvis.domain.settings import BudgetsSettings
 from jarvis.domain.states import TaskStatus
-from jarvis.domain.task import Origin, Route, Task, TaskOutcome, TaskRequest, TaskSnapshot
+from jarvis.domain.task import (
+    Origin,
+    Route,
+    Task,
+    TaskOutcome,
+    TaskRequest,
+    TaskSnapshot,
+    check_route_target,
+)
 from jarvis.domain.trace import MAX_PAYLOAD_BYTES, EventKind, TraceEvent
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -81,3 +89,33 @@ def test_event_id_must_match_task_and_seq() -> None:
 def test_event_payload_is_limited() -> None:
     with pytest.raises(ValueError, match="байт"):
         event(payload={"text": "я" * MAX_PAYLOAD_BYTES})
+
+
+@pytest.mark.parametrize(
+    ("route", "target"),
+    [
+        (Route.AGENT, TaskStatus.PLANNING),
+        (Route.DIRECT, TaskStatus.EXECUTING),
+        (Route.CHAT, TaskStatus.EXECUTING),
+        (Route.CLARIFY, TaskStatus.COMPLETED),
+        (None, TaskStatus.FAILED),
+        (Route.AGENT, TaskStatus.FAILED),
+    ],
+)
+def test_route_decides_the_next_state(route: Route | None, target: TaskStatus) -> None:
+    check_route_target(route, target)
+
+
+@pytest.mark.parametrize(
+    ("route", "target"),
+    [
+        (None, TaskStatus.PLANNING),
+        (Route.AGENT, TaskStatus.EXECUTING),
+        (Route.CHAT, TaskStatus.PLANNING),
+        (Route.CLARIFY, TaskStatus.EXECUTING),
+        (Route.DIRECT, TaskStatus.COMPLETED),
+    ],
+)
+def test_route_and_next_state_must_agree(route: Route | None, target: TaskStatus) -> None:
+    with pytest.raises(InvalidTransition):
+        check_route_target(route, target)

@@ -1,8 +1,8 @@
 """TaskRunner — переводит задачу между состояниями (02-domain.md §3, ADR 0010).
 
-Один такт: загрузить задачу → проверить отмену и бюджет → вызвать стадию текущего состояния →
-проверить её результат по таблице переходов → записать контрольную точку. Состояние задачи всегда
-лежит в хранилище, а не в стеке вызовов, поэтому задачу можно продолжить новым runner'ом.
+Задача загружается из хранилища в начале прогона; каждый такт: проверить отмену и бюджет → вызвать
+стадию текущего состояния → проверить её результат по таблице переходов → записать контрольную точку.
+Состояние задачи лежит в хранилище, а не в стеке вызовов, поэтому её можно продолжить новым runner'ом.
 """
 
 import asyncio
@@ -25,13 +25,22 @@ from jarvis.domain.errors import (
 )
 from jarvis.domain.ids import TaskId
 from jarvis.domain.settings import BudgetsSettings
-from jarvis.domain.states import STAY_ALLOWED, TaskStatus, check_transition, is_terminal
-from jarvis.domain.task import Route, StageOutcome, Task, TaskOutcome
+from jarvis.domain.states import (
+    RUNNER_ONLY_TARGETS,
+    STAY_ALLOWED,
+    TaskStatus,
+    check_transition,
+    is_terminal,
+)
+from jarvis.domain.task import Route, StageOutcome, Task, TaskOutcome, check_route_target
 from jarvis.domain.trace import EventKind, TraceEvent
 from jarvis.ports.clock import Clock
 from jarvis.ports.storage import UnitOfWorkFactory
 
 _log = logging.getLogger(__name__)
+
+# Сколько ждать стадию после отмены такта, прежде чем продолжить без неё.
+CANCEL_GRACE_S = 5.0
 
 
 class StageHandler(Protocol):
@@ -44,6 +53,16 @@ class StageHandler(Protocol):
 class _Run:
     tick: "asyncio.Task[StageOutcome] | None" = None
     cancel_reason: str | None = None
+
+
+async def _stop(tick: "asyncio.Task[StageOutcome]") -> None:
+    """Отменить такт и дождаться его — но не дольше CANCEL_GRACE_S."""
+    tick.cancel()
+    await asyncio.wait({tick}, timeout=CANCEL_GRACE_S)
+    if not tick.done():
+        _log.warning("стадия не завершилась за %s с после отмены такта", CANCEL_GRACE_S)
+    elif not tick.cancelled():
+        tick.exception()  # результат прерванного такта не нужен; исключение помечается полученным
 
 
 def _blocked(task: Task) -> bool:
@@ -110,39 +129,37 @@ class TaskRunner:
 
         handler = self._stages.get(task.status)
         if handler is None:
-            error = InvalidTransition(f"нет обработчика для состояния {task.status}")
-            return self._failed(task, error.to_info(), meter.usage)
+            error = internal_error_info(LookupError(f"нет обработчика для состояния {task.status}"))
+            return self._failed(task, error, meter.usage)
 
-        timeout = meter.remaining_time_s()
         started = self._clock.monotonic()
         tick = asyncio.create_task(handler.handle(task, meter))
         run.tick = tick
         try:
-            done, _ = await asyncio.wait({tick}, timeout=timeout)
+            done, _ = await asyncio.wait({tick}, timeout=meter.remaining_time_s())
         except asyncio.CancelledError:
-            # Отменили сам run_until_blocked (например, процесс завершается): такт прерывается,
-            # задача остаётся в последней контрольной точке.
-            tick.cancel()
-            await asyncio.gather(tick, return_exceptions=True)
+            # Отменили сам run_until_blocked (например, процесс завершается): такт прерывается.
+            # Если клиент успел запросить отмену задачи, она записывается; иначе задача остаётся
+            # в последней контрольной точке.
+            await _stop(tick)
+            if run.cancel_reason is not None:
+                meter.add_active_time(self._clock.monotonic() - started)
+                self._cancelled(task, run.cancel_reason, meter.usage)
             raise
         finally:
             run.tick = None
         elapsed = self._clock.monotonic() - started
 
-        if not done:
-            tick.cancel()
-            await asyncio.gather(tick, return_exceptions=True)
-            meter.add_active_time(max(elapsed, timeout))
-        else:
-            meter.add_active_time(elapsed)
+        if not done:  # такт не уложился в остаток времени; его результат не применяется
+            await _stop(tick)
+            if run.cancel_reason is not None:
+                meter.add_active_time(elapsed)
+                return self._cancelled(task, run.cancel_reason, meter.usage)
+            return self._budget_exceeded(task, meter.exhaust_time(elapsed), meter.usage)
 
+        meter.add_active_time(elapsed)
         if run.cancel_reason is not None:  # отмена важнее того, чем закончился такт
             return self._cancelled(task, run.cancel_reason, meter.usage)
-        if not done:
-            try:
-                meter.check_time()
-            except BudgetExceeded as exc:
-                return self._budget_exceeded(task, exc, meter.usage)
         if tick.cancelled():
             return self._failed(task, internal_error_info(asyncio.CancelledError()), meter.usage)
         error = tick.exception()
@@ -166,12 +183,16 @@ class TaskRunner:
         target = outcome.next_status
         route = outcome.changes.route
         try:
-            if route is not None and task.status is not TaskStatus.ROUTING:
-                raise InvalidTransition(f"маршрут решается только в ROUTING, а не в {task.status}")
+            if target in RUNNER_ONLY_TARGETS:
+                raise InvalidTransition(f"{target} выставляет runner; стадия сообщает об этом исключением")
             if target is task.status:
                 if target not in STAY_ALLOWED:
                     raise InvalidTransition(f"такт в {task.status} должен сменить состояние")
-            else:
+            elif task.status is TaskStatus.ROUTING:
+                check_route_target(route, target)
+            if route is not None and task.status is not TaskStatus.ROUTING:
+                raise InvalidTransition(f"маршрут решается только в ROUTING, а не в {task.status}")
+            if target is not task.status:
                 check_transition(task.status, target)
         except InvalidTransition as exc:
             return self._failed(task, exc.to_info(), usage)

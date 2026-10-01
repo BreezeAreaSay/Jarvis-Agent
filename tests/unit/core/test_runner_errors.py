@@ -7,7 +7,7 @@ import pytest
 from jarvis.core.budget import BudgetMeter
 from jarvis.domain.errors import Disposition, JarvisError
 from jarvis.domain.states import TaskStatus
-from jarvis.domain.task import StageOutcome, Task, TaskChanges
+from jarvis.domain.task import Route, StageOutcome, Task, TaskChanges
 from jarvis.domain.trace import EventKind
 from jarvis.evals.scenario import ScriptStep
 from jarvis.evals.scripted import ScriptedStages
@@ -22,6 +22,12 @@ pytestmark = pytest.mark.anyio
         ([step(S.ROUTING, S.PLANNING, route="agent"), step(S.PLANNING, S.COMPLETED)], "PLANNING → COMPLETED"),
         ([step(S.ROUTING, S.ROUTING)], "должен сменить состояние"),
         ([*agent_prefix(), step(S.EXECUTING, S.VERIFYING, route="chat")], "только в ROUTING"),
+        ([step(S.ROUTING, S.PLANNING)], "без решения о маршруте"),
+        ([step(S.ROUTING, S.EXECUTING, route="clarify")], "маршрут clarify ведёт в COMPLETED"),
+        ([step(S.ROUTING, S.COMPLETED, route="agent")], "маршрут agent ведёт в PLANNING"),
+        ([step(S.ROUTING, S.PLANNING, route="direct")], "маршрут direct ведёт в EXECUTING"),
+        ([*agent_prefix(), step(S.EXECUTING, S.CANCELLED)], "выставляет runner"),
+        ([*agent_prefix(), step(S.EXECUTING, S.BUDGET_EXCEEDED)], "выставляет runner"),
     ],
 )
 async def test_invalid_stage_outcome_fails_the_task(steps: list[ScriptStep], message: str) -> None:
@@ -47,6 +53,7 @@ async def test_state_without_handler_fails_the_task() -> None:
 
     assert snapshot.status is S.FAILED
     error = error_of(snapshot)
+    assert error.category == "internal"
     assert "нет обработчика" in error.message
 
 
@@ -104,7 +111,8 @@ class Returning:
 
 
 async def test_answer_is_kept_only_in_the_terminal_outcome() -> None:
-    outcome = StageOutcome(next_status=S.COMPLETED, reason="ok", changes=TaskChanges(answer="да"))
+    changes = TaskChanges(route=Route.CLARIFY, answer="да")
+    outcome = StageOutcome(next_status=S.COMPLETED, reason="ok", changes=changes)
     app = make_app({TaskStatus.ROUTING: Returning(outcome)})
     task_id = app.tasks.submit(request())
     snapshot = await app.tasks.run_until_blocked(task_id)

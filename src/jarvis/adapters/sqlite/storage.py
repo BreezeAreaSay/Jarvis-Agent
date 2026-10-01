@@ -9,6 +9,7 @@
 
 import json
 import sqlite3
+import time
 from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime
@@ -114,14 +115,27 @@ class SqliteStorage:
         conn = sqlite3.connect(self.path, isolation_level=None, timeout=self._busy_timeout_ms / 1000)
         try:
             conn.execute("PRAGMA foreign_keys = ON")
-            mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
-            if str(mode).lower() != "wal":
+            mode = self._enable_wal(conn)
+            if mode != "wal":
                 raise StorageError(f"база {self.path}: не удалось включить режим WAL ({mode})")
             conn.execute("PRAGMA synchronous = NORMAL")
         except BaseException:
             conn.close()
             raise
         return conn
+
+    def _enable_wal(self, conn: sqlite3.Connection) -> str:
+        """Перевод новой базы в WAL. Пока другое соединение переводит её же, SQLite отвечает
+        «locked» сразу, не дожидаясь busy_timeout, — поэтому повтор с паузой в пределах того же срока.
+        Режим WAL хранится в файле: у уже переведённой базы команда ничего не ждёт."""
+        deadline = time.monotonic() + self._busy_timeout_ms / 1000
+        while True:
+            try:
+                return str(conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]).lower()
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
 
 
 class SqliteIdAllocator:

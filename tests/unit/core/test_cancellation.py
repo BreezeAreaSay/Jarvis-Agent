@@ -5,6 +5,7 @@ import contextlib
 
 import pytest
 
+from jarvis.adapters.memory import InMemoryStorage
 from jarvis.core.budget import BudgetMeter
 from jarvis.core.runner import StageHandler
 from jarvis.domain.errors import TaskBusy
@@ -156,3 +157,24 @@ async def test_run_stopped_mid_tick_marks_the_task_interrupted() -> None:
     assert snapshot.status is S.FAILED  # что успел сделать прерванный такт, неизвестно
     assert error_of(snapshot).category == "interrupted"
     assert transitions(app, task_id)[-2:] == [S.EXECUTING, S.FAILED]
+
+
+@pytest.mark.parametrize("requested", [False, True])
+async def test_storage_error_on_shutdown_does_not_mask_the_cancellation(requested: bool) -> None:
+    storage = InMemoryStorage()
+    hangs = Hangs()
+    app = make_app(with_stage(S.EXECUTING, hangs), storage=storage)
+    task_id = app.tasks.submit(request())
+
+    run = asyncio.create_task(app.tasks.run_until_blocked(task_id))
+    await asyncio.wait_for(hangs.started.wait(), timeout=5)
+    storage.fail_commit()  # итоговую запись при выходе сделать не удастся
+    if requested:
+        app.tasks.cancel(task_id, "Ctrl+C")
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):  # вызывающий видит отмену, а не ошибку хранилища
+        await run
+
+    # Задача осталась в последней контрольной точке с арендой этого процесса: после истечения аренды
+    # её переведёт в FAILED (interrupted) восстановление.
+    assert app.tasks.get(task_id).status is S.EXECUTING

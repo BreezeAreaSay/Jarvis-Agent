@@ -243,10 +243,16 @@ class TaskRunner:
             await _stop(tick)
             if not run.lease_lost:
                 meter.add_active_time(self._clock.monotonic() - started)
-                if run.cancel_reason is not None:
-                    self._cancelled(task, run, run.cancel_reason, meter.usage)
-                else:
-                    self._interrupted(task, run, "прогон прерван: процесс завершает работу", meter.usage)
+                try:
+                    if run.cancel_reason is not None:
+                        self._cancelled(task, run, run.cancel_reason, meter.usage)
+                    else:
+                        self._interrupted(task, run, "прогон прерван: процесс завершает работу", meter.usage)
+                except Exception:
+                    # Отмена важнее итоговой записи: вызывающий должен увидеть CancelledError. Задача
+                    # остаётся в последней контрольной точке и станет FAILED (interrupted), когда
+                    # истечёт аренда этого процесса.
+                    _log.warning("не удалось записать итог прерванной задачи %s", task.id, exc_info=True)
             raise
         finally:
             run.tick = None

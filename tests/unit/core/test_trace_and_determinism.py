@@ -81,7 +81,8 @@ async def test_journal_events_survive_a_failed_checkpoint() -> None:
     storage = InMemoryStorage()
     app, _ = scripted(*agent_prefix(), step(S.EXECUTING, S.VERIFYING, error="fatal"), storage=storage)
     task_id = app.tasks.submit(request())
-    # Пять записей до сбоя: ROUTING, PLANNING, EXECUTING и событие error; шестая — переход в FAILED.
+    # После submit успешны ещё четыре записи (ROUTING, PLANNING, EXECUTING и журнальное событие
+    # error); пятая — контрольная точка перехода в FAILED — падает.
     storage.fail_commit(after=4)
     with pytest.raises(StorageError):
         await app.tasks.run_until_blocked(task_id)

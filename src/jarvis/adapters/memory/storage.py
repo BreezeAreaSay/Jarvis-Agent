@@ -20,6 +20,7 @@ from jarvis.domain.trace import TraceEvent
 class _State:
     tasks: dict[TaskId, str] = field(default_factory=dict[TaskId, str])
     events: dict[TaskId, list[str]] = field(default_factory=dict[TaskId, list[str]])
+    event_ids: set[str] = field(default_factory=set[str])
     last_task: int = 0
     last_child: dict[tuple[TaskId, ChildKind], int] = field(
         default_factory=dict[tuple[TaskId, ChildKind], int]
@@ -92,6 +93,11 @@ class _Trace:
         self.appended: list[TraceEvent] = []
 
     def append(self, events: Sequence[TraceEvent]) -> None:
+        pending = {event.id for event in self.appended}
+        for event in events:
+            if event.id in pending or event.id in self._state.event_ids:
+                raise StorageError(f"событие {event.id} уже записано", event_id=event.id)
+            pending.add(event.id)
         self.appended.extend(events)
 
     def list(self, task_id: TaskId, *, after_seq: int = 0) -> list[TraceEvent]:
@@ -139,6 +145,13 @@ class InMemoryUnitOfWork:
                 state.fail_after_commits = None
                 raise StorageError("внедрённый сбой записи")
             state.fail_after_commits -= 1
+        # Повторная проверка при записи: другая единица работы могла успеть записать то же самое.
+        for key in self._tasks.added:
+            if key in state.tasks:
+                raise StorageError(f"задача {key} уже существует", task_id=key)
+        for event in self._trace.appended:
+            if event.id in state.event_ids:
+                raise StorageError(f"событие {event.id} уже записано", event_id=event.id)
         for key, (_, expected) in self._tasks.saved.items():
             stored = state.tasks.get(key) or self._tasks.added.get(key)
             assert stored is not None
@@ -148,3 +161,4 @@ class InMemoryUnitOfWork:
         state.tasks.update({key: raw for key, (raw, _) in self._tasks.saved.items()})
         for event in self._trace.appended:
             state.events.setdefault(event.task_id, []).append(event.model_dump_json())
+            state.event_ids.add(event.id)

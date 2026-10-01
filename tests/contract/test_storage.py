@@ -78,6 +78,37 @@ def test_duplicate_task_raises(storage: InMemoryStorage) -> None:
         uow.tasks.add(task)
 
 
+def test_concurrent_adds_of_the_same_task_conflict(storage: InMemoryStorage) -> None:
+    task = new_task(storage.ids.next_task_id())
+    first, second = storage.unit_of_work(), storage.unit_of_work()
+    with first, second:
+        first.tasks.add(task)
+        second.tasks.add(task)
+        first.commit()
+        with pytest.raises(StorageError):
+            second.commit()
+
+
+def test_duplicate_events_are_rejected(storage: InMemoryStorage) -> None:
+    task = add(storage)
+    event = new_event(storage, task.id)
+    with storage.unit_of_work() as uow, pytest.raises(StorageError):
+        uow.trace.append([event, event])
+    with storage.unit_of_work() as uow:
+        uow.trace.append([event])
+        uow.commit()
+    with storage.unit_of_work() as uow, pytest.raises(StorageError):
+        uow.trace.append([event])
+    first, second = storage.unit_of_work(), storage.unit_of_work()
+    other = new_event(storage, task.id)
+    with first, second:
+        first.trace.append([other])
+        second.trace.append([other])
+        first.commit()
+        with pytest.raises(StorageError):
+            second.commit()
+
+
 def test_save_checks_expected_version(storage: InMemoryStorage) -> None:
     task = add(storage)
     with storage.unit_of_work() as uow, pytest.raises(ConcurrentModification):

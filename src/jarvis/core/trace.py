@@ -4,6 +4,8 @@
 переходом, который событие объясняет.
 """
 
+from collections.abc import Sequence
+
 from pydantic import JsonValue
 
 from jarvis.domain.ids import TaskId, child_number
@@ -33,3 +35,12 @@ class Tracer:
             kind=kind,
             payload=payload,
         )
+
+
+def normalize_events(events: Sequence[TraceEvent]) -> list[dict[str, JsonValue]]:
+    """Трасса без того, что различается между прогонами (ID, время, пропуски номеров), — для
+    сравнения записанного прогона с повторным (replay) и прогонов на разных хранилищах."""
+    return [
+        {"n": position, "kind": event.kind.value, "v": event.v, "payload": event.payload}
+        for position, event in enumerate(events, start=1)
+    ]

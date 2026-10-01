@@ -7,9 +7,10 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
-from jarvis.app.composition import build_app
+from jarvis.app.composition import Storage, build_app
 from jarvis.config import with_overrides
 from jarvis.domain.budget import BudgetUsage
+from jarvis.domain.ids import TaskId
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Origin, TaskRequest, TaskSnapshot
@@ -22,6 +23,7 @@ SCENARIO_TIMEOUT_S = 30.0
 
 class ScenarioResult(BaseModel, frozen=True):
     id: str
+    task_id: TaskId
     passed: bool
     status: TaskStatus
     transitions: list[TaskStatus]
@@ -47,14 +49,20 @@ async def run_scenarios(scenarios: Sequence[Scenario], config: JarvisConfig) -> 
 
 
 async def run_scenario(
-    scenario: Scenario, config: JarvisConfig, *, timeout_s: float = SCENARIO_TIMEOUT_S
+    scenario: Scenario,
+    config: JarvisConfig,
+    *,
+    timeout_s: float = SCENARIO_TIMEOUT_S,
+    storage: Storage | None = None,
 ) -> ScenarioResult:
+    """Прогнать сценарий в отдельном приложении. По умолчанию хранилище — в памяти; с `storage`
+    прогон сохраняется (например, в SQLite), и его трассу можно открыть позже."""
     started = time.perf_counter()
     if scenario.budget:
         routes = ("direct", "chat", "agent")
         config = with_overrides(config, {"budgets": dict.fromkeys(routes, scenario.budget)})
     script = ScriptedStages(scenario.script)
-    app = build_app(config, stages=script.handlers())
+    app = build_app(config, stages=script.handlers(), storage=storage)
     task_id = app.tasks.submit(TaskRequest(text=scenario.input, origin=Origin.EVAL))
 
     problems: list[str] = []
@@ -81,6 +89,7 @@ async def run_scenario(
         problems.append(f"не проиграно шагов сценария: {script.remaining}")
     return ScenarioResult(
         id=scenario.id,
+        task_id=task_id,
         passed=not problems,
         status=snapshot.status,
         transitions=transitions,

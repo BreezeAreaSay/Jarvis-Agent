@@ -69,15 +69,11 @@ class ScriptedStages:
                 budget.charge(_COUNTED[kind], amount)
         for _ in range(step.failures):
             budget.record_failure()
-        if step.sleep_s:
-            await asyncio.sleep(step.sleep_s)
         if step.hang:
             self.hung.set()
             await asyncio.Event().wait()
-        if step.error == "fatal":
+        if step.fail:
             raise ScriptedFailure(step.reason)
-        if step.error == "internal":
-            raise RuntimeError(step.reason)
         return StageOutcome(
             next_status=step.next,
             reason=step.reason,

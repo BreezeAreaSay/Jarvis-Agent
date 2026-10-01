@@ -25,7 +25,7 @@ def make_task(**changes: object) -> Task:
     data: dict[str, object] = {
         "id": "task_1",
         "version": 1,
-        "request": TaskRequest(text="текст", origin=Origin.CLI),
+        "request": TaskRequest(text="текст", origin=Origin.EVAL),
         "status": TaskStatus.CREATED,
         "budget": BudgetsSettings().routing,
         "usage": BudgetUsage(),

@@ -35,7 +35,7 @@ async def test_trace_records_every_transition_in_order() -> None:
     ]
     assert [event.seq for event in events] == list(range(1, len(events) + 1))
     assert [event.id for event in events] == [f"{task_id}.ev_{n}" for n in range(1, len(events) + 1)]
-    assert events[0].payload == {"text": "найди причину", "origin": "cli"}
+    assert events[0].payload == {"text": "найди причину", "origin": "eval"}
     assert events[-1].payload == {"status": "COMPLETED", "answer": "готово"}
 
     moves = [event.payload for event in events if event.kind is EventKind.TASK_TRANSITION]
@@ -79,7 +79,7 @@ async def test_checkpoint_is_atomic_and_ids_are_not_reused() -> None:
 
 async def test_journal_events_survive_a_failed_checkpoint() -> None:
     storage = InMemoryStorage()
-    app, _ = scripted(*agent_prefix(), step(S.EXECUTING, S.VERIFYING, error="fatal"), storage=storage)
+    app, _ = scripted(*agent_prefix(), step(S.EXECUTING, S.VERIFYING, fail=True), storage=storage)
     task_id = app.tasks.submit(request())
     # После submit успешны ещё четыре записи (ROUTING, PLANNING, EXECUTING и журнальное событие
     # error); пятая — контрольная точка перехода в FAILED — падает.

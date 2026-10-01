@@ -58,7 +58,7 @@ async def test_state_without_handler_fails_the_task() -> None:
 
 
 async def test_jarvis_error_from_stage_keeps_its_category() -> None:
-    app, _ = scripted(*agent_prefix(), step(S.EXECUTING, S.VERIFYING, error="fatal", reason="сбой"))
+    app, _ = scripted(*agent_prefix(), step(S.EXECUTING, S.VERIFYING, fail=True, reason="сбой"))
     task_id = app.tasks.submit(request())
     snapshot = await app.tasks.run_until_blocked(task_id)
 

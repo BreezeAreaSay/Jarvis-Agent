@@ -25,8 +25,6 @@ class Tracer:
         task_id: TaskId,
         kind: EventKind,
         payload: dict[str, JsonValue],
-        *,
-        parent_id: str | None = None,
     ) -> TraceEvent:
         """Событие для контрольной точки: ID выдан, но запись — вместе с задачей."""
         event_id = self._ids.next_child_id(task_id, "ev")
@@ -36,7 +34,6 @@ class Tracer:
             seq=child_number(event_id),
             ts=self._clock.now(),
             kind=kind,
-            parent_id=parent_id,
             payload=payload,
         )
 
@@ -45,11 +42,9 @@ class Tracer:
         task_id: TaskId,
         kind: EventKind,
         payload: dict[str, JsonValue],
-        *,
-        parent_id: str | None = None,
     ) -> TraceEvent:
         """Журнальное событие: записывается сразу и не откатывается."""
-        event = self.event(task_id, kind, payload, parent_id=parent_id)
+        event = self.event(task_id, kind, payload)
         with self._uow() as uow:
             uow.trace.append([event])
             uow.commit()

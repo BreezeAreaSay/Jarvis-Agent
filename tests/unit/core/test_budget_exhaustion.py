@@ -153,7 +153,7 @@ async def test_wall_time_interrupts_a_long_tick() -> None:
 async def test_usage_spent_before_an_exception_is_kept() -> None:
     app, _ = scripted(
         *agent_prefix(),
-        step(S.EXECUTING, S.VERIFYING, charge={"steps": 1, "tool_calls": 2}, error="fatal"),
+        step(S.EXECUTING, S.VERIFYING, charge={"steps": 1, "tool_calls": 2}, fail=True),
     )
     task_id = app.tasks.submit(request())
     snapshot = await app.tasks.run_until_blocked(task_id)

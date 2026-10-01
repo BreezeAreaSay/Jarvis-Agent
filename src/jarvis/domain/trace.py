@@ -30,7 +30,6 @@ class TraceEvent(BaseModel, frozen=True, extra="forbid"):
     ts: datetime
     kind: EventKind
     v: PositiveInt = 1
-    parent_id: str | None = None
     payload: dict[str, JsonValue]
 
     @model_validator(mode="after")

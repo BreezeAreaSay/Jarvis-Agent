@@ -18,8 +18,7 @@ from jarvis.domain.states import TaskStatus, is_terminal
 
 
 class Origin(StrEnum):
-    CLI = "cli"
-    EVAL = "eval"
+    EVAL = "eval"  # другие источники (CLI `jarvis run`, replay) появятся со своими командами
 
 
 class Route(StrEnum):

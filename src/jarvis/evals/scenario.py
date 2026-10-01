@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal, Self
 
 import yaml
-from pydantic import BaseModel, Field, NonNegativeFloat, NonNegativeInt, PositiveInt, model_validator
+from pydantic import BaseModel, Field, NonNegativeInt, PositiveInt, model_validator
 
 from jarvis.domain.budget import BudgetLimit, BudgetUsage
 from jarvis.domain.errors import JarvisError
@@ -33,9 +33,8 @@ class ScriptStep(BaseModel, frozen=True, extra="forbid"):
     answer: str | None = None
     charge: dict[ChargeKind, PositiveInt] = {}
     failures: NonNegativeInt = 0
-    sleep_s: NonNegativeFloat = 0.0
     hang: bool = False  # такт не завершается сам: его прерывает отмена или лимит времени
-    error: Literal["fatal", "internal"] | None = None
+    fail: bool = False  # стадия падает с фатальной ошибкой (ScriptedFailure)
 
 
 class ClientRules(BaseModel, frozen=True, extra="forbid"):

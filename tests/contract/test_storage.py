@@ -28,7 +28,7 @@ def new_task(task_id: TaskId) -> Task:
     return Task(
         id=task_id,
         version=1,
-        request=TaskRequest(text="текст", origin=Origin.CLI),
+        request=TaskRequest(text="текст", origin=Origin.EVAL),
         status=TaskStatus.CREATED,
         budget=BudgetsSettings().routing,
         usage=BudgetUsage(),

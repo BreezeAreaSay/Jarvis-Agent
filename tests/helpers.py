@@ -23,7 +23,7 @@ def step(status: TaskStatus, next_status: TaskStatus, **fields: Any) -> ScriptSt
 
 
 def request(text: str = "сделай что-нибудь") -> TaskRequest:
-    return TaskRequest(text=text, origin=Origin.CLI)
+    return TaskRequest(text=text, origin=Origin.EVAL)
 
 
 def make_app(

@@ -73,8 +73,13 @@ AI-Dev-System закрывает для Jarvis четыре функции:
 ### Транспорт
 
 - **v1 — stdio.** При старте `jarvisd` запускает `node <ai-dev>/ai-dev-mcp-server/src/server.mjs`
-  с `AI_DEV_PROFILES=core` и держит одну долгую сессию. `jarvisd` — сам долгоживущий процесс,
-  поэтому холодный старт (включая прогрев BGE-M3) происходит один раз.
+  и держит одну долгую сессию. `jarvisd` — сам долгоживущий процесс, поэтому холодный старт
+  (включая прогрев BGE-M3) происходит один раз.
+- **Профили сервера Jarvis не сужает.** `AI_DEV_PROFILES` экономит контекст модели, а модель Jarvis
+  схемы инструментов AI-Dev-System не видит. Зато часть нужных Jarvis инструментов лежит вне
+  профиля `core` (`read_skill_card` — в `advanced`, `rollback_task` — в `git`, `list_decisions` и
+  `resume_session` — в `memory`), и полный `tools/list` нужен для проверки возможностей. Что можно
+  вызывать, ограничивает allowlist на стороне Jarvis.
 - **Позже — режим демона** через локальный сокет / named pipe: один тёплый экземпляр на Jarvis,
   Claude Code и других клиентов. В Python MCP SDK нет готового клиентского транспорта для этого
   сокета — понадобится маленький собственный транспорт (JSON построчно поверх named pipe).
@@ -100,7 +105,6 @@ id = "ai-dev"
 transport = "stdio"
 command = "node"
 args = ["C:/dev/ai-dev-system/ai-dev-mcp-server/src/server.mjs"]
-env = { AI_DEV_PROFILES = "core" }
 version_pin = "8b480aa"                # проверяется при старте; расхождение — предупреждение
 roles = ["skills", "projects", "dev_lifecycle", "dev_history"]
 callable = ["recommend_skills", "search_skills", "read_skill", "read_skill_card",

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from jarvis.adapters.sqlite import Migration, SqliteStorage, storage_error
+from jarvis.adapters.sqlite import migrate as migrate_module
 from jarvis.adapters.sqlite.migrate import bundled_migrations, check_sequence
 from jarvis.app.composition import build_app
 from jarvis.domain.errors import StorageError
@@ -200,3 +201,132 @@ def test_error_translation_table() -> None:
 def test_migration_numbers_must_be_contiguous() -> None:
     with pytest.raises(ValueError, match="подряд"):
         check_sequence([V1, Migration(3, "gap", "SELECT 1;")])
+
+
+PARENT_CHILD = Migration(
+    1,
+    "tree",
+    "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL,\n"
+    "  applied_at TEXT NOT NULL);\n"
+    "CREATE TABLE parent (id INTEGER PRIMARY KEY);\n"
+    "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parent (id));",
+)
+REBUILD_PARENT = Migration(
+    2,
+    "rebuild",
+    "CREATE TABLE parent_new (id INTEGER PRIMARY KEY, label TEXT);\n"
+    "INSERT INTO parent_new (id) SELECT id FROM parent;\n"
+    "DROP TABLE parent;\n"
+    "ALTER TABLE parent_new RENAME TO parent;",
+)
+ORPHANS = Migration(2, "orphans", "DELETE FROM parent;")
+
+
+def seed_tree(path: Path) -> None:
+    with SqliteStorage(path, migrations=[PARENT_CHILD]):
+        pass
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO parent (id) VALUES (1)")
+        conn.execute("INSERT INTO child (id, parent_id) VALUES (10, 1)")
+    conn.close()
+
+
+def test_migration_can_rebuild_a_referenced_table(tmp_path: Path) -> None:
+    path = tmp_path / "jarvis.db"
+    seed_tree(path)
+    with SqliteStorage(path, migrations=[PARENT_CHILD, REBUILD_PARENT]) as storage:
+        assert storage.schema_version == 2
+
+
+def test_migration_that_breaks_links_is_rolled_back(tmp_path: Path) -> None:
+    path = tmp_path / "jarvis.db"
+    seed_tree(path)
+    with pytest.raises(StorageError, match="нарушены связи"):
+        SqliteStorage(path, migrations=[PARENT_CHILD, ORPHANS])
+    assert versions(path) == [1]
+
+
+def test_upgrade_seen_late_does_not_touch_the_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Гонка из ревью: процесс B прочитал версию 1, пока A обновлял базу до 2. Раньше B затем снимал
+    «копию v1» уже с обновлённой базы поверх настоящей. Теперь решение принимается под блокировкой."""
+    path = tmp_path / "jarvis.db"
+    with SqliteStorage(path, migrations=[V1]):
+        pass
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO notes (text) VALUES ('до миграции')")
+    conn.close()
+    destructive = Migration(2, "wipe", "DELETE FROM notes;\nALTER TABLE notes ADD COLUMN tag TEXT;")
+    with SqliteStorage(path, migrations=[V1, destructive]):  # процесс A обновил базу
+        pass
+
+    real = migrate_module.current_version
+    reads = 0
+
+    def stale_first_read(conn: sqlite3.Connection, where: Path) -> int:
+        nonlocal reads
+        reads += 1
+        return 1 if reads == 1 else real(conn, where)  # B видит версию до обновления A
+
+    monkeypatch.setattr(migrate_module, "current_version", stale_first_read)
+    with SqliteStorage(path, migrations=[V1, destructive]) as late:  # процесс B
+        assert late.schema_version == 2
+    assert sorted(item.name for item in tmp_path.glob("*.bak")) == ["jarvis.db.v1.bak"]
+    with sqlite3.connect(tmp_path / "jarvis.db.v1.bak") as conn:
+        assert conn.execute("SELECT text FROM notes").fetchall() == [("до миграции",)]
+    conn.close()
+
+
+def test_existing_backup_is_never_overwritten(tmp_path: Path) -> None:
+    path = tmp_path / "jarvis.db"
+    with SqliteStorage(path, migrations=[V1]):
+        pass
+    older = tmp_path / "jarvis.db.v1.bak"
+    older.write_bytes(b"backup from an earlier attempt")
+    with SqliteStorage(path, migrations=[V1, V2]):
+        pass
+    assert older.read_bytes() == b"backup from an earlier attempt"
+    assert versions(tmp_path / "jarvis.db.v1.2.bak") == [1]
+    assert not list(tmp_path.glob("*.partial"))
+
+
+@pytest.mark.parametrize(
+    ("damage", "problem"),
+    [
+        ("DROP INDEX tasks_status_seq", "нет индекса tasks_status_seq"),
+        (
+            "ALTER TABLE task_leases RENAME TO old_leases;\n"
+            "CREATE TABLE task_leases (task_id TEXT PRIMARY KEY, owner TEXT NOT NULL,"
+            " expires_at TEXT NOT NULL) STRICT;\n"
+            "DROP TABLE old_leases;",
+            "таблица task_leases не совпадает",  # те же столбцы, но без внешнего ключа
+        ),
+    ],
+)
+def test_lost_constraints_are_detected(tmp_path: Path, damage: str, problem: str) -> None:
+    path = tmp_path / "jarvis.db"
+    with SqliteStorage(path):
+        pass
+    with sqlite3.connect(path) as conn:
+        conn.executescript(damage)
+    conn.close()
+    with pytest.raises(StorageError) as raised:
+        SqliteStorage(path)
+    assert problem in raised.value.message
+
+
+def test_full_disk_is_reported_as_such(tmp_path: Path) -> None:
+    with SqliteStorage(tmp_path / "jarvis.db") as storage:
+        conn = storage.take()
+        pages = conn.execute("PRAGMA page_count").fetchone()[0]
+        conn.execute(f"PRAGMA max_page_count = {pages}")  # «диск» заполнен
+        storage.give(conn)  # следующая единица работы получит это соединение
+        app = build_app(JarvisConfig(), stages={}, storage=storage, owner="A")
+
+        def fill() -> None:
+            for _ in range(200):
+                app.tasks.submit(request("большой запрос " * 200))
+
+        with pytest.raises(StorageError) as raised:
+            fill()
+    assert "нет места" in raised.value.message
+    assert "rollback" not in raised.value.message

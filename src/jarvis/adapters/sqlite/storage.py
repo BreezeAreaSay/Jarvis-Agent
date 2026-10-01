@@ -40,6 +40,8 @@ def storage_error(exc: sqlite3.Error, path: Path) -> StorageError:
         message = f"файл базы {path} повреждён; восстановите его из копии или удалите"
     elif "readonly" in text or "read-only" in text:
         message = f"нет прав на запись в базу {path}"
+    elif "full" in text:
+        message = f"нет места для базы {path}: освободите диск"
     elif "locked" in text or "busy" in text:
         message = f"база {path} занята другим процессом; повторите позже"
     elif "unable to open" in text:
@@ -60,6 +62,7 @@ class SqliteStorage:
         self.path = path
         self._busy_timeout_ms = round(busy_timeout_s * 1000)
         self._idle: list[sqlite3.Connection] = []
+        self._closed = False
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -80,6 +83,7 @@ class SqliteStorage:
         return SqliteUnitOfWork(self)
 
     def close(self) -> None:
+        self._closed = True
         while self._idle:
             self._idle.pop().close()
 
@@ -106,9 +110,14 @@ class SqliteStorage:
         return self._idle.pop() if self._idle else self._connect()
 
     def give(self, conn: sqlite3.Connection) -> None:
-        if conn.in_transaction:
-            conn.execute("ROLLBACK")
-        self._idle.append(conn)
+        try:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+        finally:
+            if self._closed:  # хранилище закрыто, пока соединение было занято: файл не держим
+                conn.close()
+            else:
+                self._idle.append(conn)
 
     def _connect(self) -> sqlite3.Connection:
         # isolation_level=None: транзакции открываются только явно (BEGIN / BEGIN IMMEDIATE).
@@ -221,7 +230,8 @@ class SqliteUnitOfWork:
                     try:
                         self._write(conn)
                     except BaseException:
-                        conn.execute("ROLLBACK")
+                        if conn.in_transaction:  # при «диск полон» SQLite уже откатил сам
+                            conn.execute("ROLLBACK")
                         raise
                     conn.execute("COMMIT")
         finally:

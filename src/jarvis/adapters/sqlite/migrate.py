@@ -5,6 +5,7 @@
 миграциями на пустой базе в памяти: повреждённая схема не используется.
 """
 
+import os
 import re
 import sqlite3
 from collections.abc import Iterator, Sequence
@@ -57,6 +58,15 @@ def migrate(conn: sqlite3.Connection, path: Path, migrations: Sequence[Migration
     """Довести схему до последней версии. Возвращает итоговую версию."""
     latest = migrations[-1].version if migrations else 0
     version = current_version(conn, path)
+    _refuse_newer(path, version, latest)
+    if version < latest:
+        version = _upgrade(conn, path, migrations)
+    if migrations:
+        _check_schema(conn, path, migrations)
+    return version
+
+
+def _refuse_newer(path: Path, version: int, latest: int) -> None:
     if version > latest:
         raise StorageError(
             f"{path}: схема версии {version} новее, чем поддерживает эта версия Jarvis ({latest}); "
@@ -65,38 +75,51 @@ def migrate(conn: sqlite3.Connection, path: Path, migrations: Sequence[Migration
             schema_version=version,
             supported=latest,
         )
-    pending = [migration for migration in migrations if migration.version > version]
-    if pending and version > 0:
-        _backup(conn, path.with_name(f"{path.name}.v{version}.bak"))
-    for migration in pending:
-        _apply(conn, path, migration)
-    if migrations:
-        _check_schema(conn, path, migrations)
-    return max(version, latest)
 
 
-def _apply(conn: sqlite3.Connection, path: Path, migration: Migration) -> None:
-    conn.execute("BEGIN IMMEDIATE")
+def _upgrade(conn: sqlite3.Connection, path: Path, migrations: Sequence[Migration]) -> int:
+    """Все недостающие миграции — одной транзакцией под блокировкой записи.
+
+    Версия перечитывается уже под блокировкой: другой процесс мог обновить базу, пока мы ждали.
+    Копия базы снимается там же — до изменений и так, что параллельное обновление её не перезапишет.
+    Связи (foreign keys) на время миграции выключены, чтобы миграция могла перестроить таблицу, и
+    проверяются целиком перед COMMIT.
+    """
+    conn.execute("PRAGMA foreign_keys = OFF")  # вне транзакции: внутри неё не переключается
     try:
-        # Другой процесс мог применить эту миграцию, пока мы ждали блокировку.
-        if current_version(conn, path) >= migration.version:
+        conn.execute("BEGIN IMMEDIATE")
+        start = current_version(conn, path)
+        migration: Migration | None = None
+        try:
+            _refuse_newer(path, start, migrations[-1].version)
+            pending = [item for item in migrations if item.version > start]
+            if pending and start > 0:
+                _backup(path, start)
+            for migration in pending:
+                for statement in _statements(migration.sql):
+                    conn.execute(statement)
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+                    (migration.version, migration.name, datetime.now(UTC).isoformat()),
+                )
+            broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if broken:
+                raise StorageError(f"{path}: после миграции нарушены связи между таблицами: {broken[:3]}")
             conn.execute("COMMIT")
-            return
-        for statement in _statements(migration.sql):
-            conn.execute(statement)
-        conn.execute(
-            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-            (migration.version, migration.name, datetime.now(UTC).isoformat()),
-        )
-        conn.execute("COMMIT")
-    except sqlite3.Error as exc:
-        conn.execute("ROLLBACK")
-        raise StorageError(
-            f"{path}: миграция {migration.version:03d} ({migration.name}) не применилась: {exc}; "
-            f"база осталась на версии {migration.version - 1}",
-            path=str(path),
-            migration=migration.version,
-        ) from None
+            return max(start, migrations[-1].version)
+        except BaseException as exc:
+            if conn.in_transaction:  # SQLite мог уже откатить транзакцию сам (например, диск полон)
+                conn.execute("ROLLBACK")
+            if isinstance(exc, sqlite3.Error) and migration is not None:
+                raise StorageError(
+                    f"{path}: миграция {migration.version:03d} ({migration.name}) не применилась: {exc}; "
+                    f"база осталась на версии {start}",
+                    path=str(path),
+                    migration=migration.version,
+                ) from None
+            raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _statements(sql: str) -> Iterator[str]:
@@ -112,28 +135,44 @@ def _statements(sql: str) -> Iterator[str]:
         raise ValueError(f"незавершённый SQL в миграции: {rest[0][:60]}")
 
 
-def _backup(conn: sqlite3.Connection, target: Path) -> None:
-    with sqlite3.connect(target) as copy:
-        conn.backup(copy)
-    copy.close()
+def _backup(path: Path, version: int) -> Path:
+    """Копия базы до миграции: `jarvis.db.vN.bak`; существующие копии не перезаписываются.
+
+    Копию читает отдельное соединение: вызывающий держит блокировку записи, поэтому до COMMIT
+    никто не изменит базу, а чтение в WAL видит её состояние до миграции.
+    """
+    target = path.with_name(f"{path.name}.v{version}.bak")
+    number = 1
+    while target.exists():
+        number += 1
+        target = path.with_name(f"{path.name}.v{version}.{number}.bak")
+    partial = target.with_name(target.name + ".partial")
+    source = sqlite3.connect(path)
+    try:
+        copy = sqlite3.connect(partial)
+        try:
+            source.backup(copy)
+        finally:
+            copy.close()
+        os.replace(partial, target)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    finally:
+        source.close()
+    return target
 
 
-Signature = dict[str, tuple[tuple[str, str, int, int], ...]]
+Signature = dict[tuple[str, str], str]
 
 
 def _signature(conn: sqlite3.Connection) -> Signature:
-    tables = [
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        )
-    ]
-    return {
-        table: tuple(
-            (row[1], row[2], row[3], row[5]) for row in conn.execute(f"PRAGMA table_info('{table}')")
-        )
-        for table in tables
-    }
+    """Схема как текст: таблицы и индексы с ограничениями (UNIQUE, внешние ключи, STRICT)."""
+    rows = conn.execute(
+        "SELECT type, name, sql FROM sqlite_master "
+        "WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%' AND sql IS NOT NULL"
+    )
+    return {(str(kind), str(name)): " ".join(str(sql).split()) for kind, name, sql in rows}
 
 
 @cache
@@ -150,11 +189,12 @@ def _expected(migrations: tuple[Migration, ...]) -> Signature:
 def _check_schema(conn: sqlite3.Connection, path: Path, migrations: Sequence[Migration]) -> None:
     expected = _expected(tuple(migrations))
     actual = _signature(conn)
-    problems = [f"нет таблицы {table}" for table in expected if table not in actual]
+    kinds = {"table": "таблицы", "index": "индекса"}
+    problems = [f"нет {kinds[kind]} {name}" for kind, name in expected if (kind, name) not in actual]
     problems += [
-        f"таблица {table} не совпадает со схемой"
-        for table, columns in expected.items()
-        if table in actual and actual[table] != columns
+        f"{'таблица' if kind == 'table' else 'индекс'} {name} не совпадает со схемой"
+        for (kind, name), sql in expected.items()
+        if (kind, name) in actual and actual[(kind, name)] != sql
     ]
     if problems:
         raise StorageError(

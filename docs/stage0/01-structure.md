@@ -14,12 +14,13 @@ Jarvis-Agent/
 │   ├── architecture/            # архитектура верхнего уровня
 │   ├── stage0/                  # этот проект
 │   ├── adr/                     # решения
-│   └── development.md           # для разработчика: установка, модель, тесты, запуск (M0)
+│   └── development.md           # для разработчика: установка, модель, тесты, запуск (M1)
 ├── examples/
 │   ├── config.toml              # пример пользовательского конфига
 │   └── projects/gofra.yaml      # пример записи реестра проектов
 ├── src/jarvis/
-│   ├── domain/                  # модели, ID, ошибки, машина состояний, бюджеты, риск, цели исполнения
+│   ├── domain/                  # модели, ID, ошибки, машина состояний, бюджеты, риск, цели исполнения,
+│   │                            # settings — схема конфига (чистые pydantic-модели)
 │   ├── ports/                   # Protocol-интерфейсы к инфраструктуре
 │   ├── core/
 │   │   ├── service.py           # TaskService — публичный API ядра для CLI, eval и будущих клиентов
@@ -35,9 +36,11 @@ Jarvis-Agent/
 │   │   ├── policy/              # PolicyEngine, зоны путей, классификатор команд
 │   │   │   └── command_catalog.yaml
 │   │   ├── skills/              # SkillResolver, NullSkillProvider
-│   │   ├── projects/            # реестр проектов (загрузка и валидация YAML)
+│   │   ├── projects/            # реестр проектов: валидация и поиск; записи — из порта ProjectStore
 │   │   └── trace/               # Tracer, рендер человекочитаемой трассы, метрики
 │   ├── adapters/
+│   │   ├── memory/              # хранилище в памяти: репозитории, IdAllocator (тесты, M1)
+│   │   ├── project_files/       # ProjectStore: YAML-файлы реестра
 │   │   ├── llm_openai/          # ModelBackend поверх OpenAI-совместимого HTTP API
 │   │   ├── sqlite/              # Unit of Work, репозитории, миграции, blobs
 │   │   ├── local_fs/            # FileSystem для HOST (и WSL через \\wsl$, если Q2 = WSL)
@@ -48,22 +51,24 @@ Jarvis-Agent/
 │   │   ├── scripted/            # ScriptedModelBackend для тестов и eval
 │   │   ├── recorded/            # записанные ответы модели и инструментов для replay
 │   │   ├── fake_process/        # заранее заданные выводы команд (docker и др.) для eval
-│   │   └── ai_dev_mcp/          # SkillProvider поверх MCP (M9, необязательно)
+│   │   └── ai_dev_mcp/          # SkillProvider поверх MCP (M10, необязательно)
 │   ├── app/
 │   │   ├── composition.py       # build_app(config): единственное место, где создаются адаптеры
-│   │   └── replay.py            # сборка runner'а с записанными бэкендами
-│   ├── config/                  # схема (pydantic) и загрузчик слоёв
-│   ├── cli/                     # команды: run, repl, trace, approvals, resume, cancel, replay, eval, bench
+│   │   └── replay.py            # записанный ToolInvoker и сборка runner'а для replay
+│   ├── config/                  # загрузчик слоёв: файлы и переменные окружения
+│   ├── cli/                     # команды: run, tasks, trace, approvals, resume, cancel, replay, eval, bench
 │   ├── evals/                   # движок eval: загрузка сценариев, авто-подтверждения, проверки, отчёты
 │   └── bench/                   # аппаратный бенчмарк моделей
 ├── evals/
 │   ├── scenarios/               # YAML-сценарии
 │   ├── fixtures/                # рабочие папки, сломанный docker-проект, логи с инъекциями
+│   ├── cassettes/               # записанные ответы для scripted-режима
 │   ├── golden/                  # эталонные свойства трасс
 │   ├── router/                  # набор фраз для роутера (русский + английские вставки)
 │   └── reports/                 # результаты прогонов (в git — только итоговые отчёты)
 ├── benchmarks/
-│   └── hardware/                # кандидаты моделей, профили железа, отчёты
+│   ├── hardware/                # кандидаты моделей, профили железа
+│   └── results/                 # отчёты бенчмарка
 └── tests/
     ├── unit/                    # домен, политика, роутер, конвейеры — без I/O
     ├── contract/                # общий набор тестов для каждой реализации порта
@@ -87,8 +92,8 @@ Jarvis-Agent/
 
 | Пакет | Отвечает за | Не отвечает за |
 | --- | --- | --- |
-| `domain` | Модели, ID, ошибки, таблица переходов состояний, бюджеты, уровни риска, цели исполнения и пути | Любой ввод-вывод |
-| `ports` | Протоколы: модель, хранилище, ФС, процессы, разбор shell, навыки, известные папки, часы | Реализации |
+| `domain` | Модели, ID, ошибки, таблица переходов состояний, бюджеты, уровни риска, цели исполнения и пути, схема настроек | Любой ввод-вывод |
+| `ports` | Протоколы: модель, хранилище, ID, аренды, реестр проектов, ФС, процессы, разбор shell, навыки, известные папки, часы | Реализации |
 | `core.service` | Публичный API: создать задачу, продвинуть, разрешить подтверждение, отменить, прочитать трассу | Логику стадий |
 | `core.runner` | Цикл «загрузить задачу → проверить отмену и бюджет → вызвать стадию → применить переход» | Решения внутри стадий |
 | `core.stages` | По одному обработчику на состояние | Хранение, политику |
@@ -98,11 +103,11 @@ Jarvis-Agent/
 | `core.tools` | Контракт инструмента, реестр, конвейер исполнения, артефакты, журнал эффектов | Решение «можно ли» (это политика) |
 | `core.policy` | Зоны путей, классификация команд, решение allow / require_confirmation / deny | Исполнение |
 | `core.skills` | Подбор руководств через `SkillProvider`, деградация при ошибке | Хранение навыков |
-| `core.projects` | Загрузка и валидация реестра, поиск по имени и алиасам | Анализ кода |
+| `core.projects` | Валидация записей из `ProjectStore`, поиск по имени и алиасам | Чтение файлов, анализ кода |
 | `core.trace` | Запись событий, метрики, человекочитаемый рендер | Хранение (через порт) |
 | `adapters.*` | Реализация одного порта для одной технологии | Логику ядра |
 | `app` | Сборка графа объектов из конфига; replay | Логику |
-| `config` | Схема и слияние слоёв; единственное место, где читаются переменные окружения | — |
+| `config` | Чтение файлов конфига и слияние слоёв; единственное место, где читаются переменные окружения | Схема (она в `domain.settings`) |
 | `cli`, `evals`, `bench` | Точки входа | Логику ядра |
 
 ## 3. Граф зависимостей
@@ -123,7 +128,7 @@ Jarvis-Agent/
                   ▼                           ▼
                 domain ◄──────────────────────┘    ← модели (зависит только от pydantic)
 
-config ← импортируется app и точками входа; core получает уже готовые объекты настроек
+config (загрузчик) → domain; импортируется только app и точками входа
 ```
 
 Внутри `core` (стрелки — разрешённые импорты):
@@ -161,7 +166,7 @@ type = "layers"
 layers = [
   "jarvis.cli | jarvis.evals | jarvis.bench",
   "jarvis.app",
-  "jarvis.adapters | jarvis.core",
+  "jarvis.adapters | jarvis.core | jarvis.config",
   "jarvis.ports",
   "jarvis.domain",
 ]
@@ -176,8 +181,9 @@ forbidden_modules = ["jarvis.adapters", "jarvis.app", "jarvis.config",
 [[tool.importlinter.contracts]]
 name = "Адаптеры не зависят друг от друга и от ядра"
 type = "independence"
-modules = ["jarvis.adapters.llm_openai", "jarvis.adapters.sqlite", "jarvis.adapters.local_fs",
-           "jarvis.adapters.local_process", "jarvis.adapters.shell_pwsh", "jarvis.adapters.shell_posix"]
+modules = ["jarvis.adapters.memory", "jarvis.adapters.project_files", "jarvis.adapters.llm_openai",
+           "jarvis.adapters.sqlite", "jarvis.adapters.local_fs", "jarvis.adapters.local_process",
+           "jarvis.adapters.shell_pwsh", "jarvis.adapters.shell_posix"]
 
 [[tool.importlinter.contracts]]
 name = "Адаптеры видят только порты и домен"
@@ -188,24 +194,26 @@ forbidden_modules = ["jarvis.core", "jarvis.app"]
 
 Запрет модулей стандартной библиотеки (`subprocess`, `sqlite3`, `ctypes`, `os.system`/`os.popen`)
 дополнительно проверяет простой AST-тест в `tests/architecture`: не стоит полагаться на то, что
-import-linter учитывает stdlib. Тот же тест запрещает чтение `os.environ` вне `jarvis.config`.
+import-linter учитывает stdlib. Тот же тест запрещает чтение `os.environ` вне `jarvis.config` и файловый
+ввод-вывод в `domain`, `ports` и `core` (`open`, `Path.read_*`/`write_*`, `os` и `shutil` для файлов);
+единственное исключение — данные пакета через `importlib.resources`.
 
-`jarvis.core` получает настройки как обычные объекты (dataclass/pydantic), созданные в `app`, и не
-импортирует `jarvis.config` — поэтому ядро можно тестировать без файлов конфига.
+Схема настроек — в `jarvis.domain.settings`; `jarvis.core` получает готовый объект настроек, созданный в
+`app`, и не импортирует `jarvis.config` — поэтому ядро можно тестировать без файлов конфига.
 
 ## 5. Внешние зависимости
 
 | Библиотека | Зачем | Где разрешена |
 | --- | --- | --- |
 | pydantic v2 | Модели, JSON Schema для модели и инструментов | везде |
-| PyYAML (safe_load) | Реестр проектов, грамматики, каталог команд, сценарии eval | `core` (данные из пакета), `config`, `evals` |
+| PyYAML (safe_load) | Реестр проектов, грамматики, каталог команд, сценарии eval | `core` (данные пакета через `importlib.resources`), `adapters.project_files`, `evals` |
 | httpx | HTTP к серверу моделей | `adapters.llm_openai`, `bench` |
 | sqlite3 (stdlib) | Хранилище | `adapters.sqlite` |
 | psutil | Дерево процессов, память процессов | `adapters.local_process`, `bench` |
 | pymorphy3 + словари ru | Лемматизация русских словоформ | `core.router` |
 | rapidfuzz | Нечёткое сопоставление сущностей | `core.router` |
 | typer, rich | CLI и рендер | `cli` |
-| mcp (extra `ai-dev`) | Адаптер AI-Dev-System | `adapters.ai_dev_mcp` (M9) |
+| mcp (extra `ai-dev`) | Адаптер AI-Dev-System | `adapters.ai_dev_mcp` (M10) |
 | pytest, anyio (плагин), hypothesis | Тесты | `tests` |
 | ruff, pyright, import-linter | Качество | dev |
 
@@ -217,18 +225,18 @@ import-linter учитывает stdlib. Тот же тест запрещает
 # app/composition.py — эскиз
 def build_app(config: JarvisConfig, overrides: Overrides | None = None) -> App:
     storage = SqliteStorage(config.paths.database, blob_dir=config.paths.blobs)
-    backend = OpenAICompatBackend(config.models.main)            # или Scripted/Recorded из overrides
-    gateway = ModelGateway(backends={...}, roles=config.models.roles, profiles=config.model_profiles,
+    backends = {e.id: OpenAICompatBackend(e) for e in config.models.endpoints}   # или Scripted/Recorded
+    gateway = ModelGateway(backends, roles=config.models.roles, profiles=config.model_profiles,
                            recorder=storage.model_calls)
     tools = ToolRegistry([
         ListDirectoryTool(fs), SearchFilesTool(fs), ReadTextTool(fs), WriteTextTool(fs),
         EnsureDirectoryTool(fs), DeleteTool(fs, trash), ProcessListTool(processes),
         ShellExecuteTool(processes, parsers), ...
     ])                                                            # явный список, без автообнаружения
-    runtime = ToolRuntime(tools, PolicyEngine(config.policy), storage.unit_of_work, artifacts, audit, clock)
+    runtime = ToolRuntime(tools, PolicyEngine(config.policy), invoker, storage.unit_of_work, artifacts, audit, clock)
     stages = {TaskStatus.ROUTING: RoutingStage(...), TaskStatus.PLANNING: PlanningStage(...), ...}
-    runner = TaskRunner(stages, storage.unit_of_work, tracer, budget_guard, cancellations, clock)
-    return App(tasks=TaskService(runner, storage.unit_of_work, tracer, cancellations), ...)
+    runner = TaskRunner(stages, storage.unit_of_work, storage.ids, storage.leases, tracer, budget_guard, clock)
+    return App(tasks=TaskService(runner, storage.unit_of_work, storage.ids, storage.leases, tracer), ...)
 ```
 
 `App` — простой контейнер из нескольких сервисов для точек входа, а не фасад со всей логикой: CLI

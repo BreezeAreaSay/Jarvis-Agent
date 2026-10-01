@@ -11,7 +11,7 @@ class Clock(Protocol):
     def monotonic(self) -> float: ...
 
 class UnitOfWork(Protocol):
-    """Одна транзакция SQLite. Переход состояния и его события пишутся вместе."""
+    """Одна транзакция хранилища: контрольная точка задачи (строка задачи + task.transition)."""
     tasks: TaskRepository
     plans: PlanRepository
     tool_calls: ToolCallRepository
@@ -26,20 +26,27 @@ class UnitOfWorkFactory(Protocol):
     def __call__(self) -> UnitOfWork: ...
 
 class TaskRepository(Protocol):
-    def next_task_id(self) -> TaskId: ...
     def add(self, task: Task) -> None: ...
     def get(self, task_id: TaskId) -> Task: ...                    # TaskNotFound
     def save(self, task: Task, expected_version: int) -> None: ... # ConcurrentModification
-    def list(self, *, status: set[TaskStatus] | None = None, limit: int = 50) -> list[TaskSummary]: ...
-    def request_cancel(self, task_id: TaskId) -> None: ...
+    def list(self, *, status: set[TaskStatus] | None = None, limit: int = 50) -> list[TaskSnapshot]: ...
+
+class IdAllocator(Protocol):                          # см. 02-domain.md §1; пишет сразу, вне UnitOfWork
+    def next_task_id(self) -> TaskId: ...
+    def next_child_id(self, task_id: TaskId, kind: ChildKind) -> str: ...
+
+class TaskLeases(Protocol):                           # отдельная таблица, не строка задачи
+    def acquire(self, task_id: TaskId, owner: str, ttl_s: float) -> bool: ...   # False — аренда чужая и живая
+    def renew(self, task_id: TaskId, owner: str, ttl_s: float) -> None: ...      # LeaseLost
+    def release(self, task_id: TaskId, owner: str) -> None: ...
+    def holder(self, task_id: TaskId) -> Lease | None: ...                        # живая аренда или None
 
 class TraceRepository(Protocol):
     def append(self, events: Sequence[TraceEvent]) -> None: ...
     def list(self, task_id: TaskId, *, after_seq: int = 0) -> list[TraceEvent]: ...
 
 class AuditLog(Protocol):
-    def append(self, record: AuditRecord) -> AuditEntry: ...      # хэш-цепочка считается внутри
-    def verify_chain(self) -> AuditVerification: ...
+    def append(self, record: AuditRecord) -> AuditEntry: ...      # только добавление
 
 class ArtifactStore(Protocol):
     def put(self, task_id: TaskId, data: bytes, meta: ArtifactMeta) -> ArtifactRef: ...
@@ -69,6 +76,9 @@ class ShellParser(Protocol):
 class KnownFolders(Protocol):
     def resolve(self, name: KnownFolder) -> TargetPath | None: ...   # downloads, documents, desktop, home
 
+class ProjectStore(Protocol):                         # ядро не читает файлы реестра само
+    def load_all(self) -> list[Project]: ...          # ProjectRegistryError с файлом и строкой
+
 class ModelBackend(Protocol):                       # см. §3
 class SkillProvider(Protocol):                      # см. §4
 ```
@@ -77,13 +87,14 @@ class SkillProvider(Protocol):                      # см. §4
 
 | Порт | Реализации |
 | --- | --- |
-| `UnitOfWork`, репозитории, `AuditLog`, `ArtifactStore` | `adapters.sqlite` (blobs — файлы по sha256) |
+| `UnitOfWork`, репозитории, `IdAllocator`, `TaskLeases`, `AuditLog`, `ArtifactStore` | `adapters.memory` (тесты, M1); `adapters.sqlite` (M2; blobs — файлы по sha256) |
+| `ProjectStore` | `adapters.project_files` (YAML-файлы реестра) |
 | `FileSystem` | `adapters.local_fs` (HOST; WSL через `\\wsl$`, если Q2 = WSL) |
 | `ProcessRunner` | `adapters.local_process`; `adapters.fake_process` для eval |
 | `ShellParser` | `adapters.shell_pwsh`, `adapters.shell_posix` |
 | `KnownFolders` | `adapters.known_folders` |
 | `ModelBackend` | `adapters.llm_openai`, `adapters.scripted`, `adapters.recorded` |
-| `SkillProvider` | `core.skills.NullSkillProvider`, `adapters.scripted.StaticSkillProvider`, `adapters.ai_dev_mcp` (M9) |
+| `SkillProvider` | `core.skills.NullSkillProvider`, `adapters.scripted.StaticSkillProvider`, `adapters.ai_dev_mcp` (M10) |
 | `Clock` | системные часы; управляемые часы в тестах |
 
 Для каждого порта есть общий набор контрактных тестов (`tests/contract`), который проходят все его
@@ -103,7 +114,7 @@ class ToolSpec(Generic[I, O]):
     description: str           # для модели: когда использовать и когда НЕ использовать
     input_model: type[I]       # pydantic → JSON Schema
     output_model: type[O]
-    side_effects: SideEffects
+    side_effects: SideEffects  # максимальный класс эффектов инструмента; у вызова — свой в preview
     idempotent: bool
     timeout_s: float
     targets: frozenset[TargetKind]
@@ -116,7 +127,8 @@ class Tool(Protocol[I, O]):
         # относительные пути → TargetPath от рабочей папки или корня проекта; без ввода-вывода
 
     async def preview(self, args: I, ctx: ToolContext) -> EffectPreview: ...
-        # только чтение: что будет затронуто (файлы, количество, размер, команда); используется
+        # только чтение: что будет затронуто (файлы, количество, размер, команда) и класс эффектов
+        # именно этого вызова (EffectPreview.side_effects ≤ spec.side_effects); используется
         # для оценки риска, карточки подтверждения и dry run
 
     def evaluate_risk(self, args: I, preview: EffectPreview, ctx: RiskContext) -> RiskAssessment: ...
@@ -136,6 +148,12 @@ class Tool(Protocol[I, O]):
 `output_schema` (из `output_model`), `risk_evaluator` (`evaluate_risk`), `timeout`, `executor`
 (`execute`), `verifier` (`verify`). Дополнительно `preview` и `simulate` — без них нет dry run и
 осмысленной карточки подтверждения.
+
+Dry run, политика заражённой задачи и replay смотрят на класс эффектов **вызова** из `preview`, а не на
+`spec.side_effects`. Для `shell.execute` он выводится из класса команды
+([04-security.md §4](04-security.md#4-shell--escape-hatch)): `read_only` → NONE, `mutating_known` →
+LOCAL_REVERSIBLE, `destructive`, `unknown` и неразобранная команда → LOCAL_IRREVERSIBLE. Поэтому dry run
+никогда не исполняет команду, которая может что-то изменить.
 
 ### Риск зависит от аргументов
 
@@ -226,11 +244,16 @@ class BackendResponse(BaseModel, frozen=True):
 | `router` | `structured_output`, `context_window ≥ 4096` |
 | `planner` | `structured_output`, `context_window ≥ 8192` |
 | `executor` | `structured_output`, `context_window ≥ 8192` |
-| `verifier` | `structured_output`, `context_window ≥ 4096` |
 | `responder` | `context_window ≥ 4096` |
 
 При старте Gateway проверяет, что модель, назначенная роли в конфиге, удовлетворяет требованиям; иначе —
 `ConfigError` с объяснением. Ядро спрашивает `capabilities(role)`, а не имя модели.
+
+`SamplingParams` — `temperature`, `top_p`, `seed`, `max_tokens`; значения берутся из профиля модели для
+роли. Возможности модели объявляются в конфиге (`models.endpoints[].capabilities`) и проверяются командой `jarvis model check`: список моделей
+и `/health` сервера, окно контекста из свойств сервера, проба structured output по схеме, проба
+ограниченного декодирования (ответ из enum), замер скорости. Несовпадение объявленного и измеренного —
+ошибка с объяснением.
 
 ### Конвейер structured output
 
@@ -252,7 +275,7 @@ Prompt + schema
 ```python
 class PromptSection(BaseModel, frozen=True):
     kind: Literal["system", "request", "plan", "state", "tools", "data", "skills"]
-    trust: Literal["trusted", "untrusted"]
+    trust: Literal["trusted", "derived", "untrusted"]
     source: str | None                    # "file:C:\...\README.md", "tool:task_42.call_3", "skill:ai-dev/…"
     content: str
 
@@ -261,9 +284,17 @@ class Prompt(BaseModel, frozen=True):
     sections: list[PromptSection]         # порядок: стабильные секции — первыми
 ```
 
-Секции `untrusted` отрисовываются только внутри блоков данных
-([04-security.md §5](04-security.md#5-недоверенный-контент-и-архитектура-промптов)). Отрисовка — в ядре
-(`core.agent.prompts`), одинаковая для всех моделей; профиль модели может выбрать только вариант разметки.
+Уровни доверия:
+
+- `trusted` — написано Jarvis или пользователем: системный промпт, запрос, схемы инструментов.
+- `derived` — написано моделью (`plan`, `state`): в заражённой задаче модель могла пересказать в них
+  инъекцию. Отрисовываются вне блоков данных, но с пометкой «текст модели» и прав не дают; если задача
+  заражена, политика считает их недоверенными.
+- `untrusted` — содержимое извне: вывод инструментов, файлы, навыки. Отрисовывается только внутри
+  блоков данных ([04-security.md §5](04-security.md#5-недоверенный-контент-и-архитектура-промптов)).
+
+Отрисовка — в ядре (`core.agent.prompts`), одинаковая для всех моделей; профиль модели может выбрать
+только вариант разметки.
 
 ## 4. SkillProvider
 
@@ -290,7 +321,7 @@ class NullSkillProvider:                  # core.skills — поставляет
   событие `skill.degraded`, задача продолжается без навыков.
 - Содержимое навыков и пакета контекста — всегда секции `untrusted`: навык не даёт прав и не меняет политику.
 - Поведение Jarvis с `NullSkillProvider` — полноценное, а не «урезанное»: все eval проходят и без AI-Dev-System.
-- Адаптер AI-Dev-System (M9) реализует порт через `recommend_skills`, `read_skill_card` / `read_skill` и
+- Адаптер AI-Dev-System (M10) реализует порт через `recommend_skills`, `read_skill_card` / `read_skill` и
   `compile_project_context`, с allowlist вызовов на стороне Jarvis ([05-ai-dev-system.md](../architecture/05-ai-dev-system.md)).
 
 ## 5. Компоненты ядра
@@ -307,6 +338,7 @@ class Router:
 
 class ContextBuilder:
     def __init__(self, skills: SkillResolver, projects: ProjectRegistry, gateway: ModelGateway): ...
+    # ProjectRegistry (ядро) строится из ProjectStore.load_all() и валидирует записи
     async def build(self, task: Task, role: ModelRole) -> Prompt: ...   # бюджет — из gateway.context_budget
 
 class Planner:
@@ -316,9 +348,16 @@ class Planner:
 class Executor:
     async def next_action(self, task: Task, prompt: Prompt) -> ProposedAction: ...
 
-class Verifier:
+class Verifier:                                       # детерминированный, модель не вызывает
     def __init__(self, checks: CheckLibrary): ...
     async def verify(self, task: Task, plan: Plan, answer: FinishAction | None) -> VerificationReport: ...
+    # критерий без check → unknown; итог — по таблице VerificationOverall
+
+class ToolInvoker(Protocol):                          # core.tools: последний шаг конвейера ToolRuntime
+    async def invoke(self, tool: Tool[Any, Any], args: BaseModel, ctx: ToolContext,
+                     preview: EffectPreview) -> ToolOutput[Any]: ...
+    # обычный режим: execute или simulate (dry run); simulated replay — записанный результат
+    # (реализация в app/replay.py, подставляется composition root)
 
 class ToolRuntime:
     async def run(self, request: ToolCallRequest, ctx: ExecutionContext) -> ToolRunResult: ...
@@ -340,6 +379,11 @@ class TaskService:                                    # публичный API �
 `ApprovalDecision` в Stage 0: `approve_once`, `deny`, `deny_and_abort`. Ни один из этих методов не
 доступен модели: подтверждение может прийти только от клиента (CLI, движок eval, позже UI и голос).
 
+- `resolve_approval` выводит задачу из WAITING_CONFIRMATION через ту же проверку переходов, что и runner,
+  и пишет контрольную точку; продолжает работу следующий `run_until_blocked`.
+- `cancel` отменяет работающую задачу в своём процессе (отмена текущего такта через asyncio) и задачу без
+  живой аренды — из любого процесса. Задачу с чужой живой арендой не трогает: `TaskBusy`.
+
 ## 6. Intake и Router: русский + технический английский
 
 Пользователь говорит «Джарвис, открой Docker Desktop и перезапусти backend GOFRA»: русская грамматика,
@@ -349,7 +393,7 @@ class TaskService:                                    # публичный API �
 ```
 1 обращение      удалить «Джарвис», «Jarvis» в начале фразы
 2 токенизация    сохранить целыми: строки в кавычках, `команды`, пути Windows и POSIX, URL, маски (*.pdf),
-                 расширения (.log), числа с единицами; каждому токену — тип: cyr | lat | mixed | path | code | number
+                 расширения (.log), числа с единицами; каждому токену — тип: cyr | lat | mixed | path | code | number | quoted
 3 нормализация   кириллица: нижний регистр, ё→е, лемма (pymorphy3): «загрузках» → «загрузка», «гофру» → «гофра»
                  латиница: только нижний регистр, без лемматизации («Downloads», «backend» не трогаются)
                  составные: «PDF-файлы» → «pdf» + «файл»

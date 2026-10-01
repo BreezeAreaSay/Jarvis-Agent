@@ -16,7 +16,9 @@
 | Запрос подтверждения | `<task>.appr_<n>` | `task_42.appr_1` |
 | Событие трассы | `<task>.ev_<n>` | `task_42.ev_31` |
 
-- Счётчики дочерних ID хранятся в задаче (`Task.counters`) и сохраняются вместе с ней.
+- ID выдаёт порт `IdAllocator`: счётчик увеличивается сразу при выдаче, отдельно от контрольной точки
+  задачи. Поэтому ID никогда не повторяются, даже если такт задачи не дошёл до сохранения; пропуски
+  номеров допустимы.
 - ID читаются человеком, уникальны глобально и **детерминированы**: replay задачи `task_42` создаёт
   `task_43` с той же нумерацией вызовов, поэтому трассы сравниваются по шагам.
 - В тестах последовательность задач начинается с 1 — снапшоты стабильны.
@@ -25,10 +27,11 @@
 TaskId = NewType("TaskId", str)          # и так же PlanId, StepId, ModelCallId, ToolCallId,
                                          # ArtifactId, ApprovalId, EventId
 
-class TaskCounters(BaseModel):
-    plan: int = 0; step: int = 0; mc: int = 0; call: int = 0; art: int = 0; appr: int = 0; ev: int = 0
+ChildKind = Literal["plan", "step", "mc", "call", "art", "appr", "ev"]
 
-def next_child_id(task: Task, kind: Literal["plan", "step", "mc", "call", "art", "appr", "ev"]) -> str: ...
+class IdAllocator(Protocol):                     # порт; реализации — память (тесты) и SQLite
+    def next_task_id(self) -> TaskId: ...
+    def next_child_id(self, task_id: TaskId, kind: ChildKind) -> str: ...
 ```
 
 ## 2. Доменные модели
@@ -64,11 +67,10 @@ class Task(BaseModel):
     state: AgentState                    # рабочая память задачи
     budget: Budget
     usage: BudgetUsage
-    counters: TaskCounters
     tainted: bool                        # в контекст модели попал недоверенный контент
     outcome: TaskOutcome | None
-    cancel_requested: bool
     created_at: datetime; updated_at: datetime
+    # аренда (кто сейчас ведёт задачу) хранится отдельно, чтобы не конфликтовать с version
 ```
 
 ### Маршрутизация
@@ -77,7 +79,7 @@ class Task(BaseModel):
 class NormalizedRequest(BaseModel, frozen=True):
     raw: str
     text: str                            # без обращения «Джарвис», ё→е, нормализованные числа
-    tokens: list[Token]                  # с пометкой письменности: cyr | lat | path | number | quoted
+    tokens: list[Token]                  # тип: cyr | lat | mixed | path | code | number | quoted
     entities: list[EntityCandidate]      # проекты, известные папки, расширения, сервисы, приложения
 
 class RouteDecision(BaseModel, frozen=True):
@@ -185,7 +187,7 @@ class ToolCall(BaseModel):
 class ToolResult(BaseModel, frozen=True):
     status: ToolCallStatus
     output: dict[str, JsonValue] | None  # прошёл валидацию output-схемы инструмента
-    summary: str                         # для модели и трассы, ≤ 1 000 символов
+    summary: str                         # для модели, ≤ 1 000 символов (в трассу — первые 200)
     artifacts: list[ArtifactRef]         # полный вывод — здесь
     effects: list[Effect]                # что изменилось (для аудита и replay)
     postcondition: PostconditionResult | None
@@ -222,7 +224,7 @@ class VerificationOverall(StrEnum):
     PARTIALLY_VERIFIED = "partially_verified"
     UNVERIFIED = "unverified"            # проверить было нечем — честно сообщаем
     FAILED = "failed"
-    NOT_APPLICABLE = "not_applicable"    # chat-ответ
+    NOT_APPLICABLE = "not_applicable"    # chat-ответ, уточняющий вопрос
 
 class VerificationReport(BaseModel, frozen=True):
     overall: VerificationOverall; results: list[CriterionResult]
@@ -232,8 +234,22 @@ class TaskOutcome(BaseModel, frozen=True):
     answer: str | None
     verification: VerificationReport | None
     error: ErrorInfo | None
-    metrics: TaskMetrics                 # см. 05-storage-and-trace.md §3
+    metrics: TaskMetrics
+
+class TaskMetrics(BaseModel, frozen=True):      # определения — 05-storage-and-trace.md §3
+    latency_ms: int; time_to_first_action_ms: int | None; total_duration_ms: int
+    model_calls: int; tool_calls: int; prompt_tokens: int; completion_tokens: int
+    replans: int; failures: int; success: bool
+
+class TaskSnapshot(BaseModel, frozen=True):     # то, что видят клиенты (CLI, eval)
+    id: TaskId; status: TaskStatus; route: Route | None; profile: str | None; project_id: str | None
+    plan_goal: str | None; usage: BudgetUsage; budget: Budget
+    pending_approval: ApprovalId | None; outcome: TaskOutcome | None
 ```
+
+«Успех» задачи зависит от маршрута: agent — COMPLETED с `verified` или `partially_verified`; direct —
+COMPLETED с выполненным постусловием инструмента (`verified`); chat и clarify — COMPLETED
+(`not_applicable`). Прошёл ли сценарий eval, решают его ожидания, а не только эта метрика.
 
 ### Цели исполнения и пути
 
@@ -260,6 +276,10 @@ def convert_path(path: TargetPath, to: ExecutionTarget) -> TargetPath: ...
 Путь без цели не существует: функция, которой нужен путь, принимает `TargetPath`. Смешать
 `C:\…` и `/mnt/c/…` можно только явным вызовом `convert_path`.
 
+Имена целей отличаются от формулировки требований (WINDOWS, WSL, DOCKER, REMOTE_SSH) намеренно:
+WINDOWS — это `HOST` с `os_family="windows"`, потому что тот же код работает на Linux CI, где HOST —
+POSIX; REMOTE_SSH — это `SSH` ([ADR 0017](../adr/0017-windows-first-execution-target.md)).
+
 ### Проекты, навыки, модели
 
 ```python
@@ -273,6 +293,9 @@ class Project(BaseModel, frozen=True):
     stack: list[str] = []
     commands: dict[str, CommandSpec] = {}   # в Stage 0 только хранятся, не исполняются
     notes: str | None = None
+    overrides: ProjectOverrides | None = None   # проектный слой конфига (06-errors-and-config.md §2)
+# В YAML корень записывается коротко: root: {target: host | "wsl:<distro>", path: ...};
+# загрузчик реестра превращает это в TargetPath с полным ExecutionTarget.
 
 class SkillSummary(BaseModel, frozen=True):
     id: str; title: str; summary: str; source: str; score: float | None; trust: Literal["user", "imported"]
@@ -282,7 +305,8 @@ class ProjectContextPack(BaseModel, frozen=True):
     project_id: str; source: str; content: str; fingerprint: str | None
 
 class ModelRole(StrEnum):
-    ROUTER = "router"; PLANNER = "planner"; EXECUTOR = "executor"; VERIFIER = "verifier"; RESPONDER = "responder"
+    ROUTER = "router"; PLANNER = "planner"; EXECUTOR = "executor"; RESPONDER = "responder"
+    # Verifier в Stage 0 детерминированный и модель не вызывает
 
 class ModelCapabilities(BaseModel, frozen=True):
     structured_output: bool              # умеет отвечать JSON по схеме (с ограниченным декодированием или нет)
@@ -292,6 +316,8 @@ class ModelCapabilities(BaseModel, frozen=True):
     embeddings: bool
     context_window: int
     max_output_tokens: int
+# Ядро Stage 0 проверяет только structured_output, constrained_decoding и context_window;
+# остальные поля — данные матрицы возможностей из требований, без потребителя в Stage 0.
 ```
 
 В Stage 0 нет класса `Recipe` и пакета рецептов: «навык» в коде — это только знание для модели
@@ -316,14 +342,14 @@ WAITING_CONFIRMATION ─► CANCELLED          «отклонить и оста�
 
 | Из | В | Условие |
 | --- | --- | --- |
-| CREATED | ROUTING | всегда |
+| CREATED | ROUTING | автоматически, первым тактом runner'а (обработчика у CREATED нет) |
 | ROUTING | PLANNING | route = agent |
 | ROUTING | EXECUTING | route = direct или chat |
 | ROUTING | COMPLETED | route = clarify (итог — вопрос пользователю) |
 | PLANNING | EXECUTING | план прошёл схему и семантическую проверку |
 | EXECUTING | EXECUTING | — (не переход: шаги внутри состояния фиксируются событиями) |
 | EXECUTING | WAITING_CONFIRMATION | политика требует подтверждения |
-| WAITING_CONFIRMATION | EXECUTING | одобрено, отклонено или истёк срок (отказ возвращается агенту наблюдением) |
+| WAITING_CONFIRMATION | EXECUTING | решение через `TaskService.resolve_approval` (внешнее событие, не такт runner'а): одобрено, отклонено или истёк срок; отказ возвращается агенту наблюдением |
 | WAITING_CONFIRMATION | CANCELLED | «отклонить и остановить» или отмена |
 | EXECUTING | REPLANNING | действие `replan` или детектор зацикливания |
 | EXECUTING | VERIFYING | действие `finish`; direct-команда выполнена; chat-ответ готов |
@@ -340,40 +366,61 @@ WAITING_CONFIRMATION ─► CANCELLED          «отклонить и оста�
 - Таблица переходов — данные в `domain` (`ALLOWED_TRANSITIONS`). Недопустимый переход —
   `InvalidTransition`, программная ошибка, тест падает.
 - **Переход атомарен:** новое состояние задачи и событие `task.transition {from, to, reason}`
-  записываются в одной транзакции SQLite.
+  записываются одной операцией хранилища (в SQLite — одна транзакция).
 - Терминальные состояния: COMPLETED, FAILED, CANCELLED, BUDGET_EXCEEDED. Из них переходов нет.
-- Задача после падения процесса остаётся в последнем сохранённом состоянии. При старте CLI задачи в
-  EXECUTING, PLANNING и других «активных» состояниях переводятся в FAILED с причиной `interrupted`,
-  а WAITING_CONFIRMATION остаётся — её можно продолжить командой `jarvis resume`.
+- Задачу продвигает только процесс, который держит её **аренду** (владелец и срок; продлевается, пока
+  идёт работа). Задача в активном состоянии с истёкшей арендой — прерванная: при старте CLI она
+  переводится в FAILED (`interrupted`). Задачу с живой арендой другой процесс не трогает.
+  WAITING_CONFIRMATION аренды не держит — её может продолжить любой процесс (`jarvis resume`).
 - Время ожидания подтверждения **не входит** в `max_wall_time`: бюджет считает только активное время.
 
 ### Отмена
 
 ```
-Ctrl+C в CLI  или  jarvis cancel task_42 (из другого терминала)
-  → TaskService.cancel(task_id): флаг cancel_requested в БД
-  → в своём процессе: отмена текущего такта (asyncio) — ToolRuntime завершает дерево процессов,
-    вызов получает статус cancelled; в другом процессе runner и ToolRuntime замечают флаг (опрос ≈ 0,5 с)
+Ctrl+C в CLI → TaskService.cancel(task_id) в том же процессе
+  → отмена текущего такта (asyncio): ToolRuntime завершает дерево процессов, вызов получает cancelled
   → runner переводит задачу в CANCELLED, событие task.transition с причиной
-второе Ctrl+C — немедленный выход; задача остаётся в активном состоянии и при следующем старте
-становится FAILED (interrupted)
+jarvis cancel task_42 из другого терминала — только для задачи без живой аренды (например, ожидающей
+подтверждения): переход выполняется сразу; работающую задачу отменяет её процесс
+второе Ctrl+C — немедленный выход; аренда истекает, и при следующем старте задача становится
+FAILED (interrupted)
 ```
 
 ### Как runner использует машину состояний
 
 ```python
+class TaskChanges(BaseModel, frozen=True):      # что изменить в задаче; None — не менять
+    route: RouteDecision | None = None
+    profile: str | None = None
+    project_id: str | None = None
+    new_plan: Plan | None = None
+    state: AgentState | None = None
+    usage: BudgetUsage | None = None
+    tainted: bool | None = None
+    outcome: TaskOutcome | None = None
+
 class StageOutcome(BaseModel, frozen=True):
     next_status: TaskStatus
     reason: str
-    task_changes: TaskChanges            # что изменить в задаче: план, состояние, счётчики, итог
-    events: list[TraceEventDraft]        # события стадии (решение роутера, план, вызов инструмента …)
+    changes: TaskChanges
 
 class StageHandler(Protocol):
     async def handle(self, task: Task) -> StageOutcome: ...
 ```
 
 Стадия не меняет статус сама: она возвращает `StageOutcome`, а runner проверяет переход по таблице,
-применяет изменения и пишет их одной транзакцией. Один вызов стадии EXECUTING — один «такт»: одно
+применяет изменения и пишет их одной транзакцией. У CREATED обработчика нет (переход в ROUTING
+автоматический), из WAITING_CONFIRMATION задачу выводит `TaskService.resolve_approval` через ту же
+проверку переходов.
+
+Записи бывают двух видов:
+
+- **Журнальные** — события трассы, вызовы модели и инструментов, подтверждения, артефакты, аудит.
+  Пишутся сразу, когда происходят (`Tracer.emit` и репозитории), и никогда не откатываются.
+- **Контрольная точка** — строка задачи и событие `task.transition`. Пишется атомарно в конце такта.
+
+После сбоя журнал показывает, что успело произойти (например, `tool.started` без `tool.finished`), а
+задача остаётся в последней контрольной точке. Один вызов стадии EXECUTING — один «такт»: одно
 действие модели или исполнение одного одобренного вызова. Поэтому состояние задачи всегда лежит в БД,
 а не в стеке вызовов Python, и задачу можно продолжить после выхода из процесса.
 
@@ -394,21 +441,32 @@ class BudgetUsage(BaseModel):
     active_time_s: float = 0.0; model_calls: int = 0; model_tokens: int = 0
 ```
 
-| Лимит | direct | chat | agent |
-| --- | --- | --- | --- |
-| `max_steps` | 1 | 1 | 20 |
-| `max_tool_calls` | 3 | 0 | 30 |
-| `max_failures` | 1 | 1 | 5 |
-| `max_replans` | 0 | 0 | 3 |
-| `max_wall_time_s` | 15 | 60 | 300 |
-| `max_model_calls` | 1 | 2 | 40 |
-| `max_model_tokens` | 4 000 | 16 000 | 250 000 |
+| Лимит | routing | direct | chat | agent |
+| --- | --- | --- | --- | --- |
+| `max_steps` | 0 | 1 | 1 | 20 |
+| `max_tool_calls` | 0 | 3 | 0 | 30 |
+| `max_failures` | 1 | 1 | 1 | 5 |
+| `max_replans` | 0 | 0 | 0 | 3 |
+| `max_wall_time_s` | 10 | 15 | 60 | 300 |
+| `max_model_calls` | 3 | 0 | 3 | 60 |
+| `max_model_tokens` | 8 000 | 0 | 16 000 | 250 000 |
 
-До маршрутизации действует бюджет `direct` (роутеру хватает одного вызова модели); после решения роутера
-задача получает бюджет своего маршрута, а уже израсходованное переносится.
+Семантика:
 
-Значения — стартовые, задаются в конфиге и уточняются по eval. Runner проверяет бюджет **перед каждым
-тактом**; превышение — переход в BUDGET_EXCEEDED с событием `budget.exceeded {limit, value}` и частичным
-итогом (что успели сделать). Детектор зацикливания (повтор одного вызова с теми же аргументами без
-изменения результата, осцилляция A → B → A → B, три одинаковые ошибки подряд) переводит задачу в
-REPLANNING, а повторное срабатывание — в FAILED.
+- **Маршрутизация** расходует собственный лимит `routing` (вызов роутера плюс до двух ремонтов ответа);
+  после решения роутера действует бюджет маршрута. В метриках учитывается всё.
+- **Лимиты — включительные максимумы:** новый шаг не начинается, если `usage.steps == max_steps`;
+  вызов модели не делается, если `usage.model_calls == max_model_calls`, и так далее. Токены известны
+  только после вызова, поэтому новый вызов не делается, если `usage.model_tokens ≥ max_model_tokens`.
+  Сбои считаются по факту: задача переходит в BUDGET_EXCEEDED, когда `usage.failures` становится
+  больше `max_failures`.
+- **Что считается:** `model_calls` — каждая попытка, включая ремонт ответа и повтор; `tool_calls` — каждое
+  исполнение и симуляция (отказ политики не считается); `failures` — итоговые сбои после ремонтов и
+  повторов, включая отказы политики.
+- **Время** — активное, без ожидания подтверждения. Оно проверяется перед тактом и ограничивает сам такт
+  (`asyncio.timeout` на остаток): долгий вызов прерывается, а не дожидается конца.
+
+Значения — стартовые, задаются в конфиге и уточняются по eval. Превышение — переход в BUDGET_EXCEEDED с
+событием `budget.exceeded {limit, value}` и частичным итогом (что успели сделать). Детектор зацикливания
+(повтор одного вызова с теми же аргументами без изменения результата, осцилляция A → B → A → B, три
+одинаковые ошибки подряд) переводит задачу в REPLANNING, а повторное срабатывание — в FAILED.

@@ -39,14 +39,25 @@ CREATE TABLE tasks (
   state_json     TEXT NOT NULL,             -- AgentState: рабочая память
   budget_json    TEXT NOT NULL,
   usage_json     TEXT NOT NULL,
-  counters_json  TEXT NOT NULL,
   tainted        INTEGER NOT NULL DEFAULT 0,
   outcome_json   TEXT,
-  cancel_requested INTEGER NOT NULL DEFAULT 0,
   created_at     TEXT NOT NULL,
   updated_at     TEXT NOT NULL
 );
 CREATE INDEX tasks_status ON tasks(status);
+
+CREATE TABLE id_counters (                  -- IdAllocator: пишется сразу, вне контрольной точки
+  scope TEXT NOT NULL,                      -- "task" или ID задачи
+  kind  TEXT NOT NULL,                      -- task | plan | step | mc | call | art | appr | ev
+  last  INTEGER NOT NULL,
+  PRIMARY KEY (scope, kind)
+);
+
+CREATE TABLE task_leases (                  -- кто сейчас ведёт задачу
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+  owner TEXT NOT NULL,                      -- pid + случайный токен процесса
+  expires_at TEXT NOT NULL
+);
 
 CREATE TABLE plans (
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
@@ -86,7 +97,7 @@ CREATE TABLE artifacts (
 CREATE TABLE model_calls (
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
   role TEXT NOT NULL, model_id TEXT NOT NULL, profile_hash TEXT NOT NULL,
-  template_id TEXT NOT NULL, prompt_sha256 TEXT NOT NULL,
+  template_id TEXT NOT NULL, prompt_sha256 TEXT NOT NULL,   -- хэш нормализованного промпта (§4)
   prompt_blob TEXT,                         -- ссылка на сжатый промпт (можно отключить)
   response_text TEXT NOT NULL,              -- нужен для replay
   parsed_ok INTEGER NOT NULL, attempt INTEGER NOT NULL,
@@ -110,21 +121,21 @@ CREATE TABLE audit_log (
   origin TEXT NOT NULL, mode TEXT NOT NULL,
   action TEXT NOT NULL,                     -- policy_decision | tool_result | approval_resolved
   tool_id TEXT, arguments_json TEXT, risk TEXT, decision TEXT, rules_json TEXT,
-  approval_id TEXT, result_status TEXT,
-  prev_hash TEXT NOT NULL, hash TEXT NOT NULL
+  approval_id TEXT, result_status TEXT
 );
 ```
 
 Принципы:
 
 - Доступ только через порты (`UnitOfWork` и репозитории); SQL живёт в `adapters.sqlite`.
-- `tasks.version` + `save(expected_version)` защищают от двух процессов, продолжающих одну задачу.
+- Аренда (`task_leases`) не даёт двум процессам вести одну задачу; `tasks.version` +
+  `save(expected_version)` — вторая линия защиты. Аренда лежит в отдельной таблице, поэтому её продление
+  не меняет `version` задачи.
 - Миграции — пронумерованные SQL-файлы; при старте применяются недостающие, перед этим делается копия БД.
   Тест миграций прогоняет все шаги на пустой и на фикстурной базе.
 - Большие данные — не в БД: артефакты и промпты лежат в blobs по sha256 (сжатые), в БД — ссылки.
 - Реестр проектов — YAML-файлы, а не таблица: источник истины — файлы пользователя.
-- Хранение: задачи, итоги и аудит — бессрочно; события трассы — 90 дней; промпты моделей — 30 дней;
-  артефакты — квота (по умолчанию 2 ГБ, старые удаляются первыми). Очистка — команда `jarvis gc`.
+- В Stage 0 данные не удаляются автоматически; политика хранения появится, когда замеры покажут объём.
 
 ## 2. Трасса
 
@@ -205,7 +216,7 @@ TASK #42  «Посмотри, почему backend GOFRA не стартует»
 | `prompt_tokens`, `completion_tokens` | сумма по вызовам |
 | `replans`, `failures` | количество |
 | `ttft_ms_p50`, `tokens_per_s` | по вызовам модели (если сервер отдаёт тайминги) |
-| `success` | терминальный статус COMPLETED и проверка `verified` / `partially_verified` |
+| `success` | по маршруту ([02-domain.md §2](02-domain.md#проверка-и-итог)): agent — COMPLETED с `verified` / `partially_verified`; direct — COMPLETED с `verified`; chat и clarify — COMPLETED |
 
 ## 4. Replay и golden traces
 
@@ -217,10 +228,12 @@ TASK #42  «Посмотри, почему backend GOFRA не стартует»
 | `live` | записанные ответы (или живая модель с флагом `--live-model`) | исполняются заново | `simulate()`; живое исполнение только с `--allow-side-effects`, и то лишь для MEDIUM и ниже, через обычные подтверждения | вычисляется заново |
 
 - Replay создаёт новую задачу с `replay_of` и тем же текстом запроса; нумерация дочерних ID совпадает.
-- `RecordedModelBackend` отдаёт ответы по порядку вызовов в пределах роли и сверяет хэш промпта:
-  несовпадение — **расхождение на шаге N** (отчёт с диффом), а не тихий сбой.
-- `RecordedToolExecutor` отдаёт результаты по (порядок, инструмент, хэш аргументов); вызов, которого
-  не было в записи, — тоже расхождение.
+- `RecordedModelBackend` отдаёт ответы по порядку вызовов в пределах роли и сверяет хэш
+  **нормализованного** промпта: ID задачи заменяются на `task_N`, отметки времени убираются. Несовпадение
+  — **расхождение на шаге N** (отчёт с диффом), а не тихий сбой.
+- Записанный исполнитель инструментов — реализация `ToolInvoker` в `app/replay.py`
+  ([03-contracts.md §5](03-contracts.md#5-компоненты-ядра)): отдаёт результаты по (порядок, инструмент,
+  хэш аргументов); вызов, которого не было в записи, — тоже расхождение.
 - Повторное вычисление политики на записанных вызовах ловит регрессии политики: «раньше спрашивало
   подтверждение, теперь — нет».
 - HIGH и CRITICAL в live replay не исполняются никогда.

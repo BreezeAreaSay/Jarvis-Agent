@@ -5,7 +5,7 @@ execute и verify — полями. Счётчики показывают, чт�
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, JsonValue
@@ -45,6 +45,11 @@ class FakeTool:
     verified: bool = True
     hang: bool = False  # execute не завершается сам
     drift_after: int | None = None  # preview после N-го видит другой ресурс (файл подменили)
+    hang_preview_after: int | None = None  # preview после N-го не завершается сам
+    on_preview: Callable[[int], None] | None = None  # вмешательство посреди вызова (номер preview)
+    bad_normalized: bool = False  # preview возвращает аргументы не по схеме
+    verify_hang: bool = False
+    verifying: asyncio.Event = field(default_factory=asyncio.Event)
     previews: int = 0
     executions: list[FakeArgs] = field(default_factory=list[FakeArgs])
     started: asyncio.Event = field(default_factory=asyncio.Event)
@@ -65,14 +70,22 @@ class FakeTool:
     async def preview(self, arguments: BaseModel, context: ToolContext) -> ToolPreview:
         assert isinstance(arguments, FakeArgs)
         self.previews += 1
+        if self.on_preview is not None:
+            self.on_preview(self.previews)
         if self.preview_error is not None:
             raise self.preview_error
+        if self.hang_preview_after is not None and self.previews > self.hang_preview_after:
+            self.started.set()
+            await asyncio.Event().wait()
         drifted = self.drift_after is not None and self.previews > self.drift_after
         suffix = f"#{self.previews}" if drifted else ""
         normalized = arguments.model_copy(update={"path": arguments.path.rstrip("/") or "/"})
         return ToolPreview(
             summary=f"{self.tool_id} {normalized.path}",
-            normalized_arguments=normalized.model_dump(mode="json"),
+            normalized_arguments={
+                **normalized.model_dump(mode="json"),
+                **({"x": 1} if self.bad_normalized else {}),
+            },
             effects=[
                 ToolEffect(kind=kind, resource=template.format(path=normalized.path + suffix))
                 for kind, template in self.effects
@@ -91,6 +104,9 @@ class FakeTool:
         return _Raw.model_validate(self.output)
 
     async def verify(self, arguments: BaseModel, output: BaseModel, context: ToolContext) -> ToolVerification:
+        self.verifying.set()
+        if self.verify_hang:
+            await asyncio.Event().wait()
         if self.verify_error is not None:
             raise self.verify_error
         return ToolVerification(passed=self.verified, checks=["значение получено"])

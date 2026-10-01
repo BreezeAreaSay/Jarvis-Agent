@@ -18,7 +18,8 @@ tools_app = typer.Typer(invoke_without_command=True, help="Инструмент�
 
 def _definitions() -> list[ToolDefinition]:
     loaded = load_or_exit()
-    return build_app(loaded.config, stages={}, home=loaded.home).tools.definitions()
+    app = build_app(loaded.config, stages={}, home=loaded.home, config_file=loaded.config_path)
+    return app.tools.definitions()
 
 
 @tools_app.callback()

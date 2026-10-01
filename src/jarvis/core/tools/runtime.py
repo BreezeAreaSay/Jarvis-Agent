@@ -12,6 +12,7 @@
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -21,7 +22,9 @@ from typing import Literal
 
 from pydantic import BaseModel, JsonValue, ValidationError
 
+from jarvis.core.approvals import RUNTIME_CHANNEL
 from jarvis.core.budget import BudgetMeter
+from jarvis.core.leases import Holder, Leases
 from jarvis.core.policy import PolicyEngine
 from jarvis.core.tools.registry import ToolRegistry
 from jarvis.core.trace import Tracer, shorten
@@ -39,6 +42,7 @@ from jarvis.domain.errors import (
     ApprovalRequired,
     InvalidToolArguments,
     JarvisError,
+    LeaseLost,
     ToolCancelled,
     ToolDenied,
     ToolError,
@@ -49,6 +53,7 @@ from jarvis.domain.errors import (
     UnsupportedTarget,
 )
 from jarvis.domain.ids import TaskId
+from jarvis.domain.states import ACTIVE_STATUSES
 from jarvis.domain.task import Task
 from jarvis.domain.tools import (
     ExecutionTarget,
@@ -66,7 +71,7 @@ from jarvis.domain.tools import (
 )
 from jarvis.domain.trace import EventKind, TraceEvent
 from jarvis.ports.clock import Clock
-from jarvis.ports.storage import UnitOfWorkFactory
+from jarvis.ports.storage import UnitOfWork, UnitOfWorkFactory
 from jarvis.ports.tools import Tool, ToolContext
 
 _log = logging.getLogger(__name__)
@@ -87,9 +92,11 @@ class ToolRuntime:
         clock: Clock,
         target: ExecutionTarget,
         approval_ttl_s: float,
+        leases: Leases,
         protected_roots: Sequence[str] = (),
     ) -> None:
         self._registry = registry
+        self._leases = leases
         self._policy = policy
         self._uow = uow
         self._tracer = tracer
@@ -122,7 +129,8 @@ class ToolRuntime:
         """Решённый, но ещё не применённый запрос подтверждения: его вызов нужно довести."""
         with self._uow() as uow:
             approvals = uow.approvals.for_task(task_id)
-        return next((item for item in approvals if item.status in RESOLVED), None)
+        resolved = [item for item in approvals if item.status in RESOLVED]
+        return resolved[-1] if resolved else None
 
     async def resume(self, task: Task, budget: BudgetMeter) -> ToolOutcome | None:
         """Довести вызов, по которому человек уже решил (после выхода из WAITING_CONFIRMATION)."""
@@ -134,6 +142,10 @@ class ToolRuntime:
     async def _run(
         self, task: Task, budget: BudgetMeter, call: ToolCall, *, approval: ApprovalRequest | None
     ) -> ToolOutcome:
+        # Задача из хранилища, а не из рук стадии: режим dry run и рабочая папка — настоящие, и
+        # вызывать инструменты может только прогон, который всё ещё ведёт задачу.
+        with self._uow() as uow:
+            task = self._owned(uow, task)
         tool = self._registry.get(call.tool_id)
         definition = tool.definition
         if call.target.kind not in definition.targets or call.target != self._target:
@@ -141,7 +153,10 @@ class ToolRuntime:
                 f"{definition.id}: цель {call.target.kind} не поддерживается", tool_id=definition.id
             )
         if approval is not None and approval.status is not ApprovalStatus.APPROVED:
-            return self._refused(task, approval)
+            return self._refused(task, approval, approval.status)
+        if approval is not None and self._clock.now() >= approval.expires_at:
+            # Одобрение действует до срока запроса: вызов, одобренный давно, без человека не исполняется.
+            return self._refused(task, approval, ApprovalStatus.EXPIRED)
         arguments = _validate(definition.input_model, call.arguments, definition.id)
         context = ToolContext(
             target=call.target,
@@ -202,13 +217,10 @@ class ToolRuntime:
                         f"{definition.id}: затронутое изменилось между проверкой и исполнением",
                         tool_id=definition.id,
                     )
-        except Exception:
-            # Разрешённый вызов не исполнен: у решения в аудите должен быть итог.
-            self._journal(
-                task.id,
-                [],
-                self._audit(AuditAction.RESULT, task, call, preview, decision, execution="not_executed"),
-            )
+        except BaseException as exc:
+            # Разрешённый вызов не исполнен (в том числе отменён): у решения в аудите должен быть итог.
+            record = self._audit(AuditAction.RESULT, task, call, preview, decision, execution="not_executed")
+            self._record(task.id, [], record, cancelled=isinstance(exc, asyncio.CancelledError))
             raise
         if task.request.dry_run:
             self._journal(
@@ -224,10 +236,10 @@ class ToolRuntime:
                 would_execute=True,
             )
         # Исполняется ровно то, что видели политика и человек: нормализованные аргументы preview.
-        normalized = _validate(definition.input_model, preview.normalized_arguments, definition.id)
+        normalized = definition.input_model.model_validate(preview.normalized_arguments)
         return await self._execute(task, tool, call, normalized, context, preview, decision)
 
-    def _refused(self, task: Task, approval: ApprovalRequest) -> ToolOutcome:
+    def _refused(self, task: Task, approval: ApprovalRequest, status: ApprovalStatus) -> ToolOutcome:
         """Человек отказал или срок вышел: стадия получает отказ. Preview не повторяется — исход
         строится из того, что видел человек, и не зависит от того, что стало с ресурсом."""
         preview = ToolPreview(
@@ -236,12 +248,8 @@ class ToolRuntime:
             effects=approval.effects,
             target=approval.target,
         )
-        reason = (
-            "отказано человеком" if approval.status is ApprovalStatus.DENIED else "срок подтверждения истёк"
-        )
-        decision = PolicyDecision(
-            outcome=PolicyOutcome.DENY, rules=[f"approval.{approval.status}"], reason=reason
-        )
+        reason = "отказано человеком" if status is ApprovalStatus.DENIED else "срок подтверждения истёк"
+        decision = PolicyDecision(outcome=PolicyOutcome.DENY, rules=[f"approval.{status}"], reason=reason)
         self._decided(task, approval.call, preview, decision, approval=approval)
         return ToolOutcome(
             kind=ToolOutcomeKind.DENIED, call=approval.call, preview=preview, decision=decision
@@ -269,6 +277,12 @@ class ToolRuntime:
                 f"{definition.id}: preview объявил эффекты или цель вне определения инструмента",
                 undeclared=[kind.value for kind in sorted(undeclared)],
             )
+        try:  # до политики: исполняться будут именно эти аргументы
+            definition.input_model.model_validate(preview.normalized_arguments)
+        except ValidationError:
+            raise ToolPreviewFailed(
+                f"{definition.id}: нормализованные аргументы preview не прошли схему", tool_id=definition.id
+            ) from None
         if record:
             self._journal(
                 call.task_id,
@@ -302,7 +316,9 @@ class ToolRuntime:
         decision: PolicyDecision,
     ) -> ToolOutcome:
         definition = tool.definition
-        self._journal(task.id, [(EventKind.TOOL_STARTED, {"call_id": call.id, "tool": definition.id})])
+        self._journal(
+            task.id, [(EventKind.TOOL_STARTED, {"call_id": call.id, "tool": definition.id})], fence=task
+        )
         started = time.perf_counter()
         try:
             async with asyncio.timeout(definition.timeout_s):
@@ -333,7 +349,18 @@ class ToolRuntime:
             output=output.model_dump(mode="json"), untrusted_content=definition.untrusted_output
         )
         try:
-            verification = await tool.verify(arguments, output, context)
+            async with asyncio.timeout(definition.timeout_s):
+                verification = await tool.verify(arguments, output, context)
+        except TimeoutError:
+            verification = ToolVerification(
+                passed=False, checks=[f"проверка не уложилась в {definition.timeout_s} с"]
+            )
+        except asyncio.CancelledError:
+            # Вызов уже исполнен: его итог записывается и при отмене посреди проверки.
+            self._finished(
+                task, call, preview, decision, "succeeded", started, result=result, unverified=True
+            )
+            raise
         except Exception as exc:
             verification = ToolVerification(
                 passed=False, checks=[f"проверка упала: {type(exc).__name__}: {exc}"]
@@ -355,6 +382,20 @@ class ToolRuntime:
             verification=verification,
             duration_ms=round((time.perf_counter() - started) * 1000),
         )
+
+    def _owned(self, uow: UnitOfWork, task: Task) -> Task:
+        """Задача в хранилище та же, что у стадии, активна, и её аренда — живая аренда этого процесса.
+        Иначе её уже ведёт кто-то другой (или её восстановили как прерванную): LeaseLost."""
+        stored = uow.tasks.get(task.id)
+        lease = uow.leases.get(task.id)
+        live = lease is not None and lease.is_live(self._clock.now())
+        owned = self._leases.holder(lease) is Holder.MINE and live
+        if stored.version != task.version or stored.status not in ACTIVE_STATUSES or not owned:
+            raise LeaseLost(
+                f"задачу {task.id} больше не ведёт этот прогон ({stored.status}): вызов не исполняется",
+                task_id=task.id,
+            )
+        return stored
 
     def _decided(
         self,
@@ -387,7 +428,7 @@ class ToolRuntime:
             approval=approval,
             execution="not_executed" if decision.outcome is PolicyOutcome.DENY else None,
         )
-        self._journal(task.id, [(EventKind.POLICY_DECIDED, payload)], record, used=approval)
+        self._journal(task.id, [(EventKind.POLICY_DECIDED, payload)], record, used=approval, fence=task)
 
     def _request_approval(self, task: Task, call: ToolCall, preview: ToolPreview) -> ApprovalRequest:
         now = self._clock.now()
@@ -413,7 +454,7 @@ class ToolRuntime:
                 "expires_at": approval.expires_at.isoformat(),
             },
         )
-        self._journal(task.id, [event], new_approval=approval)
+        self._journal(task.id, [event], new_approval=approval, withdraw_older=True)
         return approval
 
     def _finished(
@@ -428,7 +469,9 @@ class ToolRuntime:
         result: ToolResult | None = None,
         verification: ToolVerification | None = None,
         error: JarvisError | None = None,
+        unverified: bool = False,
     ) -> None:
+        """Итог исполнения — в трассу и аудит. `unverified` — отмена пришла во время проверки."""
         finished: dict[str, JsonValue] = {
             "call_id": call.id,
             "tool": call.tool_id,
@@ -436,10 +479,13 @@ class ToolRuntime:
             "duration_ms": round((time.perf_counter() - started) * 1000),
         }
         if result is not None:
-            encoded = json.dumps(result.output, ensure_ascii=False)
-            finished["output_bytes"] = len(encoded.encode("utf-8"))
+            encoded = json.dumps(result.output, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            finished["output_bytes"] = len(encoded)
+            finished["output_sha256"] = hashlib.sha256(encoded).hexdigest()
             finished["untrusted"] = result.untrusted_content
-            if len(encoded.encode("utf-8")) <= TRACE_OUTPUT_BYTES:
+            # Прочитанное из зоны секретов в трассу не попадает ни при каком размере.
+            secret = any(rule.startswith("zone.secrets") for rule in decision.rules)
+            if len(encoded) <= TRACE_OUTPUT_BYTES and not secret:
                 finished["output"] = result.output
         if error is not None:
             finished["error"] = {"category": error.category, "message": shorten(error.message, 300)}
@@ -459,15 +505,25 @@ class ToolRuntime:
             preview,
             decision,
             execution=status,
-            verification=None if verification is None else ("passed" if verification.passed else "failed"),
+            verification="cancelled" if unverified else _verdict(verification),
         )
+        self._record(task.id, events, record, cancelled=status == "cancelled" or unverified)
+
+    def _record(
+        self,
+        task_id: TaskId,
+        events: Sequence[tuple[EventKind, dict[str, JsonValue]]],
+        audit: AuditRecord,
+        *,
+        cancelled: bool,
+    ) -> None:
+        """Итог вызова. При отмене запись — по возможности: вызывающий должен получить CancelledError."""
         try:
-            self._journal(task.id, events, record)
+            self._journal(task_id, events, audit)
         except Exception:
-            if status != "cancelled":
+            if not cancelled:
                 raise
-            # Отмена важнее записи итога: вызывающий должен получить CancelledError.
-            _log.warning("не удалось записать отмену вызова %s", call.id, exc_info=True)
+            _log.warning("не удалось записать итог отменённого вызова (задача %s)", task_id, exc_info=True)
 
     def _audit(
         self,
@@ -501,10 +557,28 @@ class ToolRuntime:
         *,
         used: ApprovalRequest | None = None,
         new_approval: ApprovalRequest | None = None,
+        withdraw_older: bool = False,
+        fence: Task | None = None,
     ) -> list[TraceEvent]:
-        """Журнальная запись: события, аудит и изменения подтверждения — одной транзакцией, сразу."""
+        """Журнальная запись: события, аудит и изменения подтверждения — одной транзакцией, сразу.
+        `fence` — запись допуска к действию (решение, начало исполнения): она проходит, только пока
+        этот прогон ведёт задачу."""
         built = [self._tracer.event(task_id, kind, payload) for kind, payload in events]
         with self._uow() as uow:
+            if fence is not None:
+                self._owned(uow, fence)
+            if withdraw_older:
+                # Живым остаётся только новый запрос: старое решение не исполнится вместо нового.
+                for older in uow.approvals.for_task(task_id):
+                    if older.status is ApprovalStatus.PENDING or older.status in RESOLVED:
+                        withdrawn = older.model_copy(
+                            update={
+                                "status": ApprovalStatus.WITHDRAWN,
+                                "resolved_at": self._clock.now(),
+                                "resolved_via": RUNTIME_CHANNEL,
+                            }
+                        )
+                        uow.approvals.save(withdrawn, expected=older.status)
             if built:
                 uow.trace.append(built)
             if audit is not None:
@@ -518,6 +592,12 @@ class ToolRuntime:
                 )
             uow.commit()
         return built
+
+
+def _verdict(verification: ToolVerification | None) -> str | None:
+    if verification is None:
+        return None
+    return "passed" if verification.passed else "failed"
 
 
 def _validate[M: BaseModel](model: type[M], data: object, tool_id: str, *, output: bool = False) -> M:

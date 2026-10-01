@@ -33,12 +33,32 @@ Storage = InMemoryStorage | SqliteStorage
 Stages = Mapping[TaskStatus, StageHandler]
 StagesFactory = Callable[[ToolRuntime], Stages]
 
-# Папки в домашнем каталоге, где обычно лежат ключи и токены: чтение — с подтверждением, запись — запрет.
-SECRET_DIRS = (".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".password-store", ".config/gcloud")
-# Имена файлов с секретами, где бы они ни лежали.
+# Папки в домашнем каталоге, где лежат ключи, токены, пароли и история команд: чтение — с
+# подтверждением, запись — запрет. Пути Windows (AppData) и Linux/macOS — вместе: лишние не мешают.
+SECRET_DIRS = (
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".azure",
+    ".kube",
+    ".docker",
+    ".password-store",
+    ".config/gcloud",
+    ".config/gh",
+    "AppData/Roaming/gcloud",
+    "AppData/Roaming/GitHub CLI",
+    "AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine",  # история PowerShell
+    "AppData/Local/Google/Chrome/User Data",
+    "AppData/Local/Microsoft/Edge/User Data",
+    "AppData/Roaming/Mozilla/Firefox/Profiles",
+    ".mozilla",
+    ".config/google-chrome",
+)
+# Имена файлов с секретами, где бы они ни лежали (без учёта регистра на Windows).
 SECRET_NAMES = (
     "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", "*.pem", "*.key", "*.p12", "*.pfx", "*.kdbx",
     ".env", ".env.*", ".netrc", "_netrc", ".pgpass", ".git-credentials", "credentials", "credentials.*",
+    ".npmrc", ".pypirc", "*_history", "ConsoleHost_history.txt",
 )  # fmt: skip
 
 
@@ -63,12 +83,20 @@ def process_owner() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
 
 
-def host_zones(config: JarvisConfig, *, home: Path | None, user_home: Path | None = None) -> PolicyZones:
-    """Зоны политики этого компьютера: канонические пути, как их увидит preview инструмента."""
+def host_zones(
+    config: JarvisConfig,
+    *,
+    home: Path | None,
+    user_home: Path | None = None,
+    config_file: Path | None = None,
+) -> PolicyZones:
+    """Зоны политики этого компьютера: канонические пути, как их увидит preview инструмента. Файл
+    конфига (в нём рабочие папки политики) — данные Jarvis, даже если он лежит вне JARVIS_HOME."""
     user = user_home if user_home is not None else Path.home()
+    internal = [path for path in (home, config_file) if path is not None]
     return PolicyZones(
         os_family=OS_FAMILY,
-        internal=(_canonical(home),) if home is not None else (),
+        internal=tuple(_canonical(path) for path in internal),
         secrets=tuple(_canonical(user / folder) for folder in SECRET_DIRS),
         secret_names=SECRET_NAMES,
         workspaces=tuple(_canonical(Path(root).expanduser()) for root in config.policy.workspace_roots),
@@ -90,14 +118,16 @@ def build_app(
     extra_tools: Sequence[Tool] = (),
     zones: PolicyZones | None = None,
     home: Path | None = None,
+    config_file: Path | None = None,
 ) -> App:
     """`home` — JARVIS_HOME: его данные недоступны инструментам. `tools` по умолчанию — встроенные;
     `extra_tools` добавляются к ним (инструменты eval)."""
     storage = storage if storage is not None else InMemoryStorage()
     clock = clock if clock is not None else SystemClock()
     owner = owner if owner is not None else process_owner()
-    zones = zones if zones is not None else host_zones(config, home=home)
+    zones = zones if zones is not None else host_zones(config, home=home, config_file=config_file)
     tracer = Tracer(storage.ids, clock)
+    leases = Leases(uow=storage.unit_of_work, clock=clock, owner=owner, ttl_s=config.runtime.lease_ttl_s)
     runtime = ToolRuntime(
         registry=ToolRegistry([*(builtin_tools() if tools is None else tools), *extra_tools]),
         policy=PolicyEngine(zones),
@@ -106,9 +136,9 @@ def build_app(
         clock=clock,
         target=HOST,
         approval_ttl_s=config.policy.approval_ttl_s,
+        leases=leases,
         protected_roots=(*zones.internal, *zones.secrets),
     )
-    leases = Leases(uow=storage.unit_of_work, clock=clock, owner=owner, ttl_s=config.runtime.lease_ttl_s)
     runner = TaskRunner(
         stages=stages(runtime) if callable(stages) else stages,
         uow=storage.unit_of_work,

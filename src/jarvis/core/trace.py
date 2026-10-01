@@ -42,7 +42,7 @@ class Tracer:
 
 
 # Замеры и живые данные: у повторного прогона они свои, а решения, правила, пути и статусы — те же.
-VOLATILE_KEYS = frozenset({"duration_ms", "expires_at", "output", "output_bytes"})
+VOLATILE_KEYS = frozenset({"duration_ms", "expires_at", "output", "output_bytes", "output_sha256"})
 
 
 def normalize_events(

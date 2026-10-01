@@ -7,6 +7,7 @@
 
 import fnmatch
 import os
+import stat
 import threading
 from typing import Literal
 
@@ -98,7 +99,7 @@ class ListTool:
 
     async def preview(self, arguments: BaseModel, context: ToolContext) -> ToolPreview:
         assert isinstance(arguments, ListArgs)
-        path = str(canonical(arguments.path, context, expect="dir"))
+        path = str(await canonical(arguments.path, context, expect="dir"))
         normalized = arguments.model_copy(update={"path": path}).model_dump(mode="json")
         return _read(path, f"Показать содержимое папки {path}", context, normalized)
 
@@ -112,6 +113,7 @@ class ListTool:
                     found = sorted_entries(list(scan))
             except OSError as exc:
                 raise ToolExecutionFailed(f"папку не прочитать: {root}: {exc.strerror or exc}") from None
+            unchanged(root, expect="dir")  # и после чтения: папку не подменили ссылкой, пока её читали
             entries: list[Entry] = []
             for entry in found[: arguments.max_entries]:
                 if stop.is_set():
@@ -172,7 +174,7 @@ class StatTool:
 
     async def preview(self, arguments: BaseModel, context: ToolContext) -> ToolPreview:
         assert isinstance(arguments, StatArgs)
-        path = str(canonical(arguments.path, context))
+        path = str(await canonical(arguments.path, context))
         normalized = arguments.model_copy(update={"path": path}).model_dump(mode="json")
         return _read(path, f"Узнать сведения о {path}", context, normalized)
 
@@ -240,7 +242,7 @@ class SearchTool:
 
     async def preview(self, arguments: BaseModel, context: ToolContext) -> ToolPreview:
         assert isinstance(arguments, SearchArgs)
-        root = str(canonical(arguments.root, context, expect="dir"))
+        root = str(await canonical(arguments.root, context, expect="dir"))
         normalized = arguments.model_copy(update={"root": root}).model_dump(mode="json")
         summary = f"Найти «{arguments.pattern}» в {root} (глубина до {arguments.max_depth})"
         return _read(root, summary, context, normalized)
@@ -281,6 +283,9 @@ def _search(arguments: SearchArgs, context: ToolContext, stop: threading.Event) 
     stack: list[tuple[str, int]] = [(root, 1)]
     while stack:
         directory, depth = stack.pop()
+        if directory != root and not _still_real(directory):  # проверка прямо перед чтением папки
+            skipped += 1
+            continue
         try:
             with os.scandir(directory) as scan:
                 entries = sorted_entries(list(scan))
@@ -361,7 +366,7 @@ class ReadTextTool:
 
     async def preview(self, arguments: BaseModel, context: ToolContext) -> ToolPreview:
         assert isinstance(arguments, ReadTextArgs)
-        path = str(canonical(arguments.path, context, expect="file"))
+        path = str(await canonical(arguments.path, context, expect="file"))
         normalized = arguments.model_copy(update={"path": path}).model_dump(mode="json")
         return _read(
             path, f"Прочитать текст файла {path} (до {arguments.max_bytes} байт)", context, normalized
@@ -372,12 +377,16 @@ class ReadTextTool:
 
         def work(stop: threading.Event) -> ReadTextOutput:
             path = str(unchanged(arguments.path, expect="file"))
+            # O_NONBLOCK: если файл подменили каналом или устройством, открытие не повиснет навсегда.
             flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            flags |= getattr(os, "O_NONBLOCK", 0)
             try:
                 fd = os.open(path, flags)
             except OSError as exc:
                 raise ToolExecutionFailed(f"файл не открыть: {path}: {exc.strerror or exc}") from None
             with os.fdopen(fd, "rb") as file:
+                if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+                    raise ToolExecutionFailed(f"это не обычный файл: {path}")
                 check_opened(file.fileno(), path)  # открыт ровно проверенный файл, а не подменённый
                 size = os.fstat(file.fileno()).st_size
                 data = file.read(arguments.max_bytes + 1)

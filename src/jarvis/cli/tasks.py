@@ -38,7 +38,9 @@ def opened_app() -> Iterator[App]:
         typer.echo(exc.message, err=True)
         raise typer.Exit(1) from None
     try:
-        app = build_app(loaded.config, stages={}, storage=storage, home=loaded.home)
+        app = build_app(
+            loaded.config, stages={}, storage=storage, home=loaded.home, config_file=loaded.config_path
+        )
         for task_id in app.tasks.recover_interrupted():
             typer.echo(f"{task_id}: процесс, который вёл задачу, завершился — FAILED (interrupted)", err=True)
         yield app

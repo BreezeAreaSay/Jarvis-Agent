@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
+from datetime import timedelta
 
 import pytest
 
@@ -9,6 +10,7 @@ from jarvis.adapters.clock import ManualClock
 from jarvis.adapters.memory import InMemoryStorage
 from jarvis.app.composition import build_app
 from jarvis.core.budget import BudgetMeter
+from jarvis.core.leases import Leases
 from jarvis.core.policy import PolicyEngine, PolicyZones
 from jarvis.core.tools.registry import ToolRegistry
 from jarvis.core.tools.runtime import ToolRuntime
@@ -19,6 +21,7 @@ from jarvis.domain.budget import Budget, BudgetUsage
 from jarvis.domain.errors import (
     BudgetExceeded,
     InvalidToolArguments,
+    LeaseLost,
     ToolExecutionFailed,
     ToolNotFound,
     ToolPreviewFailed,
@@ -26,8 +29,10 @@ from jarvis.domain.errors import (
     ToolVerificationFailed,
     UnsupportedTarget,
 )
-from jarvis.domain.settings import JarvisConfig
-from jarvis.domain.task import Origin, Task, TaskRequest
+from jarvis.domain.lease import Lease
+from jarvis.domain.settings import JarvisConfig, RuntimeSettings
+from jarvis.domain.states import TaskStatus as S
+from jarvis.domain.task import Origin, Task, TaskOutcome, TaskRequest
 from jarvis.domain.tools import (
     EffectKind,
     ExecutionTarget,
@@ -98,9 +103,12 @@ class Harness:
             uow.commit()
 
 
+LONG_LEASE = JarvisConfig(runtime=RuntimeSettings(lease_ttl_s=10**6))  # часы теста идут вперёд на часы
+
+
 def harness(*tools: FakeTool, dry_run: bool = False, budget: Budget = BUDGET) -> Harness:
     storage, clock = InMemoryStorage(), ManualClock()
-    app = build_app(JarvisConfig(), stages={}, storage=storage, clock=clock, owner="A")
+    app = build_app(LONG_LEASE, stages={}, storage=storage, clock=clock, owner="A")
     task_id = app.tasks.submit(TaskRequest(text="t", origin=Origin.EVAL, dry_run=dry_run))
     with storage.unit_of_work() as uow:
         task = uow.tasks.get(task_id)
@@ -112,6 +120,7 @@ def harness(*tools: FakeTool, dry_run: bool = False, budget: Budget = BUDGET) ->
         clock=clock,
         target=HOST,
         approval_ttl_s=TTL_S,
+        leases=Leases(uow=storage.unit_of_work, clock=clock, owner="A", ttl_s=10**6),
     )
     return Harness(storage, clock, runtime, task, BudgetMeter(budget, BudgetUsage()))
 
@@ -483,3 +492,150 @@ async def test_audit_records_hash_arguments_instead_of_storing_them(tool: FakeTo
     for record in h.audit():
         assert "личная заметка" not in record.model_dump_json()
         assert len(record.arguments_hash) == 64
+
+
+# --- по итогам ревью: владение задачей, секреты в трассе, отмена в проверке, сроки ---------------
+
+
+def take_over(h: Harness) -> None:
+    """Другой процесс перехватил задачу: его живая аренда вместо нашей."""
+    with h.storage.unit_of_work() as uow:
+        mine = uow.leases.get(h.task.id)
+        foreign = Lease(task_id=h.task.id, owner="B", expires_at=h.clock.now() + timedelta(hours=1))
+        uow.leases.put(foreign, expected=mine)
+        uow.commit()
+
+
+async def test_a_run_that_lost_the_task_cannot_call_tools(tool: FakeTool) -> None:
+    h = harness(tool)
+    take_over(h)
+    with pytest.raises(LeaseLost):
+        await h.call()
+    assert (tool.previews, tool.executions, h.kinds(), h.audit()) == (0, [], [], [])
+
+
+@pytest.mark.parametrize("finished", [False, True])
+async def test_a_task_changed_by_another_process_cannot_call_tools(tool: FakeTool, finished: bool) -> None:
+    """Задачу восстановили как прерванную (или записал другой прогон), пока стадия работала."""
+    h = harness(tool)
+    with h.storage.unit_of_work() as uow:
+        stored = uow.tasks.get(h.task.id)
+        update: dict[str, object] = {"version": 2, "status": S.ROUTING}
+        if finished:
+            update = {"version": 2, "status": S.FAILED, "outcome": TaskOutcome(status=S.FAILED)}
+        uow.tasks.save(Task.model_validate({**stored.model_dump(), **update}), expected_version=1)
+        uow.commit()
+    with pytest.raises(LeaseLost):
+        await h.call()
+    assert tool.executions == []
+
+
+async def test_losing_the_task_during_preview_stops_before_the_decision() -> None:
+    holder: list[Harness] = []
+    tool = FakeTool("fake.tool", on_preview=lambda n: take_over(holder[0]))
+    h = harness(tool)
+    holder.append(h)
+    with pytest.raises(LeaseLost):
+        await h.call()
+    assert tool.executions == []
+    assert EventKind.POLICY_DECIDED not in h.kinds()
+    assert h.audit() == []
+
+
+async def test_run_mode_comes_from_storage_not_from_the_stage(tool: FakeTool) -> None:
+    h = harness(tool, dry_run=True)
+    forged = h.task.model_copy(update={"request": h.task.request.model_copy(update={"dry_run": False})})
+    outcome = await h.runtime.call(forged, h.meter, "fake.tool", {})
+    assert outcome.kind is ToolOutcomeKind.DRY_RUN
+    assert tool.executions == []
+
+
+async def test_secret_content_never_reaches_the_trace() -> None:
+    tool = FakeTool("fake.tool", effects=SECRET, output={"value": "OPENAI_API_KEY=sk-SECRET"})
+    h = harness(tool)
+    await h.call(path="/home/u/.env")
+    h.resolve(ApprovalStatus.APPROVED)
+    outcome = await h.runtime.resume(h.task, h.meter)
+    assert outcome is not None
+    assert outcome.result is not None  # стадия результат получает
+    [finished] = h.payloads(EventKind.TOOL_FINISHED)
+    assert "output" not in finished
+    assert len(str(finished["output_sha256"])) == 64
+    with h.storage.unit_of_work() as uow:
+        stored = [event.model_dump_json() for event in uow.trace.list(h.task.id)]
+    assert not any("sk-SECRET" in event for event in stored)
+
+
+async def test_cancellation_during_verify_keeps_the_executed_call_on_record() -> None:
+    tool = FakeTool("fake.tool", verify_hang=True)
+    h = harness(tool)
+    running = asyncio.create_task(h.call())
+    await asyncio.wait_for(tool.verifying.wait(), 5)
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert len(tool.executions) == 1
+    [finished] = h.payloads(EventKind.TOOL_FINISHED)
+    assert finished["status"] == "succeeded"
+    assert [(r.action, r.execution_status, r.verification_status) for r in h.audit()][-1] == (
+        AuditAction.RESULT,
+        "succeeded",
+        "cancelled",
+    )
+
+
+async def test_verify_has_a_timeout() -> None:
+    tool = FakeTool("fake.tool", verify_hang=True, timeout_s=0.05)
+    h = harness(tool)
+    with pytest.raises(ToolVerificationFailed, match="не уложилась"):
+        await h.call()
+    assert h.audit()[-1].verification_status == "failed"
+
+
+async def test_cancellation_during_the_recheck_records_that_nothing_ran() -> None:
+    tool = FakeTool("fake.tool", effects=WRITE, hang_preview_after=2)
+    h = harness(tool)
+    await h.call(path="/notes.md")
+    h.resolve(ApprovalStatus.APPROVED)
+    tool.started.clear()
+    running = asyncio.create_task(h.runtime.resume(h.task, h.meter))
+    await asyncio.wait_for(tool.started.wait(), 5)
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert tool.executions == []
+    assert h.audit()[-1].execution_status == "not_executed"
+
+
+async def test_preview_arguments_outside_the_schema_stop_before_policy() -> None:
+    tool = FakeTool("fake.tool", bad_normalized=True)
+    h = harness(tool)
+    with pytest.raises(ToolPreviewFailed, match="нормализованные"):
+        await h.call()
+    assert (tool.executions, h.kinds(), h.audit()) == ([], [], [])
+
+
+async def test_an_approval_is_not_usable_after_its_deadline() -> None:
+    tool = FakeTool("fake.tool", effects=SECRET)
+    h = harness(tool)
+    await h.call(path="/keys/server")
+    h.resolve(ApprovalStatus.APPROVED)
+    h.clock.advance(TTL_S + 1)  # задачу продолжили, когда срок запроса уже вышел
+    outcome = await h.runtime.resume(h.task, h.meter)
+    assert outcome is not None
+    assert (outcome.kind, outcome.decision.rules) == (ToolOutcomeKind.DENIED, ["approval.expired"])
+    assert tool.executions == []
+    assert [approval.status for approval in h.approvals()] == [ApprovalStatus.USED]
+
+
+async def test_a_new_request_withdraws_older_unapplied_ones() -> None:
+    tool = FakeTool("fake.tool", effects=SECRET)
+    h = harness(tool)
+    await h.call(path="/keys/a")
+    h.resolve(ApprovalStatus.APPROVED)  # решение есть, но стадия его не применила
+    await h.call(path="/keys/b")
+    assert [approval.status for approval in h.approvals()] == [
+        ApprovalStatus.WITHDRAWN,
+        ApprovalStatus.PENDING,
+    ]
+    assert await h.runtime.resume(h.task, h.meter) is None  # старое одобрение не исполнится

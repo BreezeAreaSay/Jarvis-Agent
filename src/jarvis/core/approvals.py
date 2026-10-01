@@ -27,7 +27,7 @@ from jarvis.domain.audit import (
     resources,
     target_label,
 )
-from jarvis.domain.errors import ApprovalClosed
+from jarvis.domain.errors import ApprovalClosed, ConcurrentModification
 from jarvis.domain.ids import TaskId
 from jarvis.domain.states import TaskStatus, is_terminal
 from jarvis.domain.trace import EventKind
@@ -148,11 +148,19 @@ class Approvals:
             channel = via
         resolved = approval.model_copy(update={"status": status, "resolved_at": now, "resolved_via": channel})
         kind, payload = resolved_event(resolved)
-        with self._uow() as uow:
-            uow.approvals.save(resolved, expected=ApprovalStatus.PENDING)
-            uow.trace.append([self._tracer.event(task.id, kind, payload)])
-            uow.audit.append(audit_record(resolved))
-            uow.commit()
+        try:
+            with self._uow() as uow:
+                uow.approvals.save(resolved, expected=ApprovalStatus.PENDING)
+                uow.trace.append([self._tracer.event(task.id, kind, payload)])
+                uow.audit.append(audit_record(resolved))
+                uow.commit()
+        except ConcurrentModification:
+            # Пока человек решал, запрос закрыли: задачу отменили или продолжили по истечении срока.
+            current = self.for_task(task.id)
+            closed = next((item.status for item in current if item.id == approval_id), None)
+            raise ApprovalClosed(
+                f"запрос {approval_id} уже закрыт: {closed}", approval_id=approval_id
+            ) from None
         if expired:
             raise ApprovalClosed(
                 f"срок запроса {approval_id} истёк {shorten(approval.expires_at.isoformat())}",

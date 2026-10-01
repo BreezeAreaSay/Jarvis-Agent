@@ -52,5 +52,5 @@ class CwdTool:
     async def verify(self, arguments: BaseModel, output: BaseModel, context: ToolContext) -> ToolVerification:
         assert isinstance(output, CwdOutput)
         path = Path(output.path)
-        passed = path.is_absolute() and path.is_dir()
+        passed = path.is_absolute() and await in_thread(lambda stop: path.is_dir())
         return ToolVerification(passed=passed, checks=["путь абсолютный и указывает на папку"])

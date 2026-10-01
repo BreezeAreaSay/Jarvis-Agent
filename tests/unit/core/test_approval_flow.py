@@ -1,11 +1,12 @@
 """Подтверждение как состояние задачи: WAITING_CONFIRMATION → решение → продолжение через runner."""
 
 import pytest
+from pydantic import JsonValue
 
 from jarvis.adapters.clock import ManualClock
 from jarvis.adapters.memory import InMemoryStorage
 from jarvis.app.composition import App
-from jarvis.domain.approvals import ApprovalDecision, ApprovalStatus
+from jarvis.domain.approvals import ApprovalDecision, ApprovalRequest, ApprovalStatus
 from jarvis.domain.audit import AuditAction
 from jarvis.domain.errors import ApprovalClosed, ApprovalNotFound
 from jarvis.domain.ids import TaskId
@@ -179,3 +180,26 @@ async def test_stage_may_not_wait_without_a_request() -> None:
     assert snapshot.outcome is not None
     assert snapshot.outcome.error is not None
     assert snapshot.outcome.error.category == "invalid_transition"
+
+
+async def test_a_decision_that_loses_the_race_with_a_cancel_is_reported_as_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import jarvis.core.approvals as approvals
+
+    flow = Flow()
+    approval_id = await flow.wait()
+    original = approvals.resolved_event
+    raced: list[bool] = []
+
+    def cancel_first(approval: ApprovalRequest) -> tuple[EventKind, dict[str, JsonValue]]:
+        if not raced:  # пока человек решал, другой клиент отменил задачу
+            raced.append(True)
+            flow.app.tasks.cancel(flow.task_id, "отмена в другом окне")
+        return original(approval)
+
+    monkeypatch.setattr(approvals, "resolved_event", cancel_first)
+    with pytest.raises(ApprovalClosed, match="withdrawn"):
+        flow.app.tasks.resolve_approval(approval_id, ApprovalDecision.APPROVE, via="cli")
+    assert flow.statuses() == [ApprovalStatus.WITHDRAWN]
+    assert flow.app.tasks.get(flow.task_id).status is S.CANCELLED

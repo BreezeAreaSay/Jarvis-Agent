@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 from jarvis.domain.errors import ToolExecutionFailed, ToolPreviewFailed
-from jarvis.domain.paths import OsFamily, is_within
+from jarvis.domain.paths import OsFamily, is_within, unsupported_form
 from jarvis.domain.tools import ExecutionTarget, TargetKind
 from jarvis.ports.tools import ToolContext
 
@@ -28,15 +28,23 @@ Kind = Literal["file", "dir", "symlink", "other"]
 Expect = Literal["any", "file", "dir"]
 
 
-def canonical(raw: str, context: ToolContext, *, expect: Expect = "any") -> Path:
+async def canonical(raw: str, context: ToolContext, *, expect: Expect = "any") -> Path:
     """Существующий объект по пути из аргументов: относительный путь считается от рабочей папки
-    задачи, `~` раскрывается, ссылки — тоже. Ошибка — ToolPreviewFailed с понятной причиной."""
+    задачи, `~` раскрывается, ссылки — тоже. Ошибка — ToolPreviewFailed с понятной причиной.
+    Разрешение пути — ввод-вывод (сетевой диск может отвечать долго): оно идёт в потоке, и таймаут
+    и отмена вызова продолжают работать."""
+    return await in_thread(lambda stop: _canonical(raw, context, expect))
+
+
+def _canonical(raw: str, context: ToolContext, expect: Expect) -> Path:
     if "\x00" in raw:
         raise ToolPreviewFailed("путь содержит нулевой символ")
+    _check_form(raw)  # до обращения к диску: UNC-путь не должен ждать недоступный сервер
     path = Path(raw).expanduser()
     if not path.is_absolute():
         base = context.working_directory or os.getcwd()
         path = Path(base) / path
+    _check_form(str(path))
     try:
         resolved = path.resolve(strict=True)
     except FileNotFoundError:
@@ -45,8 +53,16 @@ def canonical(raw: str, context: ToolContext, *, expect: Expect = "any") -> Path
         raise ToolPreviewFailed(f"нет доступа к пути: {raw}") from None
     except (OSError, RuntimeError) as exc:  # петля ссылок, слишком длинный путь, сбой устройства
         raise ToolPreviewFailed(f"путь не разрешается: {raw}: {exc}") from None
+    _check_form(str(resolved))  # ссылка или подключённый диск могли привести на сетевой путь
     _check_kind(resolved, raw, expect)
     return resolved
+
+
+def _check_form(path: str) -> None:
+    if unsupported_form(path, OS_FAMILY):
+        raise ToolPreviewFailed(
+            f"форма пути не поддерживается (\\\\?\\…, \\\\.\\…, сетевой путь или поток NTFS): {path}"
+        )
 
 
 def _check_kind(path: Path, raw: str, expect: Expect) -> None:
@@ -63,7 +79,7 @@ def unchanged(path: str, *, expect: Expect = "any") -> Path:
         resolved = Path(path).resolve(strict=True)
     except (OSError, RuntimeError):
         raise ToolExecutionFailed(f"путь исчез или стал недоступен после проверки: {path}") from None
-    if not same_path(str(resolved), path):
+    if not same_path(str(resolved), path) or unsupported_form(str(resolved), OS_FAMILY):
         raise ToolExecutionFailed(f"путь изменился после проверки (подмена ссылкой?): {path}")
     try:
         _check_kind(resolved, path, expect)

@@ -103,6 +103,12 @@ class SkillProvider(Protocol):                      # см. §4
 
 ## 2. Tool contract
 
+> **Реализовано в Session 3 иначе** ([ADR 0022](../adr/0022-tool-runtime-v1.md)): `ToolDefinition` вместо
+> `ToolSpec` (без `version`, `idempotent`, `exposure`), нормализация — часть `preview`, эффекты вызова —
+> список `ToolEffect(kind, resource)` вместо `SideEffects`, решение — `PolicyEngine` по зонам вместо
+> `evaluate_risk`, `simulate` нет (dry run ничего не исполняет). Эскиз ниже — цель для инструментов с
+> эффектами.
+
 ```python
 class Exposure(StrEnum):
     MODEL = "model"            # может выбрать модель (в своём профиле)

@@ -48,6 +48,10 @@ uv run jarvis --version
 | `jarvis tasks [-s running\|waiting\|finished\|<статус>] [-n N]` | последние задачи: статус, маршрут, время, причина завершения |
 | `jarvis trace <task_id> [--json]` | таймлайн задачи и метрики; `--json` — полная трасса |
 | `jarvis cancel <task_id> [--reason текст]` | отменить задачу, которую не ведёт другой живой процесс |
+| `jarvis tools` | встроенные инструменты: ID, возможные эффекты, краткое описание |
+| `jarvis tools show <id>` | определение инструмента: описание, эффекты, цели, таймаут, схемы аргументов и результата |
+
+Исполнить инструмент из CLI нельзя: вызов возможен только из стадии задачи через Tool Runtime.
 
 Данные Jarvis лежат в `JARVIS_HOME` (по умолчанию `AppData\Local\Jarvis` в профиле пользователя
 на Windows, `~/.local/share/jarvis` на Linux); конфиг — `JARVIS_HOME/config/config.toml` или путь из `JARVIS_CONFIG`.
@@ -63,6 +67,10 @@ max_steps = 15
 
 [runtime]
 lease_ttl_s = 30   # через сколько секунд задача упавшего процесса считается прерванной
+
+[policy]
+workspace_roots = ["C:/projects"]   # где запись допустима с подтверждением (инструментов записи пока нет)
+approval_ttl_s = 1800               # срок запроса подтверждения
 ```
 
 ## Правила кода
@@ -90,3 +98,20 @@ lease_ttl_s = 30   # через сколько секунд задача упа�
 
 Хранилище: `adapters.memory` (тесты, eval) и `adapters.sqlite` (CLI) проходят один набор контрактных
 тестов (`tests/contract`). Аренды и восстановление — [ADR 0021](adr/0021-task-leases-and-optimistic-unit-of-work.md).
+
+## Как устроен Tool Runtime (Session 3)
+
+Стадия вызывает инструмент только через `ToolRuntime.call(task, budget, tool_id, arguments)`:
+реестр → цель → схема аргументов → `preview` (канонические пути, эффекты вызова) → `PolicyEngine`
+(трасса `policy.decided` и аудит — до исполнения) → отказ, запрос подтверждения или dry run → бюджет →
+повторный `preview` перед побочным эффектом → `execute` нормализованных аргументов с таймаутом и
+отменой → схема результата → `verify` → трасса и аудит. Отказ, ожидание подтверждения и dry run —
+значения `ToolOutcome`; сбои — исключения `ToolError`. Вызову, которому нужен человек, стадия отвечает
+переходом в WAITING_CONFIRMATION; `TaskService.resolve_approval` записывает решение, `run_until_blocked`
+продолжает задачу, и стадия доводит тот же вызов (`ToolRuntime.resume`).
+
+Инструменты — `jarvis/adapters/tools` (только чтение). Новый инструмент: модели аргументов и результата
+с `extra="forbid"`, `preview` без побочных эффектов и с каноническими путями, `verify` с проверяемыми
+постусловиями, регистрация в `builtin_tools()`, пример в `tests/contract/test_tool_contract.py`.
+В unit-тестах — `tests/fakes.FakeTool`, в интеграционных — временные папки.
+Решения — [ADR 0022](adr/0022-tool-runtime-v1.md).

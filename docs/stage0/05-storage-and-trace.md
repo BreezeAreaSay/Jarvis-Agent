@@ -56,6 +56,9 @@ CREATE TABLE tool_calls (
 );
 CREATE INDEX tool_calls_task ON tool_calls(task_id);
 
+-- Session 3 (миграция 002): approvals (id, task_id, seq, tool_call_id, status, request_json) и
+-- audit_log (seq, ts, task_id, tool_call_id, action, record_json) — запрос и запись целиком в JSON;
+-- tool_calls пока нет: вызовы описаны событиями трассы и аудитом (ADR 0022).
 CREATE TABLE approvals (
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
   tool_call_id TEXT NOT NULL REFERENCES tool_calls(id),

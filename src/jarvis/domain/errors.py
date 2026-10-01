@@ -80,6 +80,18 @@ class TaskBusy(JarvisError):
     category = "task_busy"
 
 
+class LeaseLost(JarvisError):
+    """Аренду задачи перехватил другой процесс: текущий прогон должен остановиться без записи."""
+
+    category = "lease_lost"
+
+
+class TaskInterrupted(JarvisError):
+    """Процесс, который вёл задачу, завершился посреди работы (сбой, выход, потеря аренды)."""
+
+    category = "interrupted"
+
+
 class InvalidTransition(JarvisError):
     category = "invalid_transition"
 

@@ -1,6 +1,6 @@
 import pytest
 
-from jarvis.domain.ids import CHILD_KINDS, child_id, child_number, task_id
+from jarvis.domain.ids import CHILD_KINDS, TaskId, child_id, child_number, task_id, task_number
 
 
 def test_task_and_child_formats() -> None:
@@ -21,3 +21,9 @@ def test_numbers_must_be_positive() -> None:
         task_id(0)
     with pytest.raises(ValueError, match="положительным"):
         child_id(task_id(1), "ev", 0)
+
+
+def test_task_number() -> None:
+    assert task_number(task_id(42)) == 42
+    with pytest.raises(ValueError, match="ID задачи"):
+        task_number(TaskId("task_42.ev_1"))

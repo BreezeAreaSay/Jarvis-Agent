@@ -47,6 +47,12 @@ ALLOWED_TRANSITIONS: Mapping[TaskStatus, frozenset[TaskStatus]] = {
     for status in TaskStatus
 }
 
+# Активные состояния: задачу кто-то ведёт и держит её аренду (02-domain.md §3). WAITING_CONFIRMATION
+# аренды не держит, терминальные — тоже.
+ACTIVE_STATUSES: frozenset[TaskStatus] = frozenset(
+    {S.CREATED, S.ROUTING, S.PLANNING, S.EXECUTING, S.VERIFYING, S.REPLANNING}
+)
+
 # Эти переходы выполняет только runner: стадия сообщает об отмене и превышении бюджета исключениями
 # TaskCancelled и BudgetExceeded, чтобы в трассе и итоге всегда были причина и событие.
 RUNNER_ONLY_TARGETS: frozenset[TaskStatus] = frozenset({S.CANCELLED, S.BUDGET_EXCEEDED})

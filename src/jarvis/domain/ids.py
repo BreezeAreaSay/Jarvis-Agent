@@ -8,6 +8,7 @@ TaskId = NewType("TaskId", str)
 ChildKind = Literal["plan", "step", "mc", "call", "art", "appr", "ev"]
 CHILD_KINDS: tuple[ChildKind, ...] = get_args(ChildKind)
 
+_TASK_ID = re.compile(r"task_([1-9][0-9]*)")
 _CHILD_ID = re.compile(r"(task_[1-9][0-9]*)\.([a-z]+)_([1-9][0-9]*)")
 
 
@@ -15,6 +16,14 @@ def task_id(number: int) -> TaskId:
     if number < 1:
         raise ValueError(f"номер задачи должен быть положительным: {number}")
     return TaskId(f"task_{number}")
+
+
+def task_number(task: TaskId) -> int:
+    """`task_42` → 42: порядок задач."""
+    match = _TASK_ID.fullmatch(task)
+    if match is None:
+        raise ValueError(f"не ID задачи: {task!r}")
+    return int(match.group(1))
 
 
 def child_id(task: TaskId, kind: ChildKind, number: int) -> str:

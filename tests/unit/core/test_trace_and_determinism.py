@@ -77,19 +77,18 @@ async def test_checkpoint_is_atomic_and_ids_are_not_reused() -> None:
     assert transitions(app, task_id)[0] is S.ROUTING
 
 
-async def test_journal_events_survive_a_failed_checkpoint() -> None:
+async def test_failed_checkpoint_writes_none_of_its_events() -> None:
     storage = InMemoryStorage()
     app, _ = scripted(*agent_prefix(), step(S.EXECUTING, S.VERIFYING, fail=True), storage=storage)
     task_id = app.tasks.submit(request())
-    # После submit успешны ещё четыре записи (ROUTING, PLANNING, EXECUTING и журнальное событие
-    # error); пятая — контрольная точка перехода в FAILED — падает.
-    storage.fail_commit(after=4)
+    # После submit: ROUTING, PLANNING, EXECUTING; четвёртая запись — переход в FAILED с событием error.
+    storage.fail_commit(after=3)
     with pytest.raises(StorageError):
         await app.tasks.run_until_blocked(task_id)
 
     assert app.tasks.get(task_id).status is S.EXECUTING
     kinds = [event.kind for event in app.tasks.trace(task_id)]
-    assert kinds[-1] is EventKind.ERROR  # журнальное событие записано и не откатилось
+    assert EventKind.ERROR not in kinds  # событие, объясняющее переход, пишется вместе с ним
     assert transitions(app, task_id) == [S.ROUTING, S.PLANNING, S.EXECUTING]
 
 

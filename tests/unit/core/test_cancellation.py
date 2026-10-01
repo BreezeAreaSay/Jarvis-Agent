@@ -140,16 +140,19 @@ async def test_cancel_requested_during_shutdown_is_recorded() -> None:
     assert app.tasks.get(task_id).status is S.CANCELLED
 
 
-async def test_run_cancelled_without_a_cancel_request_keeps_the_checkpoint() -> None:
+async def test_run_stopped_mid_tick_marks_the_task_interrupted() -> None:
     hangs = Hangs()
     app = make_app(with_stage(S.EXECUTING, hangs))
     task_id = app.tasks.submit(request())
 
     run = asyncio.create_task(app.tasks.run_until_blocked(task_id))
     await asyncio.wait_for(hangs.started.wait(), timeout=5)
-    run.cancel()
+    run.cancel()  # процесс завершается, отмены задачи никто не просил
     with pytest.raises(asyncio.CancelledError):
         await run
 
     assert hangs.interrupted
-    assert app.tasks.get(task_id).status is S.EXECUTING
+    snapshot = app.tasks.get(task_id)
+    assert snapshot.status is S.FAILED  # что успел сделать прерванный такт, неизвестно
+    assert error_of(snapshot).category == "interrupted"
+    assert transitions(app, task_id)[-2:] == [S.EXECUTING, S.FAILED]

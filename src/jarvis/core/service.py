@@ -1,15 +1,30 @@
 """TaskService — публичный API ядра для CLI, eval и будущих клиентов (03-contracts.md §5)."""
 
+from collections.abc import Collection
+from dataclasses import dataclass
+
+from jarvis.core.leases import Leases
+from jarvis.core.metrics import compute_metrics
 from jarvis.core.runner import TaskRunner
 from jarvis.core.trace import Tracer, shorten
 from jarvis.domain.budget import BudgetUsage
 from jarvis.domain.ids import TaskId
+from jarvis.domain.metrics import TaskMetrics
 from jarvis.domain.settings import BudgetsSettings
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Task, TaskRequest, TaskSnapshot
 from jarvis.domain.trace import EventKind, TraceEvent
 from jarvis.ports.clock import Clock
 from jarvis.ports.storage import IdAllocator, UnitOfWorkFactory
+
+
+@dataclass(frozen=True)
+class TaskInspection:
+    """Задача и её трасса из одного согласованного снимка хранилища."""
+
+    task: TaskSnapshot
+    events: list[TraceEvent]
+    metrics: TaskMetrics
 
 
 class TaskService:
@@ -22,6 +37,7 @@ class TaskService:
         tracer: Tracer,
         budgets: BudgetsSettings,
         clock: Clock,
+        leases: Leases,
     ) -> None:
         self._runner = runner
         self._uow = uow
@@ -29,9 +45,10 @@ class TaskService:
         self._tracer = tracer
         self._budgets = budgets
         self._clock = clock
+        self._leases = leases
 
     def submit(self, request: TaskRequest) -> TaskId:
-        """Создаёт задачу в CREATED; продвигает её `run_until_blocked`."""
+        """Создаёт задачу в CREATED вместе с арендой этого процесса; продвигает её `run_until_blocked`."""
         task_id = self._ids.next_task_id()
         now = self._clock.now()
         task = Task(
@@ -52,6 +69,7 @@ class TaskService:
         with self._uow() as uow:
             uow.tasks.add(task)
             uow.trace.append([created])
+            uow.leases.put(self._leases.fresh(task_id), expected=None)
             uow.commit()
         return task_id
 
@@ -62,11 +80,26 @@ class TaskService:
     def cancel(self, task_id: TaskId, reason: str) -> None:
         self._runner.cancel(task_id, reason)
 
+    def recover_interrupted(self) -> list[TaskId]:
+        """Задачи, чей процесс завершился посреди работы, → FAILED (`interrupted`)."""
+        return self._runner.recover_interrupted()
+
     def get(self, task_id: TaskId) -> TaskSnapshot:
         with self._uow() as uow:
             return TaskSnapshot.of(uow.tasks.get(task_id))
 
-    def trace(self, task_id: TaskId) -> list[TraceEvent]:
+    def list_tasks(
+        self, *, statuses: Collection[TaskStatus] | None = None, limit: int | None = None
+    ) -> list[TaskSnapshot]:
+        """Новые задачи первыми."""
         with self._uow() as uow:
-            uow.tasks.get(task_id)  # TaskNotFound для несуществующей задачи
-            return uow.trace.list(task_id)
+            return [TaskSnapshot.of(task) for task in uow.tasks.list(statuses=statuses, limit=limit)]
+
+    def trace(self, task_id: TaskId) -> list[TraceEvent]:
+        return self.inspect(task_id).events
+
+    def inspect(self, task_id: TaskId) -> TaskInspection:
+        with self._uow() as uow:
+            task = uow.tasks.get(task_id)
+            events = uow.trace.list(task_id)
+        return TaskInspection(task=TaskSnapshot.of(task), events=events, metrics=compute_metrics(events))

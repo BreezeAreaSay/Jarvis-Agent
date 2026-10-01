@@ -6,7 +6,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, PositiveFloat
 
 from jarvis.domain.budget import Budget
 from jarvis.domain.task import Route
@@ -65,6 +65,13 @@ class BudgetsSettings(BaseModel, frozen=True, extra="forbid"):
                 return self.routing
 
 
+class RuntimeSettings(BaseModel, frozen=True, extra="forbid"):
+    # Срок аренды задачи. Владелец продлевает её каждую треть срока; задача упавшего процесса
+    # считается прерванной, когда срок истёк.
+    lease_ttl_s: PositiveFloat = 30.0
+
+
 class JarvisConfig(BaseModel, frozen=True, extra="forbid"):
     schema_version: Literal[1] = 1
     budgets: BudgetsSettings = BudgetsSettings()
+    runtime: RuntimeSettings = RuntimeSettings()

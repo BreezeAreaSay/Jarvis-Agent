@@ -1,15 +1,19 @@
-"""Порты хранилища (03-contracts.md §1).
+"""Порты хранилища (03-contracts.md §1, ADR 0021).
 
-Записи бывают двух видов. Журнальные (события трассы) пишутся сразу, своей короткой единицей работы.
-Контрольная точка задачи (строка задачи + событие `task.transition`) пишется одной единицей работы в
-конце такта. ID выдаёт `IdAllocator` — сразу и вне единицы работы, поэтому откат не возвращает номер.
+Единица работы оптимистическая: чтения видят одно согласованное состояние, записи копятся и
+применяются вместе на `commit()`, который заново сверяет ожидания (версию задачи, аренду) и при
+расхождении поднимает `ConcurrentModification`, ничего не записав. Так контрольная точка задачи
+(строка задачи, событие перехода и объясняющие его события) и проверка аренды пишутся одной
+транзакцией. ID выдаёт `IdAllocator` — сразу и вне единицы работы, поэтому откат не возвращает номер.
 """
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from types import TracebackType
 from typing import Protocol, Self
 
 from jarvis.domain.ids import ChildKind, TaskId
+from jarvis.domain.lease import Lease
+from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Task
 from jarvis.domain.trace import TraceEvent
 
@@ -27,6 +31,10 @@ class TaskRepository(Protocol):
         """ConcurrentModification, если сохранённая версия не `expected_version`."""
         ...
 
+    def list(self, *, statuses: Collection[TaskStatus] | None = None, limit: int | None = None) -> list[Task]:
+        """Задачи с нужными статусами, новые первыми (по номеру задачи)."""
+        ...
+
 
 class TraceRepository(Protocol):
     def append(self, events: Sequence[TraceEvent]) -> None: ...
@@ -36,10 +44,25 @@ class TraceRepository(Protocol):
         ...
 
 
+class LeaseRepository(Protocol):
+    """Аренды задач. Запись — сравнение с ожидаемым значением: это и есть защита от гонок."""
+
+    def get(self, task_id: TaskId) -> Lease | None: ...
+
+    def put(self, lease: Lease, *, expected: Lease | None) -> None:
+        """Записать аренду, если сейчас записана `expected` (None — аренды нет)."""
+        ...
+
+    def delete(self, task_id: TaskId, *, expected: Lease) -> None:
+        """Удалить аренду, если сейчас записана `expected`."""
+        ...
+
+
 class UnitOfWork(Protocol):
     """Одна транзакция: всё, что записано через репозитории, применяется вместе на `commit()`.
 
-    Выход из `with` без `commit()` отбрасывает записи.
+    Чтения внутри единицы работы видят её собственные записи. Выход из `with` без `commit()`
+    отбрасывает записи. Единица работы одноразовая.
     """
 
     @property
@@ -47,6 +70,9 @@ class UnitOfWork(Protocol):
 
     @property
     def trace(self) -> TraceRepository: ...
+
+    @property
+    def leases(self) -> LeaseRepository: ...
 
     def __enter__(self) -> Self: ...
 

@@ -1,0 +1,15 @@
+# Отмена посреди вызова: инструмент останавливается, итог вызова и отмена задачи — в трассе.
+id: tool.cancel
+category: tools
+input: "scripted: долгий вызов, который отменяют"
+client: {cancel_on_hang: true}
+script:
+  - {status: ROUTING, next: EXECUTING, route: direct}
+  - status: EXECUTING
+    next: VERIFYING
+    tool: {id: eval.sleep, arguments: {seconds: 30}}
+expect:
+  status: CANCELLED
+  transitions: [ROUTING, EXECUTING, CANCELLED]
+  error_category: task_cancelled
+  tool_events: [tool.previewed, policy.decided, tool.started, tool.finished]

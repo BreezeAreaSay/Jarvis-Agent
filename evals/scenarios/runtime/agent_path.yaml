@@ -1,0 +1,14 @@
+# Полный путь агента: каждый переход из главного сценария, расход бюджета виден в usage.
+id: runtime.agent_path
+category: runtime
+input: "scripted: найди причину и ответь"
+script:
+  - {status: ROUTING, next: PLANNING, route: agent, charge: {model_calls: 1}, reason: "маршрут agent"}
+  - {status: PLANNING, next: EXECUTING, charge: {model_calls: 1}, reason: "план из двух шагов принят"}
+  - {status: EXECUTING, next: EXECUTING, charge: {steps: 1, model_calls: 1, tool_calls: 1}, reason: "шаг 1"}
+  - {status: EXECUTING, next: VERIFYING, charge: {steps: 1, model_calls: 1}, reason: "действие finish"}
+  - {status: VERIFYING, next: COMPLETED, answer: "Причина найдена.", reason: "критерии пройдены"}
+expect:
+  status: COMPLETED
+  transitions: [ROUTING, PLANNING, EXECUTING, VERIFYING, COMPLETED]
+  usage: {steps: 2, tool_calls: 1, model_calls: 3, replans: 0}

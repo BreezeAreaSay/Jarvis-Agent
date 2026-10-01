@@ -1,0 +1,18 @@
+# Перепланирование из EXECUTING (действие replan) и из VERIFYING (критерий провален).
+id: runtime.replan
+category: runtime
+input: "scripted: задача с перепланированием"
+script:
+  - {status: ROUTING, next: PLANNING, route: agent, reason: "маршрут agent"}
+  - {status: PLANNING, next: EXECUTING, reason: "план 1"}
+  - {status: EXECUTING, next: REPLANNING, charge: {steps: 1}, reason: "действие replan"}
+  - {status: REPLANNING, next: EXECUTING, charge: {replans: 1}, reason: "план 2"}
+  - {status: EXECUTING, next: VERIFYING, charge: {steps: 1}, reason: "действие finish"}
+  - {status: VERIFYING, next: REPLANNING, reason: "критерий c1 провален"}
+  - {status: REPLANNING, next: EXECUTING, charge: {replans: 1}, reason: "план 3"}
+  - {status: EXECUTING, next: VERIFYING, charge: {steps: 1}, reason: "действие finish"}
+  - {status: VERIFYING, next: COMPLETED, answer: "Готово.", reason: "критерии пройдены"}
+expect:
+  status: COMPLETED
+  transitions: [ROUTING, PLANNING, EXECUTING, REPLANNING, EXECUTING, VERIFYING, REPLANNING, EXECUTING, VERIFYING, COMPLETED]
+  usage: {steps: 3, replans: 2}

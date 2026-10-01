@@ -1,0 +1,17 @@
+# Лимит шагов: третий шаг не начинается, задача останавливается с BUDGET_EXCEEDED.
+id: runtime.budget_steps
+category: runtime
+input: "scripted: агент не укладывается в шаги"
+budget: {max_steps: 2}
+script:
+  - {status: ROUTING, next: PLANNING, route: agent, reason: "маршрут agent"}
+  - {status: PLANNING, next: EXECUTING, reason: "план принят"}
+  - {status: EXECUTING, next: EXECUTING, charge: {steps: 1}, reason: "шаг 1"}
+  - {status: EXECUTING, next: EXECUTING, charge: {steps: 1}, reason: "шаг 2"}
+  - {status: EXECUTING, next: EXECUTING, charge: {steps: 1}, reason: "шаг 3"}
+expect:
+  status: BUDGET_EXCEEDED
+  transitions: [ROUTING, PLANNING, EXECUTING, BUDGET_EXCEEDED]
+  usage: {steps: 2}
+  error_category: budget_exceeded
+  budget_limit: steps

@@ -1,0 +1,13 @@
+# Таймаут вызова: runtime прерывает инструмент по его timeout_s, задача получает tool_timeout.
+id: tool.timeout
+category: tools
+input: "scripted: вызов, который не укладывается в свой таймаут"
+script:
+  - {status: ROUTING, next: EXECUTING, route: direct}
+  - status: EXECUTING
+    next: VERIFYING
+    tool: {id: eval.sleep, arguments: {seconds: 30}}
+expect:
+  status: FAILED
+  error_category: tool_timeout
+  tool_events: [tool.previewed, policy.decided, tool.started, tool.finished]

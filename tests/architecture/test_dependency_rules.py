@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 
@@ -14,8 +15,14 @@ def test_import_linter_contracts_are_kept() -> None:
     # Отдельный процесс: import-linter перенастраивает logging и выключил бы логгеры остальных тестов.
     program = "from importlinter.cli import lint_imports; raise SystemExit(lint_imports(config_filename=%r))"
     config = str(SRC.parents[1] / "pyproject.toml")
+    # Вывод import-linter — на русском (имена контрактов): канал в UTF-8 и на Windows.
     result = subprocess.run(
-        [sys.executable, "-c", program % config], capture_output=True, text=True, timeout=120, check=False
+        [sys.executable, "-c", program % config],
+        capture_output=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        timeout=120,
+        check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 

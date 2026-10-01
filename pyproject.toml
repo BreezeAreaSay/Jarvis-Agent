@@ -5,6 +5,7 @@ description = "Локальный Agent Runtime для ПК"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "psutil>=5.9",
   "pydantic>=2.8",
   "PyYAML>=6.0",
   "typer>=0.12",
@@ -90,4 +91,5 @@ forbidden_modules = ["jarvis.core", "jarvis.app", "jarvis.config", "jarvis.evals
 [[tool.importlinter.contracts]]
 name = "Адаптеры не зависят друг от друга"
 type = "independence"
-modules = ["jarvis.adapters.memory", "jarvis.adapters.sqlite", "jarvis.adapters.clock"]
+# Инструменты не видят хранилищ: трассу и аудит пишет только Tool Runtime.
+modules = ["jarvis.adapters.memory", "jarvis.adapters.sqlite", "jarvis.adapters.clock", "jarvis.adapters.tools"]

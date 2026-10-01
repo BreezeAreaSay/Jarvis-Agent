@@ -1,34 +1,41 @@
-"""Контракт хранилища. В M2 тот же набор пройдёт SQLite-реализация."""
+"""Контракт хранилища: один набор для InMemory и SQLite — поведение адаптеров не должно расходиться."""
 
-from collections.abc import Callable
-from datetime import UTC, datetime
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
 from jarvis.adapters.memory import InMemoryStorage
+from jarvis.adapters.sqlite import SqliteStorage
 from jarvis.domain.budget import BudgetUsage
-from jarvis.domain.errors import ConcurrentModification, StorageError, TaskNotFound
-from jarvis.domain.ids import TaskId
+from jarvis.domain.errors import ConcurrentModification, Disposition, ErrorInfo, StorageError, TaskNotFound
+from jarvis.domain.ids import TaskId, child_number
+from jarvis.domain.lease import Lease
 from jarvis.domain.settings import BudgetsSettings
 from jarvis.domain.states import TaskStatus
-from jarvis.domain.task import Origin, Task, TaskRequest
+from jarvis.domain.task import Origin, Route, Task, TaskOutcome, TaskRequest
 from jarvis.domain.trace import EventKind, TraceEvent
 
-NOW = datetime(2026, 1, 1, tzinfo=UTC)
+NOW = datetime(2026, 1, 1, 12, 30, 15, 123456, tzinfo=UTC)
 
-STORAGES: list[Callable[[], InMemoryStorage]] = [InMemoryStorage]
+Storage = InMemoryStorage | SqliteStorage
 
 
-@pytest.fixture(params=STORAGES, ids=lambda factory: factory.__name__)
-def storage(request: pytest.FixtureRequest) -> InMemoryStorage:
-    return request.param()
+@pytest.fixture(params=["memory", "sqlite"])
+def storage(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Storage]:
+    if request.param == "memory":
+        yield InMemoryStorage()
+        return
+    with SqliteStorage(tmp_path / "jarvis.db") as sqlite:
+        yield sqlite
 
 
 def new_task(task_id: TaskId) -> Task:
     return Task(
         id=task_id,
         version=1,
-        request=TaskRequest(text="текст", origin=Origin.EVAL),
+        request=TaskRequest(text="текст «с кавычками» и \\ слэшем", origin=Origin.EVAL),
         status=TaskStatus.CREATED,
         budget=BudgetsSettings().routing,
         usage=BudgetUsage(),
@@ -37,15 +44,15 @@ def new_task(task_id: TaskId) -> Task:
     )
 
 
-def new_event(storage: InMemoryStorage, task_id: TaskId) -> TraceEvent:
+def new_event(storage: Storage, task_id: TaskId, **payload: str) -> TraceEvent:
     event_id = storage.ids.next_child_id(task_id, "ev")
     return TraceEvent(
         id=event_id,
         task_id=task_id,
-        seq=int(event_id.rsplit("_", 1)[1]),
+        seq=child_number(event_id),
         ts=NOW,
         kind=EventKind.TASK_CREATED,
-        payload={},
+        payload=dict(payload),
     )
 
 
@@ -53,32 +60,64 @@ def bumped(task: Task, status: TaskStatus) -> Task:
     return task.model_copy(update={"version": task.version + 1, "status": status})
 
 
-def add(storage: InMemoryStorage) -> Task:
+def add(storage: Storage, *, leased: bool = False) -> Task:
     task = new_task(storage.ids.next_task_id())
     with storage.unit_of_work() as uow:
         uow.tasks.add(task)
+        if leased:
+            uow.leases.put(lease_for(task), expected=None)
         uow.commit()
     return task
 
 
-def test_task_round_trip(storage: InMemoryStorage) -> None:
+def lease_for(task: Task, owner: str = "A", seconds: float = 30) -> Lease:
+    return Lease(task_id=task.id, owner=owner, expires_at=NOW + timedelta(seconds=seconds))
+
+
+# --- задачи
+
+
+def test_task_round_trip_keeps_every_field(storage: Storage) -> None:
     task = add(storage)
+    finished = task.model_copy(
+        update={
+            "version": 2,
+            "status": TaskStatus.FAILED,
+            "route": Route.AGENT,
+            "usage": BudgetUsage(steps=3, active_time_s=1.25, model_tokens=900),
+            "outcome": TaskOutcome(
+                status=TaskStatus.FAILED,
+                answer="ответ",
+                error=ErrorInfo(
+                    category="interrupted",
+                    disposition=Disposition.FATAL,
+                    retryable=False,
+                    message="m",
+                    details={"k": 1},
+                ),
+            ),
+            "updated_at": NOW + timedelta(seconds=5),
+        }
+    )
     with storage.unit_of_work() as uow:
-        assert uow.tasks.get(task.id) == task
+        uow.tasks.save(finished, expected_version=1)
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        assert uow.tasks.get(task.id) == finished
 
 
-def test_unknown_task_raises(storage: InMemoryStorage) -> None:
+def test_unknown_task_raises(storage: Storage) -> None:
     with storage.unit_of_work() as uow, pytest.raises(TaskNotFound):
         uow.tasks.get(TaskId("task_99"))
 
 
-def test_duplicate_task_raises(storage: InMemoryStorage) -> None:
+def test_duplicate_task_raises(storage: Storage) -> None:
     task = add(storage)
     with storage.unit_of_work() as uow, pytest.raises(StorageError):
         uow.tasks.add(task)
 
 
-def test_concurrent_adds_of_the_same_task_conflict(storage: InMemoryStorage) -> None:
+def test_concurrent_adds_of_the_same_task_conflict(storage: Storage) -> None:
     task = new_task(storage.ids.next_task_id())
     first, second = storage.unit_of_work(), storage.unit_of_work()
     with first, second:
@@ -89,7 +128,102 @@ def test_concurrent_adds_of_the_same_task_conflict(storage: InMemoryStorage) -> 
             second.commit()
 
 
-def test_duplicate_events_are_rejected(storage: InMemoryStorage) -> None:
+def test_save_checks_expected_version(storage: Storage) -> None:
+    task = add(storage)
+    with storage.unit_of_work() as uow, pytest.raises(ConcurrentModification):
+        uow.tasks.save(bumped(bumped(task, TaskStatus.ROUTING), TaskStatus.PLANNING), expected_version=2)
+    with storage.unit_of_work() as uow, pytest.raises(ValueError, match="новая версия"):
+        uow.tasks.save(task, expected_version=1)
+
+
+def test_concurrent_writer_is_detected_at_commit(storage: Storage) -> None:
+    task = add(storage)
+    first, second = storage.unit_of_work(), storage.unit_of_work()
+    with first, second:
+        first.tasks.save(bumped(task, TaskStatus.ROUTING), expected_version=1)
+        second.tasks.save(bumped(task, TaskStatus.CANCELLED), expected_version=1)
+        first.commit()
+        with pytest.raises(ConcurrentModification):
+            second.commit()
+    with storage.unit_of_work() as uow:
+        assert uow.tasks.get(task.id).status is TaskStatus.ROUTING
+
+
+def test_uncommitted_work_is_discarded(storage: Storage) -> None:
+    task = add(storage)
+    with storage.unit_of_work() as uow:
+        uow.tasks.save(bumped(task, TaskStatus.ROUTING), expected_version=1)
+        uow.trace.append([new_event(storage, task.id)])
+        assert uow.tasks.get(task.id).status is TaskStatus.ROUTING  # своя запись видна до commit
+        assert len(uow.trace.list(task.id)) == 1
+    with storage.unit_of_work() as uow:
+        assert uow.tasks.get(task.id) == task
+        assert uow.trace.list(task.id) == []
+
+
+def test_commit_is_all_or_nothing(storage: Storage) -> None:
+    task = add(storage, leased=True)
+    first, second = storage.unit_of_work(), storage.unit_of_work()
+    with first, second:
+        current = first.leases.get(task.id)
+        assert current is not None
+        first.tasks.save(bumped(task, TaskStatus.ROUTING), expected_version=1)
+        first.trace.append([new_event(storage, task.id)])
+        first.leases.put(lease_for(task, owner="A", seconds=90), expected=current)
+        second.leases.put(lease_for(task, owner="B", seconds=90), expected=current)
+        second.commit()
+        with pytest.raises(ConcurrentModification):
+            first.commit()  # аренда изменилась — не записывается ни задача, ни событие
+    with storage.unit_of_work() as uow:
+        assert uow.tasks.get(task.id) == task
+        assert uow.trace.list(task.id) == []
+
+
+# --- список задач
+
+
+def test_list_is_newest_first_with_filters(storage: Storage) -> None:
+    tasks = [add(storage) for _ in range(4)]
+    with storage.unit_of_work() as uow:
+        uow.tasks.save(bumped(tasks[1], TaskStatus.ROUTING), expected_version=1)
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        assert [task.id for task in uow.tasks.list()] == ["task_4", "task_3", "task_2", "task_1"]
+        assert [task.id for task in uow.tasks.list(limit=2)] == ["task_4", "task_3"]
+        created = uow.tasks.list(statuses={TaskStatus.CREATED})
+        assert [task.id for task in created] == ["task_4", "task_3", "task_1"]
+        assert [task.id for task in uow.tasks.list(statuses={TaskStatus.ROUTING})] == ["task_2"]
+        assert uow.tasks.list(statuses=set()) == []
+
+
+def test_list_sees_own_writes(storage: Storage) -> None:
+    task = add(storage)
+    with storage.unit_of_work() as uow:
+        uow.tasks.save(bumped(task, TaskStatus.ROUTING), expected_version=1)
+        uow.tasks.add(new_task(storage.ids.next_task_id()))
+        assert [item.status for item in uow.tasks.list()] == [TaskStatus.CREATED, TaskStatus.ROUTING]
+        assert [item.id for item in uow.tasks.list(statuses={TaskStatus.ROUTING}, limit=5)] == [task.id]
+
+
+# --- трасса
+
+
+def test_trace_is_ordered_and_filterable(storage: Storage) -> None:
+    task = add(storage)
+    events = [new_event(storage, task.id, text=f"событие {n} «кавычки»") for n in range(3)]
+    with storage.unit_of_work() as uow:
+        uow.trace.append([events[2], events[0]])
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        uow.trace.append([events[1]])
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        assert uow.trace.list(task.id) == events
+        assert uow.trace.list(task.id, after_seq=1) == events[1:]
+        assert uow.trace.list(TaskId("task_99")) == []
+
+
+def test_duplicate_events_are_rejected(storage: Storage) -> None:
     task = add(storage)
     event = new_event(storage, task.id)
     with storage.unit_of_work() as uow, pytest.raises(StorageError):
@@ -109,75 +243,92 @@ def test_duplicate_events_are_rejected(storage: InMemoryStorage) -> None:
             second.commit()
 
 
-def test_save_checks_expected_version(storage: InMemoryStorage) -> None:
+def test_records_of_an_unknown_task_are_rejected(storage: Storage) -> None:
+    ghost = TaskId("task_77")
+    with storage.unit_of_work() as uow:
+        uow.trace.append([new_event(storage, ghost)])
+        with pytest.raises(StorageError):
+            uow.commit()
+    with storage.unit_of_work() as uow:
+        uow.leases.put(Lease(task_id=ghost, owner="A", expires_at=NOW), expected=None)
+        with pytest.raises(StorageError):
+            uow.commit()
+
+
+# --- аренды
+
+
+def test_lease_round_trip_and_compare_and_set(storage: Storage) -> None:
     task = add(storage)
-    with storage.unit_of_work() as uow, pytest.raises(ConcurrentModification):
-        uow.tasks.save(bumped(bumped(task, TaskStatus.ROUTING), TaskStatus.PLANNING), expected_version=2)
-    with storage.unit_of_work() as uow, pytest.raises(ValueError, match="новая версия"):
-        uow.tasks.save(task, expected_version=1)
+    first = lease_for(task)
+    with storage.unit_of_work() as uow:
+        assert uow.leases.get(task.id) is None
+        uow.leases.put(first, expected=None)
+        uow.commit()
+    renewed = lease_for(task, seconds=60)
+    with storage.unit_of_work() as uow:
+        assert uow.leases.get(task.id) == first
+        with pytest.raises(ConcurrentModification):
+            uow.leases.put(renewed, expected=None)  # аренда уже есть
+        uow.leases.put(renewed, expected=first)
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        with pytest.raises(ConcurrentModification):
+            uow.leases.delete(task.id, expected=first)  # устаревшее ожидание
+        uow.leases.delete(task.id, expected=renewed)
+        assert uow.leases.get(task.id) is None
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        assert uow.leases.get(task.id) is None
 
 
-def test_concurrent_writer_is_detected_at_commit(storage: InMemoryStorage) -> None:
+def test_two_owners_racing_for_a_lease(storage: Storage) -> None:
     task = add(storage)
     first, second = storage.unit_of_work(), storage.unit_of_work()
     with first, second:
-        first.tasks.save(bumped(task, TaskStatus.ROUTING), expected_version=1)
-        second.tasks.save(bumped(task, TaskStatus.CANCELLED), expected_version=1)
+        assert first.leases.get(task.id) is None
+        assert second.leases.get(task.id) is None
+        first.leases.put(lease_for(task, owner="A"), expected=None)
+        second.leases.put(lease_for(task, owner="B"), expected=None)
         first.commit()
         with pytest.raises(ConcurrentModification):
             second.commit()
     with storage.unit_of_work() as uow:
-        assert uow.tasks.get(task.id).status is TaskStatus.ROUTING
+        assert uow.leases.get(task.id) == lease_for(task, owner="A")
 
 
-def test_uncommitted_work_is_discarded(storage: InMemoryStorage) -> None:
+def test_stale_delete_loses_to_a_renewal(storage: Storage) -> None:
+    task = add(storage, leased=True)
+    original = lease_for(task)
+    first, second = storage.unit_of_work(), storage.unit_of_work()
+    with first, second:
+        first.leases.put(lease_for(task, seconds=90), expected=original)  # продление
+        second.leases.delete(task.id, expected=original)  # «аренда истекла» — по старым данным
+        first.commit()
+        with pytest.raises(ConcurrentModification):
+            second.commit()
+
+
+# --- снимок и счётчики
+
+
+def test_reads_inside_a_unit_of_work_are_a_consistent_snapshot(storage: Storage) -> None:
     task = add(storage)
-    with storage.unit_of_work() as uow:
-        uow.tasks.save(bumped(task, TaskStatus.ROUTING), expected_version=1)
-        uow.trace.append([new_event(storage, task.id)])
-        assert uow.tasks.get(task.id).status is TaskStatus.ROUTING  # своя запись видна до commit
-    with storage.unit_of_work() as uow:
-        assert uow.tasks.get(task.id) == task
-        assert uow.trace.list(task.id) == []
+    reader = storage.unit_of_work()
+    with reader:
+        assert reader.tasks.get(task.id).version == 1
+        with storage.unit_of_work() as writer:  # контрольная точка: задача + событие перехода
+            writer.tasks.save(bumped(task, TaskStatus.ROUTING), expected_version=1)
+            writer.trace.append([new_event(storage, task.id)])
+            writer.commit()
+        assert reader.trace.list(task.id) == []  # снимок: задача v1 и её события согласованы
+        assert reader.tasks.get(task.id).version == 1
+    with storage.unit_of_work() as fresh:
+        assert fresh.tasks.get(task.id).version == 2
+        assert len(fresh.trace.list(task.id)) == 1
 
 
-def test_failed_commit_writes_nothing(storage: InMemoryStorage) -> None:
-    task = add(storage)
-    storage.fail_commit()
-    with storage.unit_of_work() as uow:
-        uow.tasks.save(bumped(task, TaskStatus.ROUTING), expected_version=1)
-        uow.trace.append([new_event(storage, task.id)])
-        with pytest.raises(StorageError):
-            uow.commit()
-    with storage.unit_of_work() as uow:
-        assert uow.tasks.get(task.id) == task
-        assert uow.trace.list(task.id) == []
-
-
-def test_fault_injection_can_skip_commits(storage: InMemoryStorage) -> None:
-    storage.fail_commit(after=1)
-    add(storage)
-    with pytest.raises(StorageError):
-        add(storage)
-    add(storage)
-
-
-def test_trace_is_ordered_and_filterable(storage: InMemoryStorage) -> None:
-    task = add(storage)
-    events = [new_event(storage, task.id) for _ in range(3)]
-    with storage.unit_of_work() as uow:
-        uow.trace.append([events[2], events[0]])
-        uow.commit()
-    with storage.unit_of_work() as uow:
-        uow.trace.append([events[1]])
-        uow.commit()
-    with storage.unit_of_work() as uow:
-        assert uow.trace.list(task.id) == events
-        assert uow.trace.list(task.id, after_seq=1) == events[1:]
-        assert uow.trace.list(TaskId("task_99")) == []
-
-
-def test_id_allocator_never_reuses_numbers(storage: InMemoryStorage) -> None:
+def test_id_allocator_is_monotonic_and_scoped(storage: Storage) -> None:
     ids = storage.ids
     assert [ids.next_task_id() for _ in range(3)] == ["task_1", "task_2", "task_3"]
     assert ids.next_child_id(TaskId("task_1"), "ev") == "task_1.ev_1"
@@ -185,9 +336,15 @@ def test_id_allocator_never_reuses_numbers(storage: InMemoryStorage) -> None:
     assert ids.next_child_id(TaskId("task_1"), "call") == "task_1.call_1"
     assert ids.next_child_id(TaskId("task_2"), "ev") == "task_2.ev_1"
 
-    storage.fail_commit()
-    with storage.unit_of_work() as uow:
-        uow.trace.append([new_event(storage, TaskId("task_1"))])  # task_1.ev_3
-        with pytest.raises(StorageError):
-            uow.commit()
-    assert ids.next_child_id(TaskId("task_1"), "ev") == "task_1.ev_4"  # откат не вернул номер
+
+def test_ids_are_not_reused_after_a_failed_commit(storage: Storage) -> None:
+    task = add(storage)
+    first, second = storage.unit_of_work(), storage.unit_of_work()
+    with first, second:
+        first.tasks.save(bumped(task, TaskStatus.ROUTING), expected_version=1)
+        second.tasks.save(bumped(task, TaskStatus.CANCELLED), expected_version=1)
+        second.trace.append([new_event(storage, task.id)])  # task_1.ev_1
+        first.commit()
+        with pytest.raises(ConcurrentModification):
+            second.commit()
+    assert storage.ids.next_child_id(task.id, "ev") == f"{task.id}.ev_2"  # откат не вернул номер

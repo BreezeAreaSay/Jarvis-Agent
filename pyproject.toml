@@ -90,4 +90,4 @@ forbidden_modules = ["jarvis.core", "jarvis.app", "jarvis.config", "jarvis.evals
 [[tool.importlinter.contracts]]
 name = "Адаптеры не зависят друг от друга"
 type = "independence"
-modules = ["jarvis.adapters.memory", "jarvis.adapters.clock"]
+modules = ["jarvis.adapters.memory", "jarvis.adapters.sqlite", "jarvis.adapters.clock"]

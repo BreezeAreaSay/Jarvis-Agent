@@ -4,13 +4,18 @@
 Аргументы не пишутся целиком: только отпечаток и краткое описание из preview.
 """
 
+import hashlib
+import json
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 from jarvis.domain.ids import TaskId
-from jarvis.domain.tools import EffectKind, PolicyOutcome, ToolCallId, ToolId
+from jarvis.domain.tools import EffectKind, ExecutionTarget, PolicyOutcome, ToolCallId, ToolEffect, ToolId
+
+AUDIT_RESOURCES = 5
+AUDIT_RESOURCE_CHARS = 300
 
 
 class AuditAction(StrEnum):
@@ -36,3 +41,26 @@ class AuditRecord(BaseModel, frozen=True, extra="forbid"):
     execution_status: str | None = None  # succeeded, failed, timed_out, cancelled, dry_run, not_executed
     verification_status: str | None = None  # passed, failed
     dry_run: bool = False
+
+
+def target_label(target: ExecutionTarget) -> str:
+    return f"{target.kind.value}:{target.os_family}:{target.name}"
+
+
+def arguments_hash(arguments: dict[str, JsonValue]) -> str:
+    """Отпечаток нормализованных аргументов: в аудите — он, а не сами аргументы."""
+    canonical = json.dumps(arguments, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def effect_kinds(effects: list[ToolEffect]) -> list[EffectKind]:
+    return sorted({effect.kind for effect in effects})
+
+
+def resources(effects: list[ToolEffect]) -> list[str]:
+    """Первые затронутые ресурсы, укороченные: аудит не хранит длинных значений."""
+    return [_clip(effect.resource) for effect in effects[:AUDIT_RESOURCES]]
+
+
+def _clip(text: str) -> str:
+    return text if len(text) <= AUDIT_RESOURCE_CHARS else text[: AUDIT_RESOURCE_CHARS - 1] + "…"

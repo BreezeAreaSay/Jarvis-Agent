@@ -8,7 +8,7 @@ from collections.abc import Sequence
 
 from pydantic import JsonValue
 
-from jarvis.domain.ids import TaskId, child_number
+from jarvis.domain.ids import ChildKind, TaskId, child_number
 from jarvis.domain.trace import EventKind, TraceEvent
 from jarvis.ports.clock import Clock
 from jarvis.ports.storage import IdAllocator
@@ -24,6 +24,10 @@ class Tracer:
     def __init__(self, ids: IdAllocator, clock: Clock) -> None:
         self._ids = ids
         self._clock = clock
+
+    def next_id(self, task_id: TaskId, kind: ChildKind) -> str:
+        """ID дочерней сущности задачи (вызова, подтверждения): у каждого вида свой счётчик."""
+        return self._ids.next_child_id(task_id, kind)
 
     def event(self, task_id: TaskId, kind: EventKind, payload: dict[str, JsonValue]) -> TraceEvent:
         event_id = self._ids.next_child_id(task_id, "ev")

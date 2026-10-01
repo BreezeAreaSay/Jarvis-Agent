@@ -67,6 +67,8 @@ class ToolDefinition:
     effects: frozenset[EffectKind]  # какие эффекты возможны; эффекты вызова — подмножество
     targets: frozenset[TargetKind]
     timeout_s: float
+    # Результат — содержимое извне (имена, текст, процессы): данные, а не инструкции.
+    untrusted_output: bool = True
 
     @property
     def input_schema(self) -> dict[str, JsonValue]:

@@ -16,6 +16,15 @@ def _parts(path: str, os_family: OsFamily) -> list[str]:
     return [part for part in path.split("/") if part]
 
 
+def is_absolute(path: str, os_family: OsFamily) -> bool:
+    """Абсолютный путь этой ОС: `/…` или `C:\\…` и `\\\\server\\share…` (Windows)."""
+    if os_family == "posix":
+        return path.startswith("/")
+    path = path.replace("/", "\\")
+    drive = len(path) >= 3 and path[0].isalpha() and path[1:3] == ":\\"
+    return drive or path.startswith("\\\\")
+
+
 def is_within(path: str, root: str, os_family: OsFamily) -> bool:
     """Путь совпадает с корнем или лежит внутри него (по частям, а не по префиксу строки)."""
     path_parts, root_parts = _parts(path, os_family), _parts(root, os_family)

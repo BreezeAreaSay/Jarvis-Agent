@@ -50,20 +50,37 @@ def test_metrics_are_folded_from_events() -> None:
     )
 
 
-def test_time_before_an_interruption_is_not_active() -> None:
+@pytest.mark.parametrize(
+    ("interruption", "active_ms"),
+    [
+        ("owner_lost", 2_000),  # процесс умер: 598 с простоя — не работа
+        ("run_stopped", 600_000),  # прогон остановили посреди такта: время до остановки — работа
+        (None, 600_000),  # обычный переход, даже с причиной «interrupted» в тексте
+    ],
+)
+def test_interruption_cause_decides_the_last_interval(interruption: str | None, active_ms: int) -> None:
+    payload: dict[str, JsonValue] = {"from": "EXECUTING", "to": "FAILED", "reason": "interrupted"}
+    if interruption is not None:
+        payload["interruption"] = interruption
     events = [
         event(1, 0, EventKind.TASK_CREATED),
         move(2, 0, "CREATED", "ROUTING"),
         move(3, 2, "ROUTING", "EXECUTING"),
-        event(
-            4,
-            600,
-            EventKind.TASK_TRANSITION,
-            **{"from": "EXECUTING", "to": "FAILED", "reason": "interrupted"},
-        ),
+        event(4, 600, EventKind.TASK_TRANSITION, **payload),
     ]
     metrics = compute_metrics(events)
-    assert (metrics.duration_ms, metrics.active_ms) == (600_000, 2_000)
+    assert (metrics.duration_ms, metrics.active_ms) == (600_000, active_ms)
+
+
+def test_unknown_status_from_a_newer_trace_is_tolerated() -> None:
+    events = [
+        event(1, 0, EventKind.TASK_CREATED),
+        move(2, 1, "CREATED", "ROUTING"),
+        move(3, 2, "ROUTING", "THINKING_HARD"),
+        move(4, 5, "THINKING_HARD", "COMPLETED"),
+    ]
+    metrics = compute_metrics(events)
+    assert (metrics.transitions, metrics.active_ms) == (3, 1_000)
 
 
 def test_unfinished_task_counts_until_the_last_event() -> None:

@@ -77,8 +77,9 @@ class TaskService:
         """До терминального состояния или WAITING_CONFIRMATION."""
         return TaskSnapshot.of(await self._runner.run_until_blocked(task_id))
 
-    def cancel(self, task_id: TaskId, reason: str) -> None:
-        self._runner.cancel(task_id, reason)
+    def cancel(self, task_id: TaskId, reason: str) -> TaskSnapshot:
+        """Состояние задачи после попытки отмены (TaskBusy — её ведёт другой живой процесс)."""
+        return TaskSnapshot.of(self._runner.cancel(task_id, reason))
 
     def recover_interrupted(self) -> list[TaskId]:
         """Задачи, чей процесс завершился посреди работы, → FAILED (`interrupted`)."""

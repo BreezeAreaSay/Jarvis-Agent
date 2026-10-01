@@ -63,7 +63,8 @@ async def test_checkpoint_is_atomic_and_ids_are_not_reused() -> None:
     app, _ = scripted(*full_path(), storage=storage)
     task_id = app.tasks.submit(request())  # task.created — ev_1
 
-    storage.fail_commit()  # контрольная точка CREATED → ROUTING (ev_2) не запишется
+    # Первая запись прогона — проверка аренды; вторая — контрольная точка CREATED → ROUTING (ev_2).
+    storage.fail_commit(after=1)
     with pytest.raises(StorageError):
         await app.tasks.run_until_blocked(task_id)
     snapshot = app.tasks.get(task_id)
@@ -81,8 +82,8 @@ async def test_failed_checkpoint_writes_none_of_its_events() -> None:
     storage = InMemoryStorage()
     app, _ = scripted(*agent_prefix(), step(S.EXECUTING, S.VERIFYING, fail=True), storage=storage)
     task_id = app.tasks.submit(request())
-    # После submit: ROUTING, PLANNING, EXECUTING; четвёртая запись — переход в FAILED с событием error.
-    storage.fail_commit(after=3)
+    # После submit: аренда, ROUTING, PLANNING, EXECUTING; пятая запись — переход в FAILED с error.
+    storage.fail_commit(after=4)
     with pytest.raises(StorageError):
         await app.tasks.run_until_blocked(task_id)
 

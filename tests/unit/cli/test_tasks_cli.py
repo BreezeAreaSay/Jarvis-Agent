@@ -137,7 +137,8 @@ def test_commands_recover_tasks_of_dead_processes(home: Path) -> None:
     assert code == 0
     assert f"{task_id}: процесс, который вёл задачу, завершился — FAILED (interrupted)" in output
     assert output.splitlines()[-1].split()[1:2] == ["FAILED"]
-    assert "reason=interrupted" in run("trace", task_id)[1]
+    timeline = run("trace", task_id)[1]
+    assert "reason=interrupted\n          interruption=owner_lost" in timeline
 
 
 def test_broken_database_is_reported_without_a_traceback(home: Path) -> None:

@@ -21,15 +21,16 @@ def compute_metrics(events: Sequence[TraceEvent]) -> TaskMetrics:
 
     active = 0.0
     transitions = replans = failures = 0
-    state, since = TaskStatus.CREATED, start
+    state: TaskStatus | None = TaskStatus.CREATED
+    since = start
     for event in events:
         if event.kind is EventKind.ERROR:
             failures += 1
         elif event.kind is EventKind.TASK_TRANSITION:
             transitions += 1
-            target = TaskStatus(str(event.payload["to"]))
-            # Перед `interrupted` процесс был мёртв неизвестное время — это не работа.
-            if state in _WORKING and event.payload.get("reason") != "interrupted":
+            target = _status(event.payload.get("to"))
+            # Если того, кто вёл задачу, не стало (`owner_lost`), сколько он работал до этого, неизвестно.
+            if state in _WORKING and event.payload.get("interruption") != "owner_lost":
                 active += _seconds(since, event.ts)
             if target is TaskStatus.REPLANNING:
                 replans += 1
@@ -42,6 +43,14 @@ def compute_metrics(events: Sequence[TraceEvent]) -> TaskMetrics:
         replans=replans,
         finished=finished is not None,
     )
+
+
+def _status(value: object) -> TaskStatus | None:
+    """Статус из события; незнакомый (трасса новее кода) — None, а не исключение."""
+    try:
+        return TaskStatus(str(value))
+    except ValueError:
+        return None
 
 
 def _seconds(start: datetime, end: datetime) -> float:

@@ -11,10 +11,10 @@
 """
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Protocol
 
 from pydantic import JsonValue
@@ -30,7 +30,6 @@ from jarvis.domain.errors import (
     InvalidTransition,
     JarvisError,
     LeaseLost,
-    StorageError,
     TaskBusy,
     TaskCancelled,
     TaskInterrupted,
@@ -58,6 +57,13 @@ _log = logging.getLogger(__name__)
 CANCEL_GRACE_S = 5.0
 
 Explanation = tuple[EventKind, dict[str, JsonValue]]
+
+
+class Interruption(StrEnum):
+    """Почему задачу не довели до конца — в трассе как поле перехода, а не как текст причины."""
+
+    RUN_STOPPED = "run_stopped"  # прогон этого процесса остановлен посреди такта (выход, Ctrl+C)
+    OWNER_LOST = "owner_lost"  # тот, кто вёл задачу, пропал: процесс умер или его прогон оборвался
 
 
 class StageHandler(Protocol):
@@ -140,6 +146,12 @@ class TaskRunner:
             run.lease = lease
             if holder is not Holder.MINE:
                 return self._interrupted(task, run, "задачу вёл другой процесс, и он завершился")
+            if task.status is not TaskStatus.CREATED:
+                # Аренда наша, но задача уже в работе: прошлый прогон этого процесса оборвался
+                # (сбой записи, отмена). Что успел сделать его такт, неизвестно — не продолжаем.
+                return self._interrupted(task, run, "прошлый прогон этой задачи оборвался посреди работы")
+            assert lease is not None  # MINE — значит, строка аренды есть
+            run.lease = self._leases.renew(lease)  # до первой стадии убедиться, что аренду не перехватили
             heartbeat = asyncio.create_task(self._heartbeat(run))
             try:
                 while not _blocked(task):
@@ -147,35 +159,47 @@ class TaskRunner:
                 return task
             finally:
                 heartbeat.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await heartbeat
+                await asyncio.wait({heartbeat})  # heartbeat сам ловит свои ошибки: результат не подменит
         finally:
             del self._runs[task_id]
 
-    def cancel(self, task_id: TaskId, reason: str) -> None:
-        """Отмена по запросу клиента.
+    def cancel(self, task_id: TaskId, reason: str) -> Task:
+        """Отмена по запросу клиента; возвращает задачу после попытки.
 
-        Задачу, которую ведёт этот процесс, прерывает посреди такта. Задачу без живой чужой аренды
-        переводит в CANCELLED сразу. Задачу с живой чужой арендой не трогает: TaskBusy. Отмена
-        завершённой задачи ничего не меняет.
+        Задачу, которую ведёт этот процесс, прерывает посреди такта (запись сделает её прогон).
+        Задачу с живой чужой аренды не трогает: TaskBusy. Активную задачу, чей процесс умер, не
+        «отменяет», а восстанавливает как прерванную: сбой случился раньше решения пользователя.
+        Остальные — CANCELLED сразу. Отмена завершённой задачи ничего не меняет.
         """
         run = self._runs.get(task_id)
         if run is not None:
             run.cancel_reason = reason
             if run.tick is not None and not run.tick.done():
                 run.tick.cancel()
-            return
+            return self._load(task_id)
+        for attempt in range(2):
+            with self._uow() as uow:
+                task = uow.tasks.get(task_id)
+                lease = uow.leases.get(task_id)
+            if is_terminal(task.status):
+                return task
+            holder = self._leases.holder(lease)
+            if holder is Holder.BUSY:
+                raise _busy(task_id, lease)
+            try:
+                if task.status in ACTIVE_STATUSES and holder in (Holder.FREE, Holder.STALE):
+                    return self._interrupted(
+                        task, _Run(lease=lease), "процесс, который вёл задачу, завершился"
+                    )
+                return self._cancelled(task, _Run(lease=lease), reason, task.usage)
+            except ConcurrentModification:
+                if attempt:  # задача менялась дважды за время отмены — пусть клиент повторит
+                    raise
+        raise AssertionError("недостижимо")
+
+    def _load(self, task_id: TaskId) -> Task:
         with self._uow() as uow:
-            task = uow.tasks.get(task_id)
-            lease = uow.leases.get(task_id)
-        if is_terminal(task.status):
-            return
-        if self._leases.holder(lease) is Holder.BUSY:
-            raise _busy(task_id, lease)
-        try:
-            self._cancelled(task, _Run(lease=lease), reason, task.usage)
-        except ConcurrentModification:
-            raise _busy(task_id, lease) from None  # владелец успел продлить аренду или сменить состояние
+            return uow.tasks.get(task_id)
 
     def recover_interrupted(self) -> list[TaskId]:
         """Активные задачи без живой аренды (их процесс завершился) → FAILED (`interrupted`)."""
@@ -206,8 +230,8 @@ class TaskRunner:
                 if run.tick is not None and not run.tick.done():
                     run.tick.cancel()
                 return
-            except StorageError as exc:  # база временно занята: следующая попытка через интервал
-                _log.warning("не удалось продлить аренду: %s", exc.message)
+            except Exception:  # база занята или иной сбой: следующая попытка через интервал
+                _log.warning("не удалось продлить аренду задачи %s", run.lease.task_id, exc_info=True)
 
     def _check_lease(self, task: Task, run: _Run) -> None:
         if run.lease_lost:
@@ -236,30 +260,20 @@ class TaskRunner:
         run.tick = tick
         try:
             done, _ = await asyncio.wait({tick}, timeout=meter.remaining_time_s())
+            if not done:  # такт не уложился в остаток времени; его результат не применяется
+                await _stop(tick)
         except asyncio.CancelledError:
-            # Отменили сам run_until_blocked (процесс завершается): такт прерывается, и что он
-            # успел сделать, неизвестно. Если клиент успел запросить отмену — задача CANCELLED,
-            # иначе FAILED (interrupted). Продолжать её с контрольной точки нельзя.
+            # Отменили сам run_until_blocked (процесс завершается) — в том числе пока такт
+            # останавливался. Итог записывается до ожидания такта: повторная отмена его не потеряет.
+            tick.cancel()
+            self._record_stop(task, run, meter, self._clock.monotonic() - started)
             await _stop(tick)
-            if not run.lease_lost:
-                meter.add_active_time(self._clock.monotonic() - started)
-                try:
-                    if run.cancel_reason is not None:
-                        self._cancelled(task, run, run.cancel_reason, meter.usage)
-                    else:
-                        self._interrupted(task, run, "прогон прерван: процесс завершает работу", meter.usage)
-                except Exception:
-                    # Отмена важнее итоговой записи: вызывающий должен увидеть CancelledError. Задача
-                    # остаётся в последней контрольной точке и станет FAILED (interrupted), когда
-                    # истечёт аренда этого процесса.
-                    _log.warning("не удалось записать итог прерванной задачи %s", task.id, exc_info=True)
             raise
         finally:
             run.tick = None
         elapsed = self._clock.monotonic() - started
 
-        if not done:  # такт не уложился в остаток времени; его результат не применяется
-            await _stop(tick)
+        if not done:
             self._check_lease(task, run)
             if run.cancel_reason is not None:
                 meter.add_active_time(elapsed)
@@ -276,6 +290,29 @@ class TaskRunner:
         if error is not None:
             return self._on_error(task, run, error, meter.usage)
         return self._apply(task, run, tick.result(), meter.usage)
+
+    def _record_stop(self, task: Task, run: _Run, meter: BudgetMeter, elapsed: float) -> None:
+        """Итог прогона, остановленного посреди такта: что успел сделать такт, неизвестно, поэтому
+        задачу не продолжают — CANCELLED, если клиент просил отмену, иначе FAILED (interrupted)."""
+        if run.lease_lost:
+            return
+        meter.add_active_time(elapsed)
+        try:
+            if run.cancel_reason is not None:
+                self._cancelled(task, run, run.cancel_reason, meter.usage)
+            else:
+                self._interrupted(
+                    task,
+                    run,
+                    "прогон прерван: процесс завершает работу",
+                    meter.usage,
+                    cause=Interruption.RUN_STOPPED,
+                )
+        except Exception:
+            # Отмена важнее итоговой записи: вызывающий должен увидеть CancelledError. Задача
+            # остаётся в последней контрольной точке и станет FAILED (interrupted), когда истечёт
+            # аренда этого процесса.
+            _log.warning("не удалось записать итог прерванной задачи %s", task.id, exc_info=True)
 
     def _on_error(self, task: Task, run: _Run, error: BaseException, usage: BudgetUsage) -> Task:
         if isinstance(error, BudgetExceeded):
@@ -334,8 +371,16 @@ class TaskRunner:
             explanations=[(EventKind.ERROR, _error_payload(error))],
         )
 
-    def _interrupted(self, task: Task, run: _Run, message: str, usage: BudgetUsage | None = None) -> Task:
-        error = TaskInterrupted(message).to_info()
+    def _interrupted(
+        self,
+        task: Task,
+        run: _Run,
+        message: str,
+        usage: BudgetUsage | None = None,
+        *,
+        cause: Interruption = Interruption.OWNER_LOST,
+    ) -> Task:
+        error = TaskInterrupted(message, cause=cause.value).to_info()
         return self._checkpoint(
             task,
             run,
@@ -344,6 +389,7 @@ class TaskRunner:
             usage=task.usage if usage is None else usage,
             error=error,
             explanations=[(EventKind.ERROR, _error_payload(error))],
+            interruption=cause,
         )
 
     def _budget_exceeded(self, task: Task, run: _Run, error: BudgetExceeded, usage: BudgetUsage) -> Task:
@@ -374,6 +420,7 @@ class TaskRunner:
         answer: str | None = None,
         error: ErrorInfo | None = None,
         explanations: Sequence[Explanation] = (),
+        interruption: Interruption | None = None,
     ) -> Task:
         """Переход: задача, событие перехода и объясняющие его события — одной транзакцией."""
         check_transition(task.status, target)
@@ -391,6 +438,8 @@ class TaskRunner:
         }
         if route is not None:
             transition["route"] = route.value
+        if interruption is not None:
+            transition["interruption"] = interruption.value
         kinds: list[Explanation] = [*explanations, (EventKind.TASK_TRANSITION, transition)]
         if is_terminal(target):
             finished: dict[str, JsonValue] = {

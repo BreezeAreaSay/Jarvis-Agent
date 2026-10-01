@@ -41,6 +41,8 @@ def _render_event(event: TraceEvent, tz: tzinfo) -> list[str]:
             if "route" in payload:
                 lines.append(f"{_INDENT}route={payload['route']}")
             lines.append(f"{_INDENT}reason={payload.get('reason')}")
+            if "interruption" in payload:
+                lines.append(f"{_INDENT}interruption={payload['interruption']}")
             return lines
         case EventKind.ERROR:
             return [f"{time} ! error", f"{_INDENT}{payload.get('category')}: {payload.get('message')}"]

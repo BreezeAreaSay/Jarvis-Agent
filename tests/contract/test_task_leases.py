@@ -16,6 +16,7 @@ from jarvis.adapters.memory import InMemoryStorage
 from jarvis.adapters.sqlite import SqliteStorage
 from jarvis.app.composition import App, build_app
 from jarvis.core.budget import BudgetMeter
+from jarvis.core.leases import Leases
 from jarvis.core.runner import StageHandler
 from jarvis.domain.errors import ConcurrentModification, LeaseLost, TaskBusy
 from jarvis.domain.ids import TaskId
@@ -197,17 +198,24 @@ async def test_running_a_task_of_a_dead_process_does_not_continue_it(
     assert script.remaining == 1  # ни одна стадия не вызывалась
 
 
-async def test_user_cancel_of_an_orphaned_task_is_a_cancellation(
+async def test_cancelling_an_orphaned_task_records_the_crash(
     spawn: Spawn, clock: ManualClock, lease_of: LeaseOf
 ) -> None:
     task_id = spawn("A").tasks.submit(request())
     clock.advance(TTL + 1)
     other = spawn("B")
-    other.tasks.cancel(task_id, "пользователь отменил")
-    snapshot = other.tasks.get(task_id)
-    assert snapshot.status is S.CANCELLED  # отмена человеком ≠ сбой процесса
-    assert error_of(snapshot).category == "task_cancelled"
+    snapshot = other.tasks.cancel(task_id, "пользователь отменил")
+    # Процесс умер раньше, чем пользователь решил отменить: в итоге — сбой, а не отмена.
+    assert snapshot.status is S.FAILED
+    assert error_of(snapshot).category == "interrupted"
     assert lease_of(task_id) is None
+
+
+async def test_cancel_returns_the_state_after_the_attempt(spawn: Spawn) -> None:
+    app = spawn("A")
+    task_id = app.tasks.submit(request())
+    assert app.tasks.cancel(task_id, "передумал").status is S.CANCELLED  # своя, ещё не запущенная
+    assert app.tasks.cancel(task_id, "ещё раз").status is S.CANCELLED  # завершённая не меняется
 
 
 async def test_old_owner_cannot_write_after_takeover(spawn: Spawn, clock: ManualClock) -> None:
@@ -263,3 +271,29 @@ async def test_heartbeat_keeps_a_long_tick_alive(tmp_path: Path) -> None:
             await asyncio.sleep(0.12)
             assert other.tasks.recover_interrupted() == []
         assert (await asyncio.wait_for(run, timeout=5)).status is S.COMPLETED
+
+
+async def test_heartbeat_failure_does_not_replace_the_result(
+    spawn: Spawn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Slow:
+        async def handle(self, task: Task, budget: BudgetMeter) -> StageOutcome:
+            await asyncio.sleep(0.3)
+            return StageOutcome(next_status=TaskStatus.VERIFYING, reason="шаг")
+
+    script = ScriptedStages([*agent_prefix(), step(S.VERIFYING, S.COMPLETED)])
+    app = spawn("A", {**script.handlers(), S.EXECUTING: Slow()}, ttl_s=0.15)
+    task_id = app.tasks.submit(request())
+    original_renew = Leases.renew
+    calls = 0
+
+    def flaky_renew(self: Leases, lease: Lease) -> Lease:
+        nonlocal calls
+        calls += 1
+        if calls == 2:  # первую проверку при старте пропускаем, ломается heartbeat
+            raise RuntimeError("сбой продления")
+        return original_renew(self, lease)
+
+    monkeypatch.setattr(Leases, "renew", flaky_renew)
+    assert (await asyncio.wait_for(app.tasks.run_until_blocked(task_id), timeout=5)).status is S.COMPLETED
+    assert calls >= 2

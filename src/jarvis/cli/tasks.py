@@ -119,8 +119,7 @@ def cancel_command(
         if is_terminal(before.status):
             typer.echo(f"{key} уже завершена: {before.status}")
             return
-        app.tasks.cancel(key, reason)
-        after = app.tasks.get(key)
+        after = app.tasks.cancel(key, reason)
     typer.echo(f"{key}: {before.status} → {after.status}")
 
 

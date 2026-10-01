@@ -15,6 +15,7 @@ class ApprovalStatus(StrEnum):
     APPROVED = "approved"
     DENIED = "denied"
     EXPIRED = "expired"  # срок вышел — как отказ
+    WITHDRAWN = "withdrawn"  # задача ушла из ожидания без решения (отменена) — запрос недействителен
     USED = "used"  # решение применено: одобренный вызов исполнен или отказ передан стадии
 
 
@@ -23,7 +24,9 @@ class ApprovalDecision(StrEnum):
     DENY = "deny"
 
 
+# Решённые, но ещё не применённые: после выхода из WAITING_CONFIRMATION стадия доводит их вызов.
 RESOLVED = frozenset({ApprovalStatus.APPROVED, ApprovalStatus.DENIED, ApprovalStatus.EXPIRED})
+_CLOSED_WITHOUT_USE = frozenset({*RESOLVED, ApprovalStatus.WITHDRAWN})
 
 
 class ApprovalRequest(BaseModel, frozen=True, extra="forbid"):
@@ -39,13 +42,14 @@ class ApprovalRequest(BaseModel, frozen=True, extra="forbid"):
     created_at: datetime
     expires_at: datetime
     resolved_at: datetime | None = None
-    resolved_via: str | None = None  # "cli", "eval-auto", …
+    resolved_via: str | None = None  # "cli", "eval-auto"; для истёкшего и отозванного — "runtime"
 
     @model_validator(mode="after")
     def _resolution(self) -> Self:
-        decided = self.status in {ApprovalStatus.APPROVED, ApprovalStatus.DENIED}
-        if decided and (self.resolved_at is None or self.resolved_via is None):
-            raise ValueError("у решённого запроса есть время и канал решения")
+        if self.status in _CLOSED_WITHOUT_USE and (self.resolved_at is None or self.resolved_via is None):
+            raise ValueError("у закрытого запроса есть время и канал закрытия")
+        if self.expires_at <= self.created_at:
+            raise ValueError("срок запроса должен быть позже его создания")
         return self
 
     def is_expired(self, now: datetime) -> bool:

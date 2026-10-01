@@ -6,7 +6,7 @@ from jarvis.domain.budget import BudgetUsage
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Route
-from tests.helpers import S, agent_prefix, request, scripted, step, transitions
+from tests.helpers import S, agent_prefix, approval_step, request, scripted, step, transitions
 
 pytestmark = pytest.mark.anyio
 
@@ -77,7 +77,7 @@ async def test_replanning_from_executing_and_verifying() -> None:
 
 
 async def test_waiting_confirmation_blocks_the_run() -> None:
-    app, script = scripted(*agent_prefix(), step(S.EXECUTING, S.WAITING_CONFIRMATION, charge={"steps": 1}))
+    app, script = scripted(*agent_prefix(), approval_step(charge={"steps": 1}))
     task_id = app.tasks.submit(request())
     snapshot = await app.tasks.run_until_blocked(task_id)
 
@@ -85,7 +85,7 @@ async def test_waiting_confirmation_blocks_the_run() -> None:
     assert snapshot.outcome is None
     # Повторный запуск не вызывает стадий: задачу выводит из ожидания только решение клиента.
     assert await app.tasks.run_until_blocked(task_id) == snapshot
-    assert script.remaining == 0
+    assert script.remaining == 1  # шаг с вызовом ждёт решения человека
 
 
 async def test_route_decision_starts_the_route_budget_from_zero() -> None:

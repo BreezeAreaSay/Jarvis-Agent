@@ -14,7 +14,7 @@ import pytest
 from jarvis.adapters.clock import ManualClock
 from jarvis.adapters.memory import InMemoryStorage
 from jarvis.adapters.sqlite import SqliteStorage
-from jarvis.app.composition import App, build_app
+from jarvis.app.composition import App, Stages, StagesFactory, build_app
 from jarvis.core.budget import BudgetMeter
 from jarvis.core.leases import Leases
 from jarvis.core.runner import StageHandler
@@ -26,7 +26,7 @@ from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import StageOutcome, Task
 from jarvis.domain.trace import EventKind
 from jarvis.evals.scripted import ScriptedStages
-from tests.helpers import S, agent_prefix, error_of, request, step, transitions
+from tests.helpers import S, agent_prefix, approval_step, approval_tool, error_of, request, step, transitions
 
 pytestmark = pytest.mark.anyio
 
@@ -53,14 +53,17 @@ def shared() -> InMemoryStorage:
 def spawn(backend: str, shared: InMemoryStorage, tmp_path: Path, clock: ManualClock) -> Iterator[Spawn]:
     opened: list[SqliteStorage] = []
 
-    def make(owner: str, stages: dict[TaskStatus, StageHandler] | None = None, *, ttl_s: float = TTL) -> App:
+    def make(owner: str, stages: Stages | StagesFactory | None = None, *, ttl_s: float = TTL) -> App:
         if backend == "memory":
             storage: InMemoryStorage | SqliteStorage = shared
         else:
             storage = SqliteStorage(tmp_path / "jarvis.db")
             opened.append(storage)
         config = JarvisConfig(runtime=RuntimeSettings(lease_ttl_s=ttl_s))
-        return build_app(config, stages=stages or {}, storage=storage, clock=clock, owner=owner)
+        stages = stages if stages is not None else {}
+        return build_app(
+            config, stages=stages, storage=storage, clock=clock, owner=owner, tools=[approval_tool()]
+        )
 
     yield make
     for storage in opened:
@@ -116,10 +119,10 @@ async def test_submit_takes_the_lease_and_finishing_releases_it(
 
 
 async def test_waiting_for_confirmation_holds_no_lease(spawn: Spawn, lease_of: LeaseOf) -> None:
-    script = ScriptedStages([*agent_prefix(), step(S.EXECUTING, S.WAITING_CONFIRMATION)])
-    app = spawn("A", script.handlers())
+    script = ScriptedStages([*agent_prefix(), approval_step()])
+    app = spawn("A", script.handlers)
     task_id = app.tasks.submit(request())
-    await app.tasks.run_until_blocked(task_id)
+    assert (await app.tasks.run_until_blocked(task_id)).status is S.WAITING_CONFIRMATION
     assert lease_of(task_id) is None
     spawn("B").tasks.cancel(task_id, "отклонить и остановить")  # любой процесс может отменить
     assert app.tasks.get(task_id).status is S.CANCELLED

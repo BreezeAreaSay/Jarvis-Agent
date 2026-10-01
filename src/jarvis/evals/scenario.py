@@ -9,18 +9,31 @@ from pathlib import Path
 from typing import Literal, Self
 
 import yaml
-from pydantic import BaseModel, Field, NonNegativeInt, PositiveInt, model_validator
+from pydantic import BaseModel, Field, JsonValue, NonNegativeInt, PositiveInt, model_validator
 
 from jarvis.domain.budget import BudgetLimit, BudgetUsage
 from jarvis.domain.errors import JarvisError
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Route
+from jarvis.domain.tools import ToolOutcomeKind
 
 ChargeKind = Literal["steps", "tool_calls", "replans", "model_calls", "model_tokens"]
 
 
 class ScenarioError(JarvisError):
     category = "scenario"
+
+
+FinalOutcome = Literal[ToolOutcomeKind.EXECUTED, ToolOutcomeKind.DRY_RUN, ToolOutcomeKind.DENIED]
+
+
+class ToolStep(BaseModel, frozen=True, extra="forbid"):
+    """Вызов инструмента через Tool Runtime. Если нужен человек, задача уходит в WAITING_CONFIRMATION,
+    а после решения этот же шаг доводит вызов."""
+
+    id: str = Field(min_length=1)
+    arguments: dict[str, JsonValue] = {}
+    expect: FinalOutcome | None = None  # итог вызова; другой итог — расхождение со сценарием
 
 
 class ScriptStep(BaseModel, frozen=True, extra="forbid"):
@@ -35,6 +48,13 @@ class ScriptStep(BaseModel, frozen=True, extra="forbid"):
     failures: NonNegativeInt = 0
     hang: bool = False  # такт не завершается сам: его прерывает отмена или лимит времени
     fail: bool = False  # стадия падает с фатальной ошибкой (ScriptedFailure)
+    tool: ToolStep | None = None
+
+    @model_validator(mode="after")
+    def _tool_in_executing(self) -> Self:
+        if self.tool is not None and self.status is not TaskStatus.EXECUTING:
+            raise ValueError("инструменты вызываются только в EXECUTING")
+        return self
 
 
 class ClientRules(BaseModel, frozen=True, extra="forbid"):

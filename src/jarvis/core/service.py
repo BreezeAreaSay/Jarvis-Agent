@@ -3,10 +3,12 @@
 from collections.abc import Collection
 from dataclasses import dataclass
 
+from jarvis.core.approvals import Approvals
 from jarvis.core.leases import Leases
 from jarvis.core.metrics import compute_metrics
 from jarvis.core.runner import TaskRunner
 from jarvis.core.trace import Tracer, shorten
+from jarvis.domain.approvals import ApprovalDecision, ApprovalRequest
 from jarvis.domain.budget import BudgetUsage
 from jarvis.domain.ids import TaskId
 from jarvis.domain.metrics import TaskMetrics
@@ -38,6 +40,7 @@ class TaskService:
         budgets: BudgetsSettings,
         clock: Clock,
         leases: Leases,
+        approvals: Approvals,
     ) -> None:
         self._runner = runner
         self._uow = uow
@@ -46,6 +49,7 @@ class TaskService:
         self._budgets = budgets
         self._clock = clock
         self._leases = leases
+        self._approvals = approvals
 
     def submit(self, request: TaskRequest) -> TaskId:
         """Создаёт задачу в CREATED вместе с арендой этого процесса; продвигает её `run_until_blocked`."""
@@ -80,6 +84,16 @@ class TaskService:
     def cancel(self, task_id: TaskId, reason: str) -> TaskSnapshot:
         """Состояние задачи после попытки отмены (TaskBusy — её ведёт другой живой процесс)."""
         return TaskSnapshot.of(self._runner.cancel(task_id, reason))
+
+    def resolve_approval(self, approval_id: str, decision: ApprovalDecision, *, via: str) -> ApprovalRequest:
+        """Записать решение человека по запросу подтверждения. Продолжает задачу `run_until_blocked`:
+        после одобрения вызов исполняется, после отказа стадия получает отказ как результат.
+        ApprovalClosed — запрос уже закрыт, истёк или задача его больше не ждёт."""
+        return self._approvals.resolve(approval_id, decision, via=via)
+
+    def approvals(self, task_id: TaskId) -> list[ApprovalRequest]:
+        """Запросы подтверждения задачи в порядке создания."""
+        return self._approvals.for_task(task_id)
 
     def recover_interrupted(self) -> list[TaskId]:
         """Задачи, чей процесс завершился посреди работы, → FAILED (`interrupted`)."""

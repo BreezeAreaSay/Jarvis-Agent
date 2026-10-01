@@ -19,9 +19,11 @@ from typing import Any, Protocol
 
 from pydantic import JsonValue
 
+from jarvis.core import approvals
 from jarvis.core.budget import BudgetMeter
 from jarvis.core.leases import Holder, Leases
 from jarvis.core.trace import Tracer, shorten
+from jarvis.domain.approvals import ApprovalStatus
 from jarvis.domain.budget import Budget, BudgetUsage
 from jarvis.domain.errors import (
     BudgetExceeded,
@@ -138,6 +140,8 @@ class TaskRunner:
             with self._uow() as uow:
                 task = uow.tasks.get(task_id)
                 lease = uow.leases.get(task_id)
+            if task.status is TaskStatus.WAITING_CONFIRMATION:
+                return await self._resume(task, lease, run)
             if _blocked(task):
                 return task
             holder = self._leases.holder(lease)
@@ -152,16 +156,35 @@ class TaskRunner:
                 return self._interrupted(task, run, "прошлый прогон этой задачи оборвался посреди работы")
             assert lease is not None  # MINE — значит, строка аренды есть
             run.lease = self._leases.renew(lease)  # до первой стадии убедиться, что аренду не перехватили
-            heartbeat = asyncio.create_task(self._heartbeat(run))
-            try:
-                while not _blocked(task):
-                    task = await self._tick(task, run)
-                return task
-            finally:
-                heartbeat.cancel()
-                await asyncio.wait({heartbeat})  # heartbeat сам ловит свои ошибки: результат не подменит
+            return await self._drive(task, run)
         finally:
             del self._runs[task_id]
+
+    async def _resume(self, task: Task, lease: Lease | None, run: _Run) -> Task:
+        """Ждущая задача продолжается, когда по её запросу решили (или вышел срок). Переход в
+        EXECUTING берёт аренду: из двух процессов, продолжающих задачу разом, пройдёт один."""
+        with self._uow() as uow:
+            ready = approvals.resumption(uow.approvals.for_task(task.id), self._clock.now())
+        if ready is None:
+            return task
+        if self._leases.holder(lease) is Holder.BUSY:
+            raise _busy(task.id, lease)
+        run.lease = lease  # у ждущей задачи аренды нет; устаревшая строка будет заменена сравнением
+        status = "истёк срок" if ready.status is ApprovalStatus.PENDING else ready.status.value
+        task = self._checkpoint(
+            task, run, TaskStatus.EXECUTING, f"подтверждение {ready.id}: {status}", usage=task.usage
+        )
+        return await self._drive(task, run)
+
+    async def _drive(self, task: Task, run: _Run) -> Task:
+        heartbeat = asyncio.create_task(self._heartbeat(run))
+        try:
+            while not _blocked(task):
+                task = await self._tick(task, run)
+            return task
+        finally:
+            heartbeat.cancel()
+            await asyncio.wait({heartbeat})  # heartbeat сам ловит свои ошибки: результат не подменит
 
     def cancel(self, task_id: TaskId, reason: str) -> Task:
         """Отмена по запросу клиента; возвращает задачу после попытки.
@@ -341,6 +364,8 @@ class TaskRunner:
                 raise InvalidTransition(f"маршрут решается только в ROUTING, а не в {task.status}")
             if target is not task.status:
                 check_transition(task.status, target)
+            if target is TaskStatus.WAITING_CONFIRMATION and not self._has_pending_approval(task.id):
+                raise InvalidTransition("ожидание подтверждения без запроса: человеку нечего решать")
         except InvalidTransition as exc:
             return self._failed(task, run, exc.to_info(), usage)
 
@@ -359,6 +384,10 @@ class TaskRunner:
                 answer=outcome.changes.answer,
             )
         return self._checkpoint(task, run, target, outcome.reason, usage=usage, answer=outcome.changes.answer)
+
+    def _has_pending_approval(self, task_id: TaskId) -> bool:
+        with self._uow() as uow:
+            return any(item.status is ApprovalStatus.PENDING for item in uow.approvals.for_task(task_id))
 
     def _failed(self, task: Task, run: _Run, error: ErrorInfo, usage: BudgetUsage) -> Task:
         return self._checkpoint(
@@ -440,7 +469,17 @@ class TaskRunner:
             transition["route"] = route.value
         if interruption is not None:
             transition["interruption"] = interruption.value
-        kinds: list[Explanation] = [*explanations, (EventKind.TASK_TRANSITION, transition)]
+        closing = approvals.Closing(saves=[], explanations=[], audit=[])
+        if task.status is TaskStatus.WAITING_CONFIRMATION or is_terminal(target):
+            # Запросы читаются здесь, а пишутся сравнением статуса в той же транзакции, что и переход:
+            # если человек успел решить, запись не пройдёт (ConcurrentModification).
+            with self._uow() as uow:
+                closing = approvals.closing(uow.approvals.for_task(task.id), target, self._clock.now())
+        kinds: list[Explanation] = [
+            *explanations,
+            *closing.explanations,
+            (EventKind.TASK_TRANSITION, transition),
+        ]
         if is_terminal(target):
             finished: dict[str, JsonValue] = {
                 "status": target.value,
@@ -448,10 +487,16 @@ class TaskRunner:
             }
             kinds.append((EventKind.TASK_FINISHED, finished))
         events = [self._tracer.event(task.id, kind, payload) for kind, payload in kinds]
-        return self._commit(task, run, changes, events=events)
+        return self._commit(task, run, changes, events=events, closing=closing)
 
     def _commit(
-        self, task: Task, run: _Run, changes: dict[str, Any], *, events: Sequence[TraceEvent]
+        self,
+        task: Task,
+        run: _Run,
+        changes: dict[str, Any],
+        *,
+        events: Sequence[TraceEvent],
+        closing: approvals.Closing | None = None,
     ) -> Task:
         updated = Task.model_validate(
             {**task.model_dump(), **changes, "version": task.version + 1, "updated_at": self._clock.now()}
@@ -461,13 +506,18 @@ class TaskRunner:
             uow.tasks.save(updated, expected_version=task.version)
             if events:
                 uow.trace.append(events)
-            if run.lease is not None:
-                # Ограждение: запись пройдёт, только если аренда всё ещё та, что держит прогон.
-                if updated.status in ACTIVE_STATUSES:
-                    renewed = self._leases.fresh(task.id)
-                    uow.leases.put(renewed, expected=run.lease)
-                else:
-                    uow.leases.delete(task.id, expected=run.lease)
+            if closing is not None:
+                for approval, expected in closing.saves:
+                    uow.approvals.save(approval, expected=expected)
+                for record in closing.audit:
+                    uow.audit.append(record)
+            # Ограждение: запись пройдёт, только если аренда всё ещё та, что держит прогон (None —
+            # аренды нет: так ждущая задача берёт её при продолжении).
+            if updated.status in ACTIVE_STATUSES:
+                renewed = self._leases.fresh(task.id)
+                uow.leases.put(renewed, expected=run.lease)
+            elif run.lease is not None:
+                uow.leases.delete(task.id, expected=run.lease)
             uow.commit()
         run.lease = renewed
         return updated

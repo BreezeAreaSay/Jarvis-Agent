@@ -15,7 +15,7 @@ from jarvis.cli.main import app as cli
 from jarvis.domain.settings import JarvisConfig
 from jarvis.evals.scenario import ScriptStep
 from jarvis.evals.scripted import ScriptedStages
-from tests.helpers import S, request, step
+from tests.helpers import S, approval_step, approval_tool, request, step
 
 
 @pytest.fixture
@@ -30,7 +30,12 @@ def seed(
 ) -> str:
     with SqliteStorage(database_path(home)) as storage:
         app = build_app(
-            JarvisConfig(), stages=ScriptedStages(steps).handlers(), storage=storage, owner=owner, clock=clock
+            JarvisConfig(),
+            stages=ScriptedStages(steps).handlers,
+            storage=storage,
+            owner=owner,
+            clock=clock,
+            tools=[approval_tool()],
         )
         task_id = app.tasks.submit(request("сценарий"))
         asyncio.run(app.tasks.run_until_blocked(task_id))
@@ -43,7 +48,7 @@ DONE = [
     step(S.EXECUTING, S.VERIFYING),
     step(S.VERIFYING, S.COMPLETED, answer="готово"),
 ]
-WAITING = [step(S.ROUTING, S.EXECUTING, route="direct"), step(S.EXECUTING, S.WAITING_CONFIRMATION)]
+WAITING = [step(S.ROUTING, S.EXECUTING, route="direct"), approval_step()]
 FAILING = [step(S.ROUTING, S.PLANNING, route="agent"), step(S.PLANNING, S.EXECUTING, fail=True)]
 
 

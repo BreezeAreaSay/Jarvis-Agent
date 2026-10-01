@@ -4,7 +4,7 @@ import pytest
 
 from jarvis.adapters.clock import ManualClock
 from jarvis.adapters.memory import InMemoryStorage
-from tests.helpers import S, agent_prefix, request, scripted, step
+from tests.helpers import agent_prefix, approval_step, request, scripted
 
 pytestmark = pytest.mark.anyio
 
@@ -14,7 +14,7 @@ async def test_rebuilt_app_sees_the_same_task() -> None:
     clock = ManualClock()
     first, _ = scripted(
         *agent_prefix(),
-        step(S.EXECUTING, S.WAITING_CONFIRMATION, charge={"steps": 1, "tool_calls": 1}),
+        approval_step(charge={"steps": 1}),
         storage=storage,
         clock=clock,
     )

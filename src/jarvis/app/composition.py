@@ -1,34 +1,52 @@
 """Сборка приложения (01-structure.md §6): единственное место, где создаются адаптеры.
 
 Стадии задачи передаёт вызывающий (eval и тесты — scripted-стадии); настоящие стадии появятся со
-своими milestone. Хранилище по умолчанию — в памяти; CLI открывает SQLite через `open_storage`.
+своими milestone. Стадиям, которые вызывают инструменты, нужен Tool Runtime — их передают фабрикой,
+которая его получает. Хранилище по умолчанию — в памяти; CLI открывает SQLite через `open_storage`.
 """
 
 import os
 import secrets
 import socket
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from jarvis.adapters.clock import SystemClock
 from jarvis.adapters.memory import InMemoryStorage
 from jarvis.adapters.sqlite import SqliteStorage
+from jarvis.adapters.tools import HOST, OS_FAMILY, builtin_tools
+from jarvis.core.approvals import Approvals
 from jarvis.core.leases import Leases
+from jarvis.core.policy import PolicyEngine, PolicyZones
 from jarvis.core.runner import StageHandler, TaskRunner
 from jarvis.core.service import TaskService
+from jarvis.core.tools.registry import ToolRegistry
+from jarvis.core.tools.runtime import ToolRuntime
 from jarvis.core.trace import Tracer
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
 from jarvis.ports.clock import Clock
+from jarvis.ports.tools import Tool
 
 Storage = InMemoryStorage | SqliteStorage
+Stages = Mapping[TaskStatus, StageHandler]
+StagesFactory = Callable[[ToolRuntime], Stages]
+
+# Папки в домашнем каталоге, где обычно лежат ключи и токены: чтение — с подтверждением, запись — запрет.
+SECRET_DIRS = (".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".password-store", ".config/gcloud")
+# Имена файлов с секретами, где бы они ни лежали.
+SECRET_NAMES = (
+    "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", "*.pem", "*.key", "*.p12", "*.pfx", "*.kdbx",
+    ".env", ".env.*", ".netrc", "_netrc", ".pgpass", ".git-credentials", "credentials", "credentials.*",
+)  # fmt: skip
 
 
 @dataclass(frozen=True)
 class App:
     config: JarvisConfig
     tasks: TaskService
+    tools: ToolRuntime
 
 
 def database_path(home: Path) -> Path:
@@ -45,21 +63,52 @@ def process_owner() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
 
 
+def host_zones(config: JarvisConfig, *, home: Path | None, user_home: Path | None = None) -> PolicyZones:
+    """Зоны политики этого компьютера: канонические пути, как их увидит preview инструмента."""
+    user = user_home if user_home is not None else Path.home()
+    return PolicyZones(
+        os_family=OS_FAMILY,
+        internal=(_canonical(home),) if home is not None else (),
+        secrets=tuple(_canonical(user / folder) for folder in SECRET_DIRS),
+        secret_names=SECRET_NAMES,
+        workspaces=tuple(_canonical(Path(root).expanduser()) for root in config.policy.workspace_roots),
+    )
+
+
+def _canonical(path: Path) -> str:
+    return os.path.realpath(path)  # путь может ещё не существовать: тогда раскрывается то, что есть
+
+
 def build_app(
     config: JarvisConfig,
     *,
-    stages: Mapping[TaskStatus, StageHandler],
+    stages: Stages | StagesFactory,
     storage: Storage | None = None,
     clock: Clock | None = None,
     owner: str | None = None,
+    tools: Sequence[Tool] | None = None,
+    zones: PolicyZones | None = None,
+    home: Path | None = None,
 ) -> App:
+    """`home` — JARVIS_HOME: его данные недоступны инструментам. `tools` по умолчанию — встроенные."""
     storage = storage if storage is not None else InMemoryStorage()
     clock = clock if clock is not None else SystemClock()
     owner = owner if owner is not None else process_owner()
+    zones = zones if zones is not None else host_zones(config, home=home)
     tracer = Tracer(storage.ids, clock)
+    runtime = ToolRuntime(
+        registry=ToolRegistry(builtin_tools() if tools is None else tools),
+        policy=PolicyEngine(zones),
+        uow=storage.unit_of_work,
+        tracer=tracer,
+        clock=clock,
+        target=HOST,
+        approval_ttl_s=config.policy.approval_ttl_s,
+        protected_roots=(*zones.internal, *zones.secrets),
+    )
     leases = Leases(uow=storage.unit_of_work, clock=clock, owner=owner, ttl_s=config.runtime.lease_ttl_s)
     runner = TaskRunner(
-        stages=stages,
+        stages=stages(runtime) if callable(stages) else stages,
         uow=storage.unit_of_work,
         tracer=tracer,
         budgets=config.budgets,
@@ -74,5 +123,6 @@ def build_app(
         budgets=config.budgets,
         clock=clock,
         leases=leases,
+        approvals=Approvals(uow=storage.unit_of_work, tracer=tracer, clock=clock),
     )
-    return App(config=config, tasks=tasks)
+    return App(config=config, tasks=tasks, tools=runtime)

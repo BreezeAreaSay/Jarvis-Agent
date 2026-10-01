@@ -16,6 +16,7 @@ from jarvis.evals.scripted import ScriptedStages
 from tests.helpers import (
     S,
     agent_prefix,
+    approval_step,
     budget_config,
     error_of,
     make_app,
@@ -97,7 +98,7 @@ async def test_cancellation_wins_over_the_stage_result() -> None:
 
 
 async def test_cancel_waiting_task() -> None:
-    app, _ = scripted(*agent_prefix(), step(S.EXECUTING, S.WAITING_CONFIRMATION))
+    app, _ = scripted(*agent_prefix(), approval_step())
     task_id = app.tasks.submit(request())
     await app.tasks.run_until_blocked(task_id)
     app.tasks.cancel(task_id, "отклонить и остановить")

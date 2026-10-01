@@ -50,6 +50,22 @@ def test_metrics_are_folded_from_events() -> None:
     )
 
 
+def test_time_before_an_interruption_is_not_active() -> None:
+    events = [
+        event(1, 0, EventKind.TASK_CREATED),
+        move(2, 0, "CREATED", "ROUTING"),
+        move(3, 2, "ROUTING", "EXECUTING"),
+        event(
+            4,
+            600,
+            EventKind.TASK_TRANSITION,
+            **{"from": "EXECUTING", "to": "FAILED", "reason": "interrupted"},
+        ),
+    ]
+    metrics = compute_metrics(events)
+    assert (metrics.duration_ms, metrics.active_ms) == (600_000, 2_000)
+
+
 def test_unfinished_task_counts_until_the_last_event() -> None:
     events = [event(1, 0, EventKind.TASK_CREATED), move(2, 2, "CREATED", "ROUTING")]
     metrics = compute_metrics(events)

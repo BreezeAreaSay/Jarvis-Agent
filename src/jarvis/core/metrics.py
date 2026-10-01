@@ -28,7 +28,8 @@ def compute_metrics(events: Sequence[TraceEvent]) -> TaskMetrics:
         elif event.kind is EventKind.TASK_TRANSITION:
             transitions += 1
             target = TaskStatus(str(event.payload["to"]))
-            if state in _WORKING:
+            # Перед `interrupted` процесс был мёртв неизвестное время — это не работа.
+            if state in _WORKING and event.payload.get("reason") != "interrupted":
                 active += _seconds(since, event.ts)
             if target is TaskStatus.REPLANNING:
                 replans += 1

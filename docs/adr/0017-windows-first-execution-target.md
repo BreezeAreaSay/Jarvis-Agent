@@ -11,6 +11,8 @@
 ## Решение
 
 - `ExecutionTarget(kind: HOST | WSL | DOCKER | SSH, os_family, name)`; HOST на ПК пользователя — Windows.
+  Имена отличаются от формулировки требований намеренно: WINDOWS — это HOST с `os_family="windows"`
+  (тот же код работает на Linux CI, где HOST — POSIX), REMOTE_SSH — это SSH.
 - `TargetPath` всегда несёт цель; преобразование путей — только явное (`convert_path`).
 - Адаптеры Stage 0 — HOST (и WSL, если проекты лежат в WSL); DOCKER и SSH — `UnsupportedTarget`.
 - Ядро тестируется на Linux с фейками, адаптеры платформы — на Windows CI.

@@ -1,4 +1,4 @@
-"""Точка входа `jarvis`. Команды M1: --version, config check, config show, eval."""
+"""Точка входа `jarvis`: --version, config, eval, tasks, trace, cancel."""
 
 import asyncio
 import io
@@ -11,8 +11,8 @@ from typing import Annotated, Any
 
 import typer
 
-from jarvis.config import LoadedConfig, load_config
-from jarvis.domain.errors import ConfigError
+from jarvis.cli.common import load_or_exit
+from jarvis.cli.tasks import cancel_command, tasks_command, trace_command
 from jarvis.domain.settings import JarvisConfig
 from jarvis.evals.engine import run_scenarios
 from jarvis.evals.report import write_report
@@ -24,6 +24,9 @@ DEFAULT_REPORTS = Path("evals/reports")
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="Jarvis — локальный Agent Runtime.")
 config_app = typer.Typer(no_args_is_help=True, help="Конфигурация: проверка и итоговые значения.")
 app.add_typer(config_app, name="config")
+app.command("tasks")(tasks_command)
+app.command("trace")(trace_command)
+app.command("cancel")(cancel_command)
 
 
 def _print_version(value: bool) -> None:
@@ -42,18 +45,10 @@ def main(
     """Jarvis — локальный Agent Runtime."""
 
 
-def _load() -> LoadedConfig:
-    try:
-        return load_config()
-    except ConfigError as exc:
-        typer.echo(exc.message, err=True)
-        raise typer.Exit(1) from None
-
-
 @config_app.command("check")
 def config_check() -> None:
     """Проверить конфиг: синтаксис, схему, неизвестные ключи."""
-    loaded = _load()
+    loaded = load_or_exit()
     if loaded.config_file_exists:
         typer.echo(f"Конфиг в порядке: {loaded.config_path}")
     else:
@@ -67,7 +62,7 @@ def config_show(
     ] = False,
 ) -> None:
     """Показать итоговые значения конфига."""
-    loaded = _load()
+    loaded = load_or_exit()
     if sources:
         typer.echo(f"# JARVIS_HOME: {loaded.home}")
         typer.echo(f"# config: {loaded.config_path}{'' if loaded.config_file_exists else ' (нет файла)'}")

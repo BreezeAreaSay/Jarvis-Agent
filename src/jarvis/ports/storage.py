@@ -11,6 +11,8 @@ from collections.abc import Collection, Sequence
 from types import TracebackType
 from typing import Protocol, Self
 
+from jarvis.domain.approvals import ApprovalRequest, ApprovalStatus
+from jarvis.domain.audit import AuditRecord
 from jarvis.domain.ids import ChildKind, TaskId
 from jarvis.domain.lease import Lease
 from jarvis.domain.states import TaskStatus
@@ -58,6 +60,34 @@ class LeaseRepository(Protocol):
         ...
 
 
+class ApprovalRepository(Protocol):
+    def add(self, approval: ApprovalRequest) -> None:
+        """Новый запрос; ID уже занят — StorageError."""
+        ...
+
+    def get(self, approval_id: str) -> ApprovalRequest:
+        """ApprovalNotFound, если запроса нет."""
+        ...
+
+    def save(self, approval: ApprovalRequest, *, expected: ApprovalStatus) -> None:
+        """Записать, если сохранённый статус — `expected` (иначе ConcurrentModification)."""
+        ...
+
+    def for_task(self, task_id: TaskId) -> list[ApprovalRequest]:
+        """Запросы задачи в порядке создания."""
+        ...
+
+
+class AuditLog(Protocol):
+    """Журнал действий: только добавление."""
+
+    def append(self, record: AuditRecord) -> None: ...
+
+    def list(self, *, task_id: TaskId | None = None) -> list[AuditRecord]:
+        """Записи в порядке добавления."""
+        ...
+
+
 class UnitOfWork(Protocol):
     """Одна транзакция: всё, что записано через репозитории, применяется вместе на `commit()`.
 
@@ -73,6 +103,12 @@ class UnitOfWork(Protocol):
 
     @property
     def leases(self) -> LeaseRepository: ...
+
+    @property
+    def approvals(self) -> ApprovalRepository: ...
+
+    @property
+    def audit(self) -> AuditLog: ...
 
     def __enter__(self) -> Self: ...
 

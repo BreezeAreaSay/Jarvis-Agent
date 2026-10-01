@@ -8,14 +8,35 @@ import pytest
 
 from jarvis.adapters.memory import InMemoryStorage
 from jarvis.adapters.sqlite import SqliteStorage
+from jarvis.domain.approvals import ApprovalRequest, ApprovalStatus
+from jarvis.domain.audit import AuditAction, AuditRecord
 from jarvis.domain.budget import BudgetUsage
-from jarvis.domain.errors import ConcurrentModification, Disposition, ErrorInfo, StorageError, TaskNotFound
+from jarvis.domain.errors import (
+    ApprovalNotFound,
+    ConcurrentModification,
+    Disposition,
+    ErrorInfo,
+    StorageError,
+    TaskNotFound,
+)
 from jarvis.domain.ids import TaskId, child_number
 from jarvis.domain.lease import Lease
 from jarvis.domain.settings import BudgetsSettings
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Origin, Route, Task, TaskOutcome, TaskRequest
+from jarvis.domain.tools import (
+    EffectKind,
+    ExecutionTarget,
+    PolicyOutcome,
+    TargetKind,
+    ToolCall,
+    ToolCallId,
+    ToolEffect,
+    ToolId,
+)
 from jarvis.domain.trace import EventKind, TraceEvent
+
+HOST = ExecutionTarget(kind=TargetKind.HOST, os_family="posix", name="local")
 
 NOW = datetime(2026, 1, 1, 12, 30, 15, 123456, tzinfo=UTC)
 
@@ -348,3 +369,113 @@ def test_ids_are_not_reused_after_a_failed_commit(storage: Storage) -> None:
         with pytest.raises(ConcurrentModification):
             second.commit()
     assert storage.ids.next_child_id(task.id, "ev") == f"{task.id}.ev_2"  # откат не вернул номер
+
+
+# --- подтверждения и аудит
+
+
+def approval_for(
+    storage: Storage, task: Task, status: ApprovalStatus = ApprovalStatus.PENDING
+) -> ApprovalRequest:
+    call = ToolCall(
+        id=ToolCallId(storage.ids.next_child_id(task.id, "call")),
+        task_id=task.id,
+        tool_id=ToolId("test.write"),
+        arguments={"path": "a.txt"},
+        target=HOST,
+    )
+    return ApprovalRequest(
+        id=storage.ids.next_child_id(task.id, "appr"),
+        task_id=task.id,
+        call=call,
+        summary="Записать a.txt",
+        effects=[ToolEffect(kind=EffectKind.WRITE, resource="/ws/a.txt")],
+        target=HOST,
+        arguments={"path": "/ws/a.txt"},
+        preview_fingerprint="f" * 64,
+        status=status,
+        created_at=NOW,
+        expires_at=NOW + timedelta(minutes=30),
+    )
+
+
+def test_approval_round_trip_and_status_compare_and_set(storage: Storage) -> None:
+    task = add(storage)
+    first, second = approval_for(storage, task), approval_for(storage, task)
+    with storage.unit_of_work() as uow:
+        uow.approvals.add(second)
+        uow.approvals.add(first)
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        assert uow.approvals.get(first.id) == first
+        assert [item.id for item in uow.approvals.for_task(task.id)] == [first.id, second.id]
+        with pytest.raises(StorageError):
+            uow.approvals.add(first)
+    approved = first.model_copy(
+        update={"status": ApprovalStatus.APPROVED, "resolved_at": NOW, "resolved_via": "cli"}
+    )
+    with storage.unit_of_work() as uow:
+        with pytest.raises(ConcurrentModification):
+            uow.approvals.save(approved, expected=ApprovalStatus.APPROVED)
+        uow.approvals.save(approved, expected=ApprovalStatus.PENDING)
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        assert uow.approvals.get(first.id) == approved
+    with storage.unit_of_work() as uow, pytest.raises(ApprovalNotFound):
+        uow.approvals.get("task_1.appr_99")
+
+
+def test_two_resolutions_of_one_approval_conflict(storage: Storage) -> None:
+    task = add(storage)
+    pending = approval_for(storage, task)
+    with storage.unit_of_work() as uow:
+        uow.approvals.add(pending)
+        uow.commit()
+    approve = pending.model_copy(
+        update={"status": ApprovalStatus.APPROVED, "resolved_at": NOW, "resolved_via": "a"}
+    )
+    deny = pending.model_copy(
+        update={"status": ApprovalStatus.DENIED, "resolved_at": NOW, "resolved_via": "b"}
+    )
+    first, second = storage.unit_of_work(), storage.unit_of_work()
+    with first, second:
+        first.approvals.save(approve, expected=ApprovalStatus.PENDING)
+        second.approvals.save(deny, expected=ApprovalStatus.PENDING)
+        first.commit()
+        with pytest.raises(ConcurrentModification):
+            second.commit()
+    with storage.unit_of_work() as uow:
+        assert uow.approvals.get(pending.id).status is ApprovalStatus.APPROVED
+
+
+def test_audit_is_append_only_and_ordered(storage: Storage) -> None:
+    task = add(storage)
+    other = add(storage)
+    records = [
+        AuditRecord(
+            ts=NOW + timedelta(seconds=n),
+            action=AuditAction.DECISION if n % 2 == 0 else AuditAction.RESULT,
+            actor="task",
+            task_id=owner.id,
+            tool_call_id=ToolCallId(f"{owner.id}.call_{n + 1}"),
+            tool_id=ToolId("filesystem.list"),
+            target="host:posix:local",
+            effects=[EffectKind.READ],
+            resources=["/ws"],
+            arguments_hash="h" * 64,
+            decision=PolicyOutcome.ALLOW,
+            execution_status="succeeded" if n % 2 else None,
+        )
+        for n, owner in enumerate([task, task, other, task])
+    ]
+    with storage.unit_of_work() as uow:
+        for record in records[:2]:
+            uow.audit.append(record)
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        for record in records[2:]:
+            uow.audit.append(record)
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        assert uow.audit.list() == records
+        assert uow.audit.list(task_id=task.id) == [records[0], records[1], records[3]]

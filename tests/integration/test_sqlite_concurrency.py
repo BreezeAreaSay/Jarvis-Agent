@@ -15,6 +15,7 @@ from pathlib import Path
 
 from jarvis.adapters.clock import ManualClock
 from jarvis.adapters.sqlite import SqliteStorage
+from jarvis.adapters.sqlite.migrate import bundled_migrations
 from jarvis.app.composition import build_app
 from jarvis.domain.ids import TaskId
 from jarvis.domain.settings import JarvisConfig
@@ -91,7 +92,8 @@ def test_concurrent_first_open_migrates_once(tmp_path: Path) -> None:
         thread.join(timeout=60)
     assert errors == []
     with sqlite3.connect(database) as conn:
-        assert conn.execute("SELECT version FROM schema_migrations").fetchall() == [(1,)]
+        applied = [row[0] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
+        assert applied == [migration.version for migration in bundled_migrations()]
     conn.close()
 
 

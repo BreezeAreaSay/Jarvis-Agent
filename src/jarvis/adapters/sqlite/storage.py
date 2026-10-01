@@ -18,9 +18,11 @@ from types import TracebackType
 from typing import Self
 
 from jarvis.adapters.sqlite.migrate import Migration, bundled_migrations, migrate
+from jarvis.domain.approvals import ApprovalRequest, ApprovalStatus
+from jarvis.domain.audit import AuditRecord
 from jarvis.domain.budget import Budget, BudgetUsage
-from jarvis.domain.errors import ConcurrentModification, StorageError, TaskNotFound
-from jarvis.domain.ids import ChildKind, TaskId, child_id, task_id, task_number
+from jarvis.domain.errors import ApprovalNotFound, ConcurrentModification, StorageError, TaskNotFound
+from jarvis.domain.ids import ChildKind, TaskId, child_id, child_number, task_id, task_number
 from jarvis.domain.lease import Lease
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Route, Task, TaskOutcome, TaskRequest
@@ -181,6 +183,8 @@ class SqliteUnitOfWork:
         self._tasks = _Tasks(self)
         self._trace = _Trace(self)
         self._leases = _Leases(self)
+        self._approvals = _Approvals(self)
+        self._audit = _Audit(self)
 
     @property
     def tasks(self) -> "_Tasks":
@@ -193,6 +197,14 @@ class SqliteUnitOfWork:
     @property
     def leases(self) -> "_Leases":
         return self._leases
+
+    @property
+    def approvals(self) -> "_Approvals":
+        return self._approvals
+
+    @property
+    def audit(self) -> "_Audit":
+        return self._audit
 
     def __enter__(self) -> Self:
         return self
@@ -221,7 +233,16 @@ class SqliteUnitOfWork:
             raise StorageError("единица работы уже завершена")
         self._done = True
         try:
-            if self._tasks.added or self._tasks.saved or self._trace.appended or self._leases.changes:
+            staged = (
+                self._tasks.added,
+                self._tasks.saved,
+                self._trace.appended,
+                self._leases.changes,
+                self._approvals.added,
+                self._approvals.saved,
+                self._audit.appended,
+            )
+            if any(staged):
                 with self._storage.guard():
                     conn = self._open()
                     if conn.in_transaction:
@@ -274,6 +295,48 @@ class SqliteUnitOfWork:
         for key, (lease, expected) in leases.changes.items():
             if not _apply_lease(conn, key, lease, expected):
                 raise ConcurrentModification(f"аренда задачи {key} изменилась", task_id=key)
+        for approval in self._approvals.added.values():
+            final = (
+                self._approvals.saved[approval.id][0] if approval.id in self._approvals.saved else approval
+            )
+            try:
+                conn.execute(
+                    "INSERT INTO approvals (id, task_id, seq, tool_call_id, status, request_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        final.id,
+                        final.task_id,
+                        child_number(final.id),
+                        final.call.id,
+                        final.status.value,
+                        final.model_dump_json(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                if "foreign key" in str(exc).lower():
+                    raise StorageError(f"запрос {final.id}: задачи {final.task_id} нет") from None
+                raise StorageError(f"запрос {final.id} уже существует", approval_id=final.id) from None
+        for key, (approval, expected) in self._approvals.saved.items():
+            if key in self._approvals.added:
+                continue
+            changed = conn.execute(
+                "UPDATE approvals SET status = ?, request_json = ? WHERE id = ? AND status = ?",
+                (approval.status.value, approval.model_dump_json(), key, expected.value),
+            ).rowcount
+            if changed != 1:
+                raise ConcurrentModification(f"запрос {key} изменён другим писателем", approval_id=key)
+        for record in self._audit.appended:
+            conn.execute(
+                "INSERT INTO audit_log (ts, task_id, tool_call_id, action, record_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    record.ts.isoformat(),
+                    record.task_id,
+                    record.tool_call_id,
+                    record.action.value,
+                    record.model_dump_json(),
+                ),
+            )
 
     def _open(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -472,3 +535,66 @@ class _Leases:
             raise ConcurrentModification(f"аренда задачи {task_id} изменилась", task_id=task_id)
         original = self.changes[task_id][1] if task_id in self.changes else expected
         self.changes[task_id] = (lease, original)
+
+
+class _Approvals:
+    def __init__(self, uow: SqliteUnitOfWork) -> None:
+        self._uow = uow
+        self.added: dict[str, ApprovalRequest] = {}
+        self.saved: dict[str, tuple[ApprovalRequest, ApprovalStatus]] = {}
+
+    def add(self, approval: ApprovalRequest) -> None:
+        if approval.id in self.added or self._stored(approval.id) is not None:
+            raise StorageError(f"запрос {approval.id} уже существует", approval_id=approval.id)
+        self.added[approval.id] = approval
+
+    def get(self, approval_id: str) -> ApprovalRequest:
+        if approval_id in self.saved:
+            return self.saved[approval_id][0]
+        if approval_id in self.added:
+            return self.added[approval_id]
+        stored = self._stored(approval_id)
+        if stored is None:
+            raise ApprovalNotFound(f"запрос подтверждения {approval_id} не найден", approval_id=approval_id)
+        return stored
+
+    def save(self, approval: ApprovalRequest, *, expected: ApprovalStatus) -> None:
+        current = self.get(approval.id)
+        if current.status is not expected:
+            raise ConcurrentModification(
+                f"запрос {approval.id}: статус {current.status}, ожидался {expected}", approval_id=approval.id
+            )
+        first = self.saved[approval.id][1] if approval.id in self.saved else expected
+        self.saved[approval.id] = (approval, first)
+
+    def for_task(self, task_id: TaskId) -> list[ApprovalRequest]:
+        rows = self._uow.query("SELECT id FROM approvals WHERE task_id = ? ORDER BY seq", (task_id,))
+        keys = [str(row[0]) for row in rows]
+        keys += [key for key, item in self.added.items() if item.task_id == task_id and key not in keys]
+        return sorted((self.get(key) for key in keys), key=lambda item: child_number(item.id))
+
+    def _stored(self, approval_id: str) -> ApprovalRequest | None:
+        rows = self._uow.query("SELECT request_json FROM approvals WHERE id = ?", (approval_id,))
+        return ApprovalRequest.model_validate_json(str(rows[0][0])) if rows else None
+
+
+class _Audit:
+    def __init__(self, uow: SqliteUnitOfWork) -> None:
+        self._uow = uow
+        self.appended: list[AuditRecord] = []
+
+    def append(self, record: AuditRecord) -> None:
+        self.appended.append(record)
+
+    def list(self, *, task_id: TaskId | None = None) -> list[AuditRecord]:
+        if task_id is None:
+            rows = self._uow.query("SELECT record_json FROM audit_log ORDER BY seq")
+        else:
+            rows = self._uow.query(
+                "SELECT record_json FROM audit_log WHERE task_id = ? ORDER BY seq", (task_id,)
+            )
+        stored = [AuditRecord.model_validate_json(str(row[0])) for row in rows]
+        return [
+            *stored,
+            *(record for record in self.appended if task_id is None or record.task_id == task_id),
+        ]

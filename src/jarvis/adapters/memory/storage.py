@@ -11,8 +11,10 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Self
 
-from jarvis.domain.errors import ConcurrentModification, StorageError, TaskNotFound
-from jarvis.domain.ids import ChildKind, TaskId, child_id, task_id, task_number
+from jarvis.domain.approvals import ApprovalRequest, ApprovalStatus
+from jarvis.domain.audit import AuditRecord
+from jarvis.domain.errors import ApprovalNotFound, ConcurrentModification, StorageError, TaskNotFound
+from jarvis.domain.ids import ChildKind, TaskId, child_id, child_number, task_id, task_number
 from jarvis.domain.lease import Lease
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Task
@@ -25,6 +27,8 @@ class _State:
     events: dict[TaskId, list[str]] = field(default_factory=dict[TaskId, list[str]])
     event_ids: set[str] = field(default_factory=set[str])
     leases: dict[TaskId, str] = field(default_factory=dict[TaskId, str])
+    approvals: dict[str, str] = field(default_factory=dict[str, str])
+    audit: list[str] = field(default_factory=list[str])
     last_task: int = 0
     last_child: dict[tuple[TaskId, ChildKind], int] = field(
         default_factory=dict[tuple[TaskId, ChildKind], int]
@@ -39,6 +43,8 @@ class _Snapshot:
     tasks: dict[TaskId, str]
     event_counts: dict[TaskId, int]
     leases: dict[TaskId, str]
+    approvals: dict[str, str]
+    audit_count: int
 
 
 class InMemoryStorage:
@@ -76,6 +82,8 @@ class InMemoryUnitOfWork:
         self._tasks = _Tasks(self)
         self._trace = _Trace(self)
         self._leases = _Leases(self)
+        self._approvals = _Approvals(self)
+        self._audit = _Audit(self)
         self._done = False
 
     @property
@@ -90,6 +98,17 @@ class InMemoryUnitOfWork:
     def leases(self) -> "_Leases":
         return self._leases
 
+    @property
+    def approvals(self) -> "_Approvals":
+        return self._approvals
+
+    @property
+    def audit(self) -> "_Audit":
+        return self._audit
+
+    def stored_audit(self) -> list[str]:
+        return self._state.audit[: self.snapshot().audit_count]
+
     def snapshot(self) -> _Snapshot:
         if self._snapshot is None:
             state = self._state
@@ -97,6 +116,8 @@ class InMemoryUnitOfWork:
                 tasks=dict(state.tasks),
                 event_counts={key: len(value) for key, value in state.events.items()},
                 leases=dict(state.leases),
+                approvals=dict(state.approvals),
+                audit_count=len(state.audit),
             )
         return self._snapshot
 
@@ -140,6 +161,17 @@ class InMemoryUnitOfWork:
         for key in self._leases.changes:
             if key not in known:
                 raise StorageError(f"аренда: задачи {key} нет", task_id=key)
+        for approval in self._approvals.added.values():
+            if approval.id in state.approvals:
+                raise StorageError(f"запрос {approval.id} уже существует", approval_id=approval.id)
+            if approval.task_id not in known:
+                raise StorageError(f"запрос {approval.id}: задачи {approval.task_id} нет")
+        for key, (_, expected) in self._approvals.saved.items():
+            stored = state.approvals.get(key)
+            if key not in self._approvals.added and (
+                stored is None or ApprovalRequest.model_validate_json(stored).status is not expected
+            ):
+                raise ConcurrentModification(f"запрос {key} изменён другим писателем", approval_id=key)
         for key, (_, expected) in self._tasks.saved.items():
             stored = state.tasks.get(key) or self._tasks.added.get(key)
             if stored is None or Task.model_validate_json(stored).version != expected:
@@ -159,6 +191,11 @@ class InMemoryUnitOfWork:
                 state.leases.pop(key, None)
             else:
                 state.leases[key] = lease.model_dump_json()
+        for key, approval in self._approvals.added.items():
+            state.approvals[key] = approval.model_dump_json()
+        for key, (approval, _) in self._approvals.saved.items():
+            state.approvals[key] = approval.model_dump_json()
+        state.audit.extend(record.model_dump_json() for record in self._audit.appended)
 
 
 def _lease(raw: str | None) -> Lease | None:
@@ -255,3 +292,56 @@ class _Leases:
             raise ConcurrentModification(f"аренда задачи {task_id} изменилась", task_id=task_id)
         original = self.changes[task_id][1] if task_id in self.changes else expected
         self.changes[task_id] = (lease, original)
+
+
+class _Approvals:
+    def __init__(self, uow: InMemoryUnitOfWork) -> None:
+        self._uow = uow
+        self.added: dict[str, ApprovalRequest] = {}
+        self.saved: dict[str, tuple[ApprovalRequest, ApprovalStatus]] = {}
+
+    def add(self, approval: ApprovalRequest) -> None:
+        if approval.id in self.added or approval.id in self._uow.snapshot().approvals:
+            raise StorageError(f"запрос {approval.id} уже существует", approval_id=approval.id)
+        self.added[approval.id] = approval
+
+    def get(self, approval_id: str) -> ApprovalRequest:
+        if approval_id in self.saved:
+            return self.saved[approval_id][0]
+        if approval_id in self.added:
+            return self.added[approval_id]
+        raw = self._uow.snapshot().approvals.get(approval_id)
+        if raw is None:
+            raise ApprovalNotFound(f"запрос подтверждения {approval_id} не найден", approval_id=approval_id)
+        return ApprovalRequest.model_validate_json(raw)
+
+    def save(self, approval: ApprovalRequest, *, expected: ApprovalStatus) -> None:
+        current = self.get(approval.id)
+        if current.status is not expected:
+            raise ConcurrentModification(
+                f"запрос {approval.id}: статус {current.status}, ожидался {expected}", approval_id=approval.id
+            )
+        first = self.saved[approval.id][1] if approval.id in self.saved else expected
+        self.saved[approval.id] = (approval, first)
+
+    def for_task(self, task_id: TaskId) -> list[ApprovalRequest]:
+        keys = {*self._uow.snapshot().approvals, *self.added}
+        found = [self.get(key) for key in keys]
+        return sorted(
+            (item for item in found if item.task_id == task_id), key=lambda item: child_number(item.id)
+        )
+
+
+class _Audit:
+    def __init__(self, uow: InMemoryUnitOfWork) -> None:
+        self._uow = uow
+        self.appended: list[AuditRecord] = []
+
+    def append(self, record: AuditRecord) -> None:
+        self.appended.append(record)
+
+    def list(self, *, task_id: TaskId | None = None) -> list[AuditRecord]:
+        stored = [AuditRecord.model_validate_json(raw) for raw in self._uow.stored_audit()]
+        return [
+            record for record in [*stored, *self.appended] if task_id is None or record.task_id == task_id
+        ]

@@ -141,7 +141,7 @@ class Tool(Protocol[I, O]):
 
 | Вызов | Зона | Оценка | Решение по умолчанию |
 | --- | --- | --- | --- |
-| `fs.delete("C:\projects\gofra\tmp\temp.txt")` | project, 1 файл | MEDIUM (в корзину Jarvis, обратимо) | разрешено |
+| `fs.delete("C:\projects\gofra\tmp\temp.txt")` | project, 1 файл | MEDIUM (в корзину Jarvis, обратимо) | разрешено, если задача не заражена недоверенным контентом; иначе подтверждение |
 | `fs.delete("C:\projects\gofra\tmp")` | project, папка, 14 файлов | HIGH | подтверждение |
 | `fs.delete("C:\Users\me\Documents\report.docx")` | user_docs | HIGH | подтверждение |
 | `fs.delete("C:\Users")` | system / профили пользователей | CRITICAL | запрет |

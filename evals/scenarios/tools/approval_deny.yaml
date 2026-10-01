@@ -1,0 +1,19 @@
+# Человек отказал: стадия получает отказ как результат, файл не читается.
+id: tool.approval_deny
+category: tools
+input: "scripted: прочитай server.pem"
+client: {approval: deny}
+files:
+  keys/server.pem: "-----BEGIN CERTIFICATE-----"
+script:
+  - {status: ROUTING, next: EXECUTING, route: direct}
+  - status: EXECUTING
+    next: VERIFYING
+    tool: {id: filesystem.read_text, arguments: {path: keys/server.pem}, expect: denied}
+  - {status: VERIFYING, next: COMPLETED, answer: "пользователь не разрешил"}
+expect:
+  status: COMPLETED
+  transitions: [ROUTING, EXECUTING, WAITING_CONFIRMATION, EXECUTING, VERIFYING, COMPLETED]
+  tool_events: [tool.previewed, policy.decided, approval.requested, approval.resolved, policy.decided]
+  tool_outcomes: [denied]
+  rules: [approval.denied]

@@ -1,12 +1,17 @@
 """Трасса, уникальность ID, атомарность контрольной точки и детерминизм прогона."""
 
+from datetime import UTC, datetime
+
 import pytest
+from pydantic import JsonValue
 
 from jarvis.adapters.clock import ManualClock
 from jarvis.adapters.memory import InMemoryStorage
+from jarvis.core.trace import normalize_events
 from jarvis.domain.errors import StorageError
+from jarvis.domain.ids import TaskId
 from jarvis.domain.states import ALLOWED_TRANSITIONS, TaskStatus
-from jarvis.domain.trace import EventKind
+from jarvis.domain.trace import EventKind, TraceEvent
 from jarvis.evals.scenario import ScriptStep
 from tests.helpers import S, agent_prefix, request, scripted, step, transitions
 
@@ -103,3 +108,32 @@ async def test_same_scenario_gives_identical_runs() -> None:
     first = await run_once()
     second = await run_once()
     assert first == second
+
+
+def test_normalization_drops_measurements_and_aliases_run_folders() -> None:
+    def finished(root: str, duration: int) -> TraceEvent:
+        payload: dict[str, JsonValue] = {
+            "call_id": "task_1.call_1",
+            "status": "succeeded",
+            "duration_ms": duration,
+            "output": {"path": f"{root}/workspace"},
+            "output_bytes": 40 + duration,
+            "error": {"message": f"нет пути {root}/x"},
+        }
+        return TraceEvent(
+            id="task_1.ev_2",
+            task_id=TaskId("task_1"),
+            seq=2,
+            ts=datetime.now(UTC),
+            kind=EventKind.TOOL_FINISHED,
+            payload=payload,
+        )
+
+    first = normalize_events([finished("/tmp/run-a", 3)], aliases={"/tmp/run-a": "{root}"})
+    second = normalize_events([finished("/tmp/run-b", 9)], aliases={"/tmp/run-b": "{root}"})
+    assert first == second
+    assert first[0]["payload"] == {
+        "call_id": "task_1.call_1",
+        "status": "succeeded",
+        "error": {"message": "нет пути {root}/x"},
+    }

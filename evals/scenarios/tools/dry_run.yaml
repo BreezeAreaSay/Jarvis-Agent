@@ -1,0 +1,17 @@
+# Dry run: preview и решение политики есть, исполнения нет (would_execute).
+id: tool.dry_run
+category: tools
+input: "scripted: покажи, что было бы сделано"
+dry_run: true
+files:
+  docs/a.txt: "a"
+script:
+  - {status: ROUTING, next: EXECUTING, route: direct}
+  - status: EXECUTING
+    next: VERIFYING
+    tool: {id: filesystem.list, arguments: {path: docs}, expect: dry_run}
+  - {status: VERIFYING, next: COMPLETED, answer: "план показан"}
+expect:
+  status: COMPLETED
+  tool_events: [tool.previewed, policy.decided]
+  tool_outcomes: [dry_run]

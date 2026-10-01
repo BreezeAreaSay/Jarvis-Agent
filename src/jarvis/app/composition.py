@@ -87,17 +87,19 @@ def build_app(
     clock: Clock | None = None,
     owner: str | None = None,
     tools: Sequence[Tool] | None = None,
+    extra_tools: Sequence[Tool] = (),
     zones: PolicyZones | None = None,
     home: Path | None = None,
 ) -> App:
-    """`home` — JARVIS_HOME: его данные недоступны инструментам. `tools` по умолчанию — встроенные."""
+    """`home` — JARVIS_HOME: его данные недоступны инструментам. `tools` по умолчанию — встроенные;
+    `extra_tools` добавляются к ним (инструменты eval)."""
     storage = storage if storage is not None else InMemoryStorage()
     clock = clock if clock is not None else SystemClock()
     owner = owner if owner is not None else process_owner()
     zones = zones if zones is not None else host_zones(config, home=home)
     tracer = Tracer(storage.ids, clock)
     runtime = ToolRuntime(
-        registry=ToolRegistry(builtin_tools() if tools is None else tools),
+        registry=ToolRegistry([*(builtin_tools() if tools is None else tools), *extra_tools]),
         policy=PolicyEngine(zones),
         uow=storage.unit_of_work,
         tracer=tracer,

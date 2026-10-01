@@ -11,6 +11,19 @@ from jarvis.evals.scenario import Scenario, ScenarioError, load_scenarios
 pytestmark = pytest.mark.anyio
 
 SCENARIOS = Path(__file__).resolve().parents[3] / "evals" / "scenarios"
+TOOL_SCENARIOS = (
+    "cwd", "list", "search", "stat", "process_list", "invalid_arguments", "denied", "dry_run", "cancel",
+    "timeout", "injection_data", "approval_approve", "approval_deny",
+)  # fmt: skip
+SEARCH = [
+    {"status": "ROUTING", "next": "EXECUTING", "route": "direct"},
+    {
+        "status": "EXECUTING",
+        "next": "VERIFYING",
+        "tool": {"id": "filesystem.search", "arguments": {"root": ".", "pattern": "*.pdf"}},
+    },
+    {"status": "VERIFYING", "next": "COMPLETED"},
+]
 
 
 def scenario(**fields: object) -> Scenario:
@@ -33,6 +46,7 @@ async def test_repository_scenarios_pass() -> None:
         "runtime.budget_steps",
         "runtime.cancel",
         "runtime.fatal_error",
+        *(f"tool.{name}" for name in TOOL_SCENARIOS),
     }
     report = await run_scenarios(scenarios, JarvisConfig())
     assert report.passed, [result.problems for result in report.results if not result.passed]
@@ -135,3 +149,62 @@ async def test_scenario_budget_limits_the_task() -> None:
         JarvisConfig(),
     )
     assert result.passed, result.problems
+
+
+async def test_unmet_tool_expectations_are_reported() -> None:
+    result = await run_scenario(
+        scenario(
+            files={"a.pdf": "", "b.txt": ""},
+            script=SEARCH,
+            expect={
+                "status": "COMPLETED",
+                "tool_events": ["tool.previewed", "policy.decided"],
+                "tool_outcomes": ["denied"],
+                "rules": ["zone.internal"],
+                "found": ["b.txt"],
+            },
+        ),
+        JarvisConfig(),
+    )
+    assert not result.passed
+    assert [problem.split(" ")[0] for problem in result.problems] == [
+        "события",
+        "итоги",
+        "правила",
+        "найдено",
+    ]
+    assert "найдено ['a.pdf'], ожидалось ['b.txt']" in result.problems
+
+
+async def test_tool_step_outcome_mismatch_fails_the_task() -> None:
+    call = {"id": "filesystem.search", "arguments": {"root": ".", "pattern": "*.pdf"}, "expect": "denied"}
+    steps = [
+        SEARCH[0],
+        {"status": "EXECUTING", "next": "VERIFYING", "tool": call},
+    ]  # ждали отказ, а вызов исполнен
+    expect = {"status": "FAILED", "error_category": "script_mismatch"}
+    result = await run_scenario(scenario(files={"a.pdf": ""}, script=steps, expect=expect), JarvisConfig())
+    assert result.passed, result.problems
+
+
+async def test_each_scenario_gets_its_own_workspace() -> None:
+    first = await run_scenario(
+        scenario(files={"x.pdf": ""}, script=SEARCH, expect={"status": "COMPLETED", "found": ["x.pdf"]}),
+        JarvisConfig(),
+    )
+    second = await run_scenario(
+        scenario(files={"y.pdf": ""}, script=SEARCH, expect={"status": "COMPLETED", "found": ["y.pdf"]}),
+        JarvisConfig(),
+    )
+    assert (first.passed, second.passed) == (True, True), (first.problems, second.problems)
+
+
+@pytest.mark.parametrize("name", ["/etc/passwd", "../outside.txt", "a/../../b", "C:/x", "\\\\srv\\x"])
+def test_fixture_files_stay_inside_the_workspace(name: str) -> None:
+    with pytest.raises(ValueError, match="внутри рабочей папки"):
+        scenario(files={name: ""})
+
+
+def test_tools_are_called_only_in_executing() -> None:
+    with pytest.raises(ValueError, match="EXECUTING"):
+        scenario(script=[{"status": "ROUTING", "next": "EXECUTING", "tool": {"id": "system.cwd"}}])

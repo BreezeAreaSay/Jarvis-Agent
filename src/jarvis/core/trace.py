@@ -4,7 +4,7 @@
 переходом, который событие объясняет.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from pydantic import JsonValue
 
@@ -41,10 +41,35 @@ class Tracer:
         )
 
 
-def normalize_events(events: Sequence[TraceEvent]) -> list[dict[str, JsonValue]]:
-    """Трасса без того, что различается между прогонами (ID, время, пропуски номеров), — для
-    сравнения записанного прогона с повторным (replay) и прогонов на разных хранилищах."""
+# Замеры и живые данные: у повторного прогона они свои, а решения, правила, пути и статусы — те же.
+VOLATILE_KEYS = frozenset({"duration_ms", "expires_at", "output", "output_bytes"})
+
+
+def normalize_events(
+    events: Sequence[TraceEvent], *, aliases: Mapping[str, str] | None = None
+) -> list[dict[str, JsonValue]]:
+    """Трасса без того, что различается между прогонами (ID, время, пропуски номеров, замеры
+    вызовов инструментов), — для сравнения записанного прогона с повторным (replay) и прогонов на
+    разных хранилищах. `aliases` заменяет в строках пути окружения прогона (временную папку) метками."""
+    replacements = sorted((aliases or {}).items(), key=lambda item: -len(item[0]))
     return [
-        {"n": position, "kind": event.kind.value, "v": event.v, "payload": event.payload}
+        {
+            "n": position,
+            "kind": event.kind.value,
+            "v": event.v,
+            "payload": _stable(event.payload, replacements),
+        }
         for position, event in enumerate(events, start=1)
     ]
+
+
+def _stable(value: JsonValue, replacements: Sequence[tuple[str, str]]) -> JsonValue:
+    if isinstance(value, str):
+        for original, alias in replacements:
+            value = value.replace(original, alias)
+        return value
+    if isinstance(value, list):
+        return [_stable(item, replacements) for item in value]
+    if isinstance(value, dict):
+        return {key: _stable(item, replacements) for key, item in value.items() if key not in VOLATILE_KEYS}
+    return value

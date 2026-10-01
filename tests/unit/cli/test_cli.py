@@ -6,6 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from jarvis.cli.main import app
+from jarvis.evals.scenario import load_scenarios
 
 SCENARIOS = Path(__file__).resolve().parents[3] / "evals" / "scenarios"
 
@@ -52,13 +53,14 @@ def test_eval_runs_scenarios_and_writes_reports(runner: CliRunner, tmp_path: Pat
     reports = tmp_path / "reports"
     result = runner.invoke(app, ["eval", str(SCENARIOS), "--report-dir", str(reports)])
     assert result.exit_code == 0, result.output
-    assert "Итого: 5 из 5" in result.output
+    count = len(load_scenarios([SCENARIOS]))
+    assert f"Итого: {count} из {count}" in result.output
     (json_report,) = reports.glob("*-scripted.json")
     (markdown_report,) = reports.glob("*-scripted.md")
     data = json.loads(json_report.read_text(encoding="utf-8"))
     assert {item["id"] for item in data["results"]} >= {"runtime.agent_path", "runtime.cancel"}
     markdown = markdown_report.read_text(encoding="utf-8")
-    assert "Прошли 5 из 5 сценариев." in markdown
+    assert f"Прошли {count} из {count} сценариев." in markdown
     assert "| `runtime.budget_steps` | ✓ | BUDGET_EXCEEDED | 2 |" in markdown
 
 

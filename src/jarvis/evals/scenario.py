@@ -1,7 +1,8 @@
-"""Формат сценария eval для механики ядра (M1).
+"""Формат сценария eval: механика ядра (M1) и инструменты (Session 3).
 
-Поля для рабочих папок, реестра, моделей и подтверждений появятся вместе с milestone, которые их
-используют; неизвестное поле — ошибка, а не тихо проигнорированная настройка.
+Сценарий с инструментами получает свою временную рабочую папку (`files`) и временные данные Jarvis;
+в аргументах вызовов `{workspace}` и `{jarvis_home}` заменяются их путями. Поля для реестра проектов и
+моделей появятся вместе с milestone, которые их используют; неизвестное поле — ошибка.
 """
 
 from collections.abc import Sequence
@@ -11,11 +12,13 @@ from typing import Literal, Self
 import yaml
 from pydantic import BaseModel, Field, JsonValue, NonNegativeInt, PositiveInt, model_validator
 
+from jarvis.domain.approvals import ApprovalDecision
 from jarvis.domain.budget import BudgetLimit, BudgetUsage
 from jarvis.domain.errors import JarvisError
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Route
 from jarvis.domain.tools import ToolOutcomeKind
+from jarvis.domain.trace import EventKind
 
 ChargeKind = Literal["steps", "tool_calls", "replans", "model_calls", "model_tokens"]
 
@@ -60,7 +63,22 @@ class ScriptStep(BaseModel, frozen=True, extra="forbid"):
 class ClientRules(BaseModel, frozen=True, extra="forbid"):
     """Что делает авто-клиент eval, пока задача выполняется."""
 
-    cancel_on_hang: bool = False
+    cancel_on_hang: bool = False  # отменить задачу, когда шаг завис или начал ждать eval.sleep
+    approval: ApprovalDecision | None = None  # как отвечать на запросы подтверждения; None — не отвечать
+
+
+# События вызова инструмента — для проверки порядка конвейера.
+TOOL_EVENTS = frozenset(
+    {
+        EventKind.TOOL_PREVIEWED,
+        EventKind.POLICY_DECIDED,
+        EventKind.APPROVAL_REQUESTED,
+        EventKind.APPROVAL_RESOLVED,
+        EventKind.TOOL_STARTED,
+        EventKind.TOOL_FINISHED,
+        EventKind.TOOL_VERIFIED,
+    }
+)
 
 
 class Expectation(BaseModel, frozen=True, extra="forbid"):
@@ -69,6 +87,10 @@ class Expectation(BaseModel, frozen=True, extra="forbid"):
     usage: dict[str, float] | None = None  # подмножество полей BudgetUsage
     error_category: str | None = None
     budget_limit: BudgetLimit | None = None
+    tool_events: list[EventKind] | None = None  # события вызовов инструментов по порядку
+    tool_outcomes: list[ToolOutcomeKind] | None = None  # итоги вызовов, полученные стадией
+    rules: list[str] | None = None  # правила последнего решения политики
+    found: list[str] | None = None  # пути из результата последнего исполненного вызова (от рабочей папки)
 
     @model_validator(mode="after")
     def _known_usage(self) -> Self:
@@ -84,8 +106,18 @@ class Scenario(BaseModel, frozen=True, extra="forbid"):
     input: str = Field(min_length=1)
     budget: dict[str, float] | None = None  # переопределение бюджета маршрутов direct, chat, agent
     client: ClientRules = ClientRules()
+    files: dict[str, str] = {}  # рабочая папка: путь → содержимое; путь с «/» на конце — папка
+    dry_run: bool = False
     script: list[ScriptStep]
     expect: Expectation
+
+    @model_validator(mode="after")
+    def _relative_files(self) -> Self:
+        for name in self.files:
+            parts = name.replace("\\", "/").split("/")
+            if name.startswith(("/", "\\")) or ":" in name or ".." in parts:
+                raise ValueError(f"файл фикстуры должен быть внутри рабочей папки: {name}")
+        return self
 
 
 def load_scenarios(paths: Sequence[Path]) -> list[Scenario]:

@@ -37,7 +37,7 @@ database, scenarios, wanted = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 (scenario,) = [item for item in load_scenarios([scenarios]) if item.id == wanted]
 with SqliteStorage(database) as storage:
     result = asyncio.run(run_scenario(scenario, JarvisConfig(), storage=storage))
-print(result.task_id, result.passed)
+print(result.task_id, result.passed, result.root)
 """
 
 HANG_FOREVER = """
@@ -84,7 +84,7 @@ async def test_task_and_trace_survive_a_process_restart(tmp_path: Path, scenario
         check=True,
         timeout=60,
     )
-    task_id, passed = finished.stdout.split()
+    task_id, passed, root = finished.stdout.split()
     assert passed == "True"
 
     # Новый процесс (этот) открывает базу заново и видит ту же задачу и ту же трассу,
@@ -96,7 +96,10 @@ async def test_task_and_trace_survive_a_process_restart(tmp_path: Path, scenario
     reference = await run_scenario(scenario, JarvisConfig(), storage=memory)
     expected = build_app(JarvisConfig(), stages={}, storage=memory).tasks.inspect(reference.task_id)
 
-    assert normalize_events(restored.events) == normalize_events(expected.events)
+    # У каждого прогона своя временная папка: в сравнении она заменена меткой.
+    assert normalize_events(restored.events, aliases={root: "{root}"}) == normalize_events(
+        expected.events, aliases={reference.root: "{root}"}
+    )
     assert restored.task.status is expected.task.status
     assert restored.task.usage.model_copy(update={"active_time_s": 0}) == expected.task.usage.model_copy(
         update={"active_time_s": 0}

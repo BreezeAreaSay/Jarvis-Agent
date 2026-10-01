@@ -1,24 +1,35 @@
-"""Прогон сценариев: временное приложение, авто-клиент, проверка ожиданий, отчёт."""
+"""Прогон сценариев: временное приложение, авто-клиент, проверка ожиданий, отчёт.
+
+Каждый сценарий получает свой временный «компьютер»: рабочую папку с файлами сценария, данные Jarvis
+и домашнюю папку пользователя. Зоны политики строятся по ним, а не по настоящему компьютеру.
+"""
 
 import asyncio
+import tempfile
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
-from jarvis.app.composition import Storage, build_app
+from jarvis.app.composition import App, Storage, build_app, host_zones
 from jarvis.config import with_overrides
+from jarvis.domain.approvals import ApprovalStatus
 from jarvis.domain.budget import BudgetUsage
 from jarvis.domain.ids import TaskId
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Origin, TaskRequest, TaskSnapshot
+from jarvis.domain.tools import ToolOutcome, ToolOutcomeKind
 from jarvis.domain.trace import EventKind, TraceEvent
-from jarvis.evals.scenario import Expectation, Scenario
+from jarvis.evals.scenario import TOOL_EVENTS, ClientRules, Expectation, Scenario, ScriptStep
 from jarvis.evals.scripted import ScriptedStages
+from jarvis.evals.tools import SleepTool
 
 SCENARIO_TIMEOUT_S = 30.0
+APPROVAL_ROUNDS = 5  # сколько раз авто-клиент отвечает на запросы подтверждения в одном сценарии
 
 
 class ScenarioResult(BaseModel, frozen=True):
@@ -30,6 +41,7 @@ class ScenarioResult(BaseModel, frozen=True):
     usage: BudgetUsage
     problems: list[str]
     duration_ms: int
+    root: str  # временная папка сценария (после прогона удалена): метка путей при сравнении трасс
 
 
 class EvalReport(BaseModel, frozen=True):
@@ -61,30 +73,42 @@ async def run_scenario(
     if scenario.budget:
         routes = ("direct", "chat", "agent")
         config = with_overrides(config, {"budgets": dict.fromkeys(routes, scenario.budget)})
-    script = ScriptedStages(scenario.script)
-    app = build_app(config, stages=script.handlers(), storage=storage)
-    task_id = app.tasks.submit(TaskRequest(text=scenario.input, origin=Origin.EVAL))
+    with tempfile.TemporaryDirectory(prefix="jarvis-eval-") as temp:
+        machine = _Machine.create(Path(temp).resolve(), scenario.files)
+        hung = asyncio.Event()  # шаг завис или инструмент eval начал ждать — клиент может отменять
+        script = ScriptedStages([machine.bind(step) for step in scenario.script], hung=hung)
+        app = build_app(
+            config,
+            stages=script.handlers,
+            storage=storage,
+            home=machine.home,
+            zones=host_zones(config, home=machine.home, user_home=machine.user),
+            extra_tools=[SleepTool(hung)],
+        )
+        request = TaskRequest(
+            text=scenario.input,
+            origin=Origin.EVAL,
+            working_directory=str(machine.workspace),
+            dry_run=scenario.dry_run,
+        )
+        task_id = app.tasks.submit(request)
 
-    problems: list[str] = []
-    try:
-        async with asyncio.timeout(timeout_s):
-            run = asyncio.create_task(app.tasks.run_until_blocked(task_id))
-            if scenario.client.cancel_on_hang:
-                hung = asyncio.create_task(script.hung.wait())
-                await asyncio.wait({run, hung}, return_when=asyncio.FIRST_COMPLETED)
-                if hung.done():
-                    app.tasks.cancel(task_id, "отмена клиентом eval")
-                hung.cancel()
-            await run
-    except TimeoutError:
-        problems.append(f"сценарий не завершился за {timeout_s} с")
+        problems: list[str] = []
+        try:
+            async with asyncio.timeout(timeout_s):
+                await _drive(app, task_id, scenario.client, hung)
+        except TimeoutError:
+            problems.append(f"сценарий не завершился за {timeout_s} с")
 
-    snapshot = app.tasks.get(task_id)
-    events = app.tasks.trace(task_id)
-    transitions = [
-        TaskStatus(str(event.payload["to"])) for event in events if event.kind is EventKind.TASK_TRANSITION
-    ]
-    problems.extend(_check(scenario.expect, snapshot, transitions, events))
+        snapshot = app.tasks.get(task_id)
+        events = app.tasks.trace(task_id)
+        transitions = [
+            TaskStatus(str(event.payload["to"]))
+            for event in events
+            if event.kind is EventKind.TASK_TRANSITION
+        ]
+        problems.extend(_check(scenario.expect, snapshot, transitions, events))
+        problems.extend(_check_tools(scenario.expect, events, script.outcomes, machine.workspace))
     if script.remaining:
         problems.append(f"не проиграно шагов сценария: {script.remaining}")
     return ScenarioResult(
@@ -96,7 +120,113 @@ async def run_scenario(
         usage=snapshot.usage,
         problems=problems,
         duration_ms=round((time.perf_counter() - started) * 1000),
+        root=str(machine.root),
     )
+
+
+@dataclass(frozen=True)
+class _Machine:
+    root: Path
+    workspace: Path
+    home: Path  # JARVIS_HOME сценария: его данные — внутренняя зона
+    user: Path  # домашняя папка пользователя: её .ssh и другие — зона секретов
+
+    @classmethod
+    def create(cls, root: Path, files: dict[str, str]) -> "_Machine":
+        machine = cls(root=root, workspace=root / "workspace", home=root / "jarvis-home", user=root / "user")
+        for folder in (machine.workspace, machine.home / "data", machine.user / ".ssh"):
+            folder.mkdir(parents=True)
+        (machine.home / "data" / "jarvis.db").write_bytes(b"SQLite format 3\x00")
+        (machine.user / ".ssh" / "id_ed25519").write_text("PRIVATE KEY", encoding="utf-8")
+        for name, content in files.items():
+            path = machine.workspace / name
+            if name.endswith("/"):
+                path.mkdir(parents=True, exist_ok=True)
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        return machine
+
+    def bind(self, step: ScriptStep) -> ScriptStep:
+        """Подставить пути этого «компьютера» в аргументы вызова."""
+        if step.tool is None:
+            return step
+        arguments = {key: self._substitute(value) for key, value in step.tool.arguments.items()}
+        return step.model_copy(update={"tool": step.tool.model_copy(update={"arguments": arguments})})
+
+    def _substitute(self, value: JsonValue) -> JsonValue:
+        if isinstance(value, str):
+            return value.replace("{workspace}", str(self.workspace)).replace("{jarvis_home}", str(self.home))
+        if isinstance(value, list):
+            return [self._substitute(item) for item in value]
+        if isinstance(value, dict):
+            return {key: self._substitute(item) for key, item in value.items()}
+        return value
+
+
+async def _drive(app: App, task_id: TaskId, client: ClientRules, hung: asyncio.Event) -> None:
+    """Авто-клиент: продвигает задачу, отменяет зависшую, отвечает на запросы подтверждения."""
+    for _ in range(APPROVAL_ROUNDS + 1):
+        run = asyncio.create_task(app.tasks.run_until_blocked(task_id))
+        if client.cancel_on_hang:
+            waiter = asyncio.create_task(hung.wait())
+            await asyncio.wait({run, waiter}, return_when=asyncio.FIRST_COMPLETED)
+            if waiter.done():
+                app.tasks.cancel(task_id, "отмена клиентом eval")
+            waiter.cancel()
+        snapshot = await run
+        if snapshot.status is not TaskStatus.WAITING_CONFIRMATION or client.approval is None:
+            return
+        pending = [item for item in app.tasks.approvals(task_id) if item.status is ApprovalStatus.PENDING]
+        if not pending:
+            return
+        app.tasks.resolve_approval(pending[-1].id, client.approval, via="eval-auto")
+
+
+def _check_tools(
+    expect: Expectation, events: list[TraceEvent], outcomes: list[ToolOutcome], workspace: Path
+) -> list[str]:
+    problems: list[str] = []
+    if expect.tool_events is not None:
+        actual = [event.kind for event in events if event.kind in TOOL_EVENTS]
+        if actual != expect.tool_events:
+            problems.append(f"события инструментов {_join(actual)}, ожидались {_join(expect.tool_events)}")
+    if expect.tool_outcomes is not None:
+        kinds = [outcome.kind for outcome in outcomes]
+        if kinds != expect.tool_outcomes:
+            problems.append(f"итоги вызовов {_join(kinds)}, ожидались {_join(expect.tool_outcomes)}")
+    if expect.rules is not None:
+        decided = [event.payload.get("rules") for event in events if event.kind is EventKind.POLICY_DECIDED]
+        last = decided[-1] if decided else None
+        if last != expect.rules:
+            problems.append(f"правила политики {last}, ожидались {expect.rules}")
+    if expect.found is not None:
+        executed = [outcome for outcome in outcomes if outcome.kind is ToolOutcomeKind.EXECUTED]
+        output = executed[-1].result.output if executed and executed[-1].result else {}
+        found = [_relative(path, workspace) for path in _paths(output)]
+        if found != expect.found:
+            problems.append(f"найдено {found}, ожидалось {expect.found}")
+    return problems
+
+
+def _paths(output: dict[str, JsonValue]) -> list[str]:
+    for key in ("matches", "entries"):
+        items = output.get(key)
+        if isinstance(items, list):
+            return [str(item["path"]) for item in items if isinstance(item, dict) and "path" in item]
+    path = output.get("path")
+    return [str(path)] if path is not None else []
+
+
+def _relative(path: str, workspace: Path) -> str:
+    try:
+        return Path(path).relative_to(workspace).as_posix() or "."
+    except ValueError:
+        return path
+
+
+def _join(items: Sequence[object]) -> str:
+    return " → ".join(str(item) for item in items) or "(нет)"
 
 
 def _check(

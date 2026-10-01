@@ -115,7 +115,7 @@ Jarvis-Agent/
 Стрелка — «импортирует».
 
 ```
-            cli        evals        bench          ← точки входа
+            cli ─────► evals        bench          ← точки входа (cli вызывает движок eval)
               \          |          /
                └──────► app ◄──────┘               ← composition root
                       /     \
@@ -164,7 +164,8 @@ include_external_packages = true
 name = "Слои"
 type = "layers"
 layers = [
-  "jarvis.cli | jarvis.evals | jarvis.bench",
+  "jarvis.cli",                          # команда `jarvis eval` вызывает движок eval
+  "jarvis.evals | jarvis.bench",
   "jarvis.app",
   "jarvis.adapters | jarvis.core | jarvis.config",
   "jarvis.ports",

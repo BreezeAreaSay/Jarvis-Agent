@@ -60,7 +60,7 @@ class Task(BaseModel):
     version: int                         # оптимистическая блокировка при сохранении
     request: TaskRequest
     status: TaskStatus
-    route: RouteDecision | None
+    route: Route | None                  # подробности решения роутера (RouteDecision) — отдельным полем с M7
     profile: str | None                  # "workspace" | "dev"
     project_id: str | None
     plan_id: PlanId | None               # текущая версия плана
@@ -390,14 +390,9 @@ FAILED (interrupted)
 
 ```python
 class TaskChanges(BaseModel, frozen=True):      # что изменить в задаче; None — не менять
-    route: RouteDecision | None = None
-    profile: str | None = None
-    project_id: str | None = None
-    new_plan: Plan | None = None
-    state: AgentState | None = None
-    usage: BudgetUsage | None = None
-    tainted: bool | None = None
-    outcome: TaskOutcome | None = None
+    route: Route | None = None           # только из ROUTING
+    answer: str | None = None            # попадает в итог при завершении
+    # с потребителями в следующих milestone: решение роутера, профиль, проект, план, AgentState, tainted
 
 class StageOutcome(BaseModel, frozen=True):
     next_status: TaskStatus
@@ -405,8 +400,13 @@ class StageOutcome(BaseModel, frozen=True):
     changes: TaskChanges
 
 class StageHandler(Protocol):
-    async def handle(self, task: Task) -> StageOutcome: ...
+    async def handle(self, task: Task, budget: BudgetMeter) -> StageOutcome: ...
 ```
+
+Расход бюджета стадия списывает через `BudgetMeter` до действия (§4). Runner забирает расход из
+счётчика и тогда, когда стадия завершилась исключением, поэтому потраченное до сбоя не теряется. Итог
+задачи (`TaskOutcome`) собирает runner при переходе в терминальное состояние: ответ — из `answer`,
+ошибка — из исключения.
 
 Стадия не меняет статус сама: она возвращает `StageOutcome`, а runner проверяет переход по таблице,
 применяет изменения и пишет их одной транзакцией. У CREATED обработчика нет (переход в ROUTING

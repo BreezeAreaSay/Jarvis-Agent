@@ -46,8 +46,8 @@ uv run jarvis --version
 | `jarvis config show [--sources]` | итоговые значения и слой, откуда пришло каждое |
 | `jarvis eval [пути] [-s ID] [--report файл.json]` | прогнать сценарии из `evals/scenarios` |
 
-Данные Jarvis лежат в `JARVIS_HOME` (по умолчанию `%LOCALAPPDATA%\Jarvis` на Windows,
-`~/.local/share/jarvis` на Linux); конфиг — `JARVIS_HOME/config/config.toml` или путь из `JARVIS_CONFIG`.
+Данные Jarvis лежат в `JARVIS_HOME` (по умолчанию `AppData\Local\Jarvis` в профиле пользователя
+на Windows, `~/.local/share/jarvis` на Linux); конфиг — `JARVIS_HOME/config/config.toml` или путь из `JARVIS_CONFIG`.
 Других переменных окружения Jarvis не читает. Пример конфига:
 
 ```toml

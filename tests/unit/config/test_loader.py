@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from jarvis.config import default_home, load_config, with_overrides
+from jarvis.config import load_config, with_overrides
+from jarvis.config.loader import default_home
 from jarvis.domain.errors import ConfigError
 from jarvis.domain.settings import JarvisConfig
 
@@ -35,10 +36,26 @@ def test_user_file_is_merged_deeply(tmp_path: Path) -> None:
 
 
 def test_runtime_layer_wins(tmp_path: Path) -> None:
-    write_config(tmp_path, "[budgets.agent]\nmax_steps = 15\n")
-    loaded = load_config(env={"JARVIS_HOME": str(tmp_path)}, runtime={"budgets": {"agent": {"max_steps": 7}}})
-    assert loaded.config.budgets.agent.max_steps == 7
-    assert loaded.sources["budgets.agent.max_steps"] == "runtime"
+    write_config(tmp_path, "[budgets.agent]\nmax_steps = 15\nmax_replans = 1\n")
+    loaded = load_config(env={"JARVIS_HOME": str(tmp_path)})
+    config = with_overrides(loaded.config, {"budgets": {"agent": {"max_steps": 7}}})
+    assert config.budgets.agent.max_steps == 7
+    assert config.budgets.agent.max_replans == 1  # остальное — из нижних слоёв
+
+
+def test_utf8_bom_is_accepted(tmp_path: Path) -> None:
+    path = tmp_path / "config" / "config.toml"
+    path.parent.mkdir()
+    path.write_bytes("\ufeff[budgets.agent]\nmax_steps = 9\n".encode())
+    assert load_config(env={"JARVIS_HOME": str(tmp_path)}).config.budgets.agent.max_steps == 9
+
+
+@pytest.mark.parametrize("table", ["[unknown]\nkey = 1\n", "[budgets.agentt]\nmax_steps = 1\n"])
+def test_unknown_table_is_blamed_on_its_layer(tmp_path: Path, table: str) -> None:
+    path = write_config(tmp_path, table)
+    with pytest.raises(ConfigError) as raised:
+        load_config(env={"JARVIS_HOME": str(tmp_path)})
+    assert f"[user:{path}]" in raised.value.message
 
 
 def test_unknown_key_is_an_error_with_its_path_and_layer(tmp_path: Path) -> None:

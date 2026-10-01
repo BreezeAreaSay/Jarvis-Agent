@@ -67,7 +67,7 @@ anyio, контракты import-linter, AST-тест архитектуры, Gi
 ## M2 — SQLite, аренды, восстановление, трасса в CLI
 
 **Входит:** `adapters.sqlite` (Unit of Work, репозитории задач и трассы, `IdAllocator`, миграции);
-порт `TaskLeases` и его реализации; восстановление при старте (активная задача с истёкшей арендой →
+аренды задач в единице работы и их правила в ядре ([ADR 0021](../adr/0021-task-leases-and-optimistic-unit-of-work.md)); восстановление при старте (активная задача с истёкшей арендой →
 FAILED `interrupted`); `TaskService.cancel` с проверкой аренды (`TaskBusy`); метрики задачи из событий;
 человекочитаемый рендер трассы; CLI `jarvis tasks`, `jarvis trace [--raw]`, `jarvis cancel`.
 

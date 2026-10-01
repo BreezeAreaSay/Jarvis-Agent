@@ -44,17 +44,25 @@ uv run jarvis --version
 | `jarvis --version` | версия |
 | `jarvis config check` | проверить конфиг: синтаксис TOML, схема, неизвестные ключи |
 | `jarvis config show [--sources]` | итоговые значения и слой, откуда пришло каждое |
-| `jarvis eval [пути] [-s ID] [--report файл.json]` | прогнать сценарии из `evals/scenarios` |
+| `jarvis eval [пути] [-s ID] [--report-dir папка]` | прогнать сценарии из `evals/scenarios`, записать отчёт `.json` и `.md` |
+| `jarvis tasks [-s running\|waiting\|finished\|<статус>] [-n N]` | последние задачи: статус, маршрут, время, причина завершения |
+| `jarvis trace <task_id> [--json]` | таймлайн задачи и метрики; `--json` — полная трасса |
+| `jarvis cancel <task_id> [--reason текст]` | отменить задачу, которую не ведёт другой живой процесс |
 
 Данные Jarvis лежат в `JARVIS_HOME` (по умолчанию `AppData\Local\Jarvis` в профиле пользователя
 на Windows, `~/.local/share/jarvis` на Linux); конфиг — `JARVIS_HOME/config/config.toml` или путь из `JARVIS_CONFIG`.
-Других переменных окружения Jarvis не читает. Пример конфига:
+Других переменных окружения Jarvis не читает. База задач — `JARVIS_HOME/data/jarvis.db` (SQLite, WAL);
+команды `tasks`, `trace`, `cancel` создают её при первом обращении и сначала переводят в FAILED
+(`interrupted`) задачи процессов, которые завершились посреди работы. Пример конфига:
 
 ```toml
 schema_version = 1
 
 [budgets.agent]
 max_steps = 15
+
+[runtime]
+lease_ttl_s = 30   # через сколько секунд задача упавшего процесса считается прерванной
 ```
 
 ## Правила кода
@@ -76,5 +84,9 @@ max_steps = 15
 `TaskService.submit` создаёт задачу в CREATED; `run_until_blocked` продвигает её тактами `TaskRunner`:
 загрузить задачу → проверить отмену и бюджет → вызвать стадию текущего состояния → проверить
 `StageOutcome` по таблице переходов → записать контрольную точку (строка задачи + событие
-`task.transition`). Стадии получают `BudgetMeter` и списывают расход до действия. В M1 стадии —
-scripted (`jarvis.evals.scripted`): так проверяется механика ядра без модели и инструментов.
+`task.transition` и события, которые его объясняют, одной транзакцией вместе с проверкой аренды).
+Стадии получают `BudgetMeter` и списывают расход до действия. Пока стадии — scripted
+(`jarvis.evals.scripted`): так проверяется механика ядра без модели и инструментов.
+
+Хранилище: `adapters.memory` (тесты, eval) и `adapters.sqlite` (CLI) проходят один набор контрактных
+тестов (`tests/contract`). Аренды и восстановление — [ADR 0021](adr/0021-task-leases-and-optimistic-unit-of-work.md).

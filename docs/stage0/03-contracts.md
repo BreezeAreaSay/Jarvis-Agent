@@ -11,8 +11,10 @@ class Clock(Protocol):
     def monotonic(self) -> float: ...
 
 class UnitOfWork(Protocol):
-    """Одна транзакция хранилища: контрольная точка задачи (строка задачи + task.transition)."""
+    """Оптимистическая транзакция (ADR 0021): чтения — один снимок, записи копятся и применяются на
+    commit() с проверкой ожиданий (версия задачи, строка аренды); расхождение — ConcurrentModification."""
     tasks: TaskRepository
+    leases: LeaseRepository
     plans: PlanRepository
     tool_calls: ToolCallRepository
     approvals: ApprovalRepository
@@ -29,17 +31,16 @@ class TaskRepository(Protocol):
     def add(self, task: Task) -> None: ...
     def get(self, task_id: TaskId) -> Task: ...                    # TaskNotFound
     def save(self, task: Task, expected_version: int) -> None: ... # ConcurrentModification
-    def list(self, *, status: set[TaskStatus] | None = None, limit: int = 50) -> list[TaskSnapshot]: ...
+    def list(self, *, statuses: Collection[TaskStatus] | None = None, limit: int | None = None) -> list[Task]: ...
 
 class IdAllocator(Protocol):                          # см. 02-domain.md §1; пишет сразу, вне UnitOfWork
     def next_task_id(self) -> TaskId: ...
     def next_child_id(self, task_id: TaskId, kind: ChildKind) -> str: ...
 
-class TaskLeases(Protocol):                           # отдельная таблица, не строка задачи
-    def acquire(self, task_id: TaskId, owner: str, ttl_s: float) -> bool: ...   # False — аренда чужая и живая
-    def renew(self, task_id: TaskId, owner: str, ttl_s: float) -> None: ...      # LeaseLost
-    def release(self, task_id: TaskId, owner: str) -> None: ...
-    def holder(self, task_id: TaskId) -> Lease | None: ...                        # живая аренда или None
+class LeaseRepository(Protocol):                      # ADR 0021; правила аренды — core.leases
+    def get(self, task_id: TaskId) -> Lease | None: ...
+    def put(self, lease: Lease, *, expected: Lease | None) -> None: ...   # сравнить и записать
+    def delete(self, task_id: TaskId, *, expected: Lease) -> None: ...
 
 class TraceRepository(Protocol):
     def append(self, events: Sequence[TraceEvent]) -> None: ...
@@ -87,7 +88,7 @@ class SkillProvider(Protocol):                      # см. §4
 
 | Порт | Реализации |
 | --- | --- |
-| `UnitOfWork`, репозитории, `IdAllocator`, `TaskLeases`, `AuditLog`, `ArtifactStore` | `adapters.memory` (тесты, M1); `adapters.sqlite` (M2; blobs — файлы по sha256) |
+| `UnitOfWork`, репозитории (с арендами), `IdAllocator`, `AuditLog`, `ArtifactStore` | `adapters.memory` (тесты, eval); `adapters.sqlite` (CLI; blobs — файлы по sha256) |
 | `ProjectStore` | `adapters.project_files` (YAML-файлы реестра) |
 | `FileSystem` | `adapters.local_fs` (HOST; WSL через `\\wsl$`, если Q2 = WSL) |
 | `ProcessRunner` | `adapters.local_process`; `adapters.fake_process` для eval |

@@ -44,6 +44,7 @@ class ErrorInfo(BaseModel, frozen=True):
 | `TaskNotFound` | `jarvis trace task_999` | нет | ошибка команды | — |
 | `TaskBusy` | `jarvis cancel` для задачи, которую ведёт другой процесс | нет | ошибка команды | состояние не меняется |
 | `LeaseLost` | процесс завис дольше срока аренды, задачу забрали | нет | FATAL для текущего запуска | состояние не меняется |
+| `TaskInterrupted` | процесс, который вёл задачу, завершился посреди работы | нет | FATAL | FAILED (`interrupted`) |
 | `ProjectRegistryError` | запись реестра не прошла схему | нет | DEGRADE | запись недоступна, остальные работают |
 | `ToolNotFound`, `ToolNotAllowed` | модель выбрала инструмент вне профиля | нет | FEEDBACK | остаётся EXECUTING |
 | `InvalidToolArguments` | аргументы не прошли схему инструмента | нет | FEEDBACK | остаётся EXECUTING |
@@ -104,6 +105,7 @@ class JarvisConfig(BaseModel, extra="forbid"):
     models: ModelsConfig                       # endpoints и назначение ролей
     model_profiles: dict[str, ModelProfile]
     budgets: BudgetsConfig                     # routing и маршруты direct, chat, agent
+    runtime: RuntimeSettings                   # lease_ttl_s — срок аренды задачи (по умолчанию 30 с)
     policy: PolicyConfig
     tools: ToolsConfig
     skills: SkillsConfig

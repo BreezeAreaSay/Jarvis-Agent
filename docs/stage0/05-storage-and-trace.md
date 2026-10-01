@@ -17,46 +17,24 @@
 Один файл БД в Stage 0 ([ADR 0003](../adr/0003-sqlite-storage.md)): переход состояния и событие трассы
 должны записываться одной транзакцией. Разделение на несколько файлов — когда объём трасс этого потребует.
 
-### Схема (эскиз DDL)
+### Схема
+
+Действующая схема — миграция [`001_initial.sql`](../../src/jarvis/adapters/sqlite/migrations/001_initial.sql)
+(M2): `schema_migrations`, `tasks`, `trace_events`, `id_counters`, `task_leases`. Столбцы задачи — только
+поля, у которых уже есть потребитель (`id`, `seq`, `version`, `status`, `route`, `request_json`,
+`budget_json`, `usage_json`, `outcome_json`, `created_at`, `updated_at`); остальное ниже — эскиз
+таблиц и столбцов следующих milestone, они добавляются новыми миграциями.
 
 ```sql
-CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
-
-CREATE TABLE tasks (
-  id             TEXT PRIMARY KEY,          -- task_42
-  seq            INTEGER NOT NULL UNIQUE,   -- 42
-  version        INTEGER NOT NULL,          -- оптимистическая блокировка
-  status         TEXT NOT NULL,
-  route          TEXT,
+CREATE TABLE tasks (                        -- столбцы следующих milestone (M5–M9)
   profile        TEXT,
   project_id     TEXT,
-  origin         TEXT NOT NULL,
   mode           TEXT NOT NULL,             -- normal | dry_run | replay_simulated | replay_live
   replay_of      TEXT REFERENCES tasks(id),
-  request_json   TEXT NOT NULL,
   route_json     TEXT,
   plan_id        TEXT,
   state_json     TEXT NOT NULL,             -- AgentState: рабочая память
-  budget_json    TEXT NOT NULL,
-  usage_json     TEXT NOT NULL,
-  tainted        INTEGER NOT NULL DEFAULT 0,
-  outcome_json   TEXT,
-  created_at     TEXT NOT NULL,
-  updated_at     TEXT NOT NULL
-);
-CREATE INDEX tasks_status ON tasks(status);
-
-CREATE TABLE id_counters (                  -- IdAllocator: пишется сразу, вне контрольной точки
-  scope TEXT NOT NULL,                      -- "task" или ID задачи
-  kind  TEXT NOT NULL,                      -- task | plan | step | mc | call | art | appr | ev
-  last  INTEGER NOT NULL,
-  PRIMARY KEY (scope, kind)
-);
-
-CREATE TABLE task_leases (                  -- кто сейчас ведёт задачу
-  task_id TEXT PRIMARY KEY REFERENCES tasks(id),
-  owner TEXT NOT NULL,                      -- pid + случайный токен процесса
-  expires_at TEXT NOT NULL
+  tainted        INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE plans (
@@ -105,15 +83,7 @@ CREATE TABLE model_calls (
   error_json TEXT, created_at TEXT NOT NULL
 );
 
-CREATE TABLE trace_events (
-  id TEXT PRIMARY KEY,                      -- task_42.ev_31
-  task_id TEXT NOT NULL REFERENCES tasks(id),
-  seq INTEGER NOT NULL,                     -- порядок внутри задачи
-  ts TEXT NOT NULL, kind TEXT NOT NULL, v INTEGER NOT NULL,
-  parent_id TEXT,                           -- для вложенности: вызов инструмента внутри шага
-  payload_json TEXT NOT NULL,               -- ≤ 4 КБ
-  UNIQUE (task_id, seq)
-);
+ALTER TABLE trace_events ADD COLUMN parent_id TEXT;   -- вложенность: вызов инструмента внутри шага (M5)
 
 CREATE TABLE audit_log (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
@@ -127,12 +97,17 @@ CREATE TABLE audit_log (
 
 Принципы:
 
-- Доступ только через порты (`UnitOfWork` и репозитории); SQL живёт в `adapters.sqlite`.
-- Аренда (`task_leases`) не даёт двум процессам вести одну задачу; `tasks.version` +
-  `save(expected_version)` — вторая линия защиты. Аренда лежит в отдельной таблице, поэтому её продление
-  не меняет `version` задачи.
-- Миграции — пронумерованные SQL-файлы; при старте применяются недостающие, перед этим делается копия БД.
-  Тест миграций прогоняет все шаги на пустой и на фикстурной базе.
+- Доступ только через порты (`UnitOfWork` и репозитории); SQL живёт в `adapters.sqlite`, без ORM.
+- Единица работы оптимистическая ([ADR 0021](../adr/0021-task-leases-and-optimistic-unit-of-work.md)):
+  чтения — один снимок, записи — короткая транзакция `BEGIN IMMEDIATE` на `commit()`, ожидания (версия
+  задачи, строка аренды) — условия в самих запросах.
+- Аренда (`task_leases`) не даёт двум процессам вести одну задачу и ограждает запись: контрольная
+  точка проходит, только если аренда та же, что держит прогон. `tasks.version` — вторая линия защиты.
+- Миграции — пронумерованные файлы `NNN_имя.sql` в пакете; каждая применяется своей транзакцией и
+  записывается в `schema_migrations`. Перед обновлением существующей базы делается копия
+  `jarvis.db.vN.bak`; база новее кода — ошибка; после миграций схема сверяется с эталоном (те же
+  миграции на пустой базе в памяти). Повреждённая или чужая база не «чинится»: команда объясняет
+  проблему и останавливается.
 - Большие данные — не в БД: артефакты и промпты лежат в blobs по sha256 (сжатые), в БД — ссылки.
 - Реестр проектов — YAML-файлы, а не таблица: источник истины — файлы пользователя.
 - В Stage 0 данные не удаляются автоматически; политика хранения появится, когда замеры покажут объём.

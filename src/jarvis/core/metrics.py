@@ -20,12 +20,14 @@ def compute_metrics(events: Sequence[TraceEvent]) -> TaskMetrics:
     end = finished or events[-1].ts
 
     active = 0.0
-    transitions = replans = failures = 0
+    transitions = replans = failures = tool_calls = 0
     state: TaskStatus | None = TaskStatus.CREATED
     since = start
     for event in events:
         if event.kind is EventKind.ERROR:
             failures += 1
+        elif event.kind is EventKind.TOOL_STARTED:
+            tool_calls += 1
         elif event.kind is EventKind.TASK_TRANSITION:
             transitions += 1
             target = _status(event.payload.get("to"))
@@ -41,6 +43,7 @@ def compute_metrics(events: Sequence[TraceEvent]) -> TaskMetrics:
         transitions=transitions,
         failures=failures,
         replans=replans,
+        tool_calls=tool_calls,
         finished=finished is not None,
     )
 

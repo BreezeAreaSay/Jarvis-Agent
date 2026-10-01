@@ -9,9 +9,9 @@ class TaskMetrics(BaseModel, frozen=True, extra="forbid"):
     transitions: NonNegativeInt  # число переходов состояния
     failures: NonNegativeInt  # события error
     replans: NonNegativeInt  # переходы в REPLANNING
-    # Источники появятся вместе с событиями вызовов модели (M3) и инструментов (M5); до тех пор — нули.
+    tool_calls: NonNegativeInt = 0  # начатые исполнения инструментов (tool.started); dry run и отказы — нет
+    # Источник появится вместе с событиями вызовов модели (Model Gateway); до тех пор — нули.
     model_calls: NonNegativeInt = 0
-    tool_calls: NonNegativeInt = 0
     prompt_tokens: NonNegativeInt = 0
     completion_tokens: NonNegativeInt = 0
     finished: bool

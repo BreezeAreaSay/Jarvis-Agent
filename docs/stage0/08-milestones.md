@@ -69,7 +69,7 @@ anyio, контракты import-linter, AST-тест архитектуры, Gi
 **Входит:** `adapters.sqlite` (Unit of Work, репозитории задач и трассы, `IdAllocator`, миграции);
 аренды задач в единице работы и их правила в ядре ([ADR 0021](../adr/0021-task-leases-and-optimistic-unit-of-work.md)); восстановление при старте (активная задача с истёкшей арендой →
 FAILED `interrupted`); `TaskService.cancel` с проверкой аренды (`TaskBusy`); метрики задачи из событий;
-человекочитаемый рендер трассы; CLI `jarvis tasks`, `jarvis trace [--raw]`, `jarvis cancel`.
+человекочитаемый рендер трассы; CLI `jarvis tasks`, `jarvis trace [--json]`, `jarvis cancel`.
 
 **DoD:**
 

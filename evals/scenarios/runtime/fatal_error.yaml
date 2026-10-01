@@ -1,0 +1,11 @@
+# Фатальная ошибка стадии: задача завершается FAILED с категорией ошибки в итоге.
+id: runtime.fatal_error
+category: runtime
+input: "scripted: планировщик падает"
+script:
+  - {status: ROUTING, next: PLANNING, route: agent, reason: "маршрут agent"}
+  - {status: PLANNING, next: EXECUTING, error: fatal, reason: "план не прошёл проверку"}
+expect:
+  status: FAILED
+  transitions: [ROUTING, PLANNING, FAILED]
+  error_category: scripted_failure

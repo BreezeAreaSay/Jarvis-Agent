@@ -64,6 +64,7 @@ class Setup:
         structured: bool = True,
         repair_attempts: int = 2,
         model_calls: int = 10,
+        max_output_tokens: int | None = None,
     ) -> None:
         self.storage = InMemoryStorage()
         self.task_id = self.storage.ids.next_task_id()
@@ -81,7 +82,9 @@ class Setup:
                 )
             )
             uow.commit()
-        caps = ModelCapabilities(structured_output=structured, context_window=16384)
+        caps = ModelCapabilities(
+            structured_output=structured, context_window=16384, max_output_tokens=max_output_tokens
+        )
         self.model = ScriptedModel(replies, capabilities=caps)
         clock = ManualClock()
         self.gateway = ModelGateway(
@@ -161,6 +164,14 @@ async def test_constrained_backend_gets_the_schema_in_the_request() -> None:
     assert setup.statuses() == ["ok"]
     assert setup.meter.usage.model_calls == 1
     assert setup.meter.usage.model_tokens > 0
+
+
+async def test_endpoint_can_override_the_role_reply_budget() -> None:
+    setup = Setup(reply(json={"color": "red"}), max_output_tokens=2048)
+    assert await setup.generate() == Color(color="red")
+    (request,) = setup.model.requests
+    assert request.max_tokens == 2048
+    assert setup.gateway.prompt_budget(EXECUTOR) == 16384 - 2048 - 400
 
 
 async def test_unconstrained_backend_sees_the_schema_in_the_prompt() -> None:

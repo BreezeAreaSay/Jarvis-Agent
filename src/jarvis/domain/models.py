@@ -28,6 +28,9 @@ class ModelCapabilities(BaseModel, frozen=True, extra="forbid"):
     # только описывается в промпте, а ответ проверяется и ремонтируется.
     structured_output: bool = False
     context_window: PositiveInt  # токенов на запрос и ответ вместе (n_ctx сервера)
+    # Необязательный лимит ответа конкретного эндпоинта. Нужен моделям, которые тратят часть
+    # ответа на внутреннее reasoning; если не задан, ядро использует бюджет роли.
+    max_output_tokens: PositiveInt | None = None
 
 
 class ModelInfo(BaseModel, frozen=True, extra="forbid"):

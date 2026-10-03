@@ -46,6 +46,10 @@ For each function call, return a json object with function name and arguments wi
 </tool_response><|im_end|>
 {{ end }}
 {{- if and (ne .Role "assistant") $last }}<|im_start|>assistant
+<think>
+
+</think>
+
 {{ end }}
 {{- end }}"""
 
@@ -55,3 +59,5 @@ PARAMETER stop <|im_end|>
 PARAMETER temperature 0
 PARAMETER top_k 20
 PARAMETER top_p 0.95
+PARAMETER num_ctx 16384
+PARAMETER num_gpu 99

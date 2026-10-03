@@ -73,6 +73,11 @@ ROLE_REQUIREMENTS: Mapping[ModelRole, RoleRequirements] = {
 }
 
 
+def reply_tokens(role: ModelRole, info: ModelInfo) -> int:
+    """Лимит ответа роли с необязательным переопределением для конкретного эндпоинта."""
+    return info.capabilities.max_output_tokens or ROLE_REQUIREMENTS[role].reply_tokens
+
+
 @dataclass(frozen=True)
 class StructuredOutput[T: BaseModel]:
     """Какой ответ нужен: модель pydantic для разбора, JSON Schema для сервера и промпта (может быть
@@ -148,7 +153,7 @@ class ModelGateway:
             request = BackendRequest(
                 messages=messages,
                 json_schema=output.schema if constrained else None,
-                max_tokens=ROLE_REQUIREMENTS[role].reply_tokens,
+                max_tokens=reply_tokens(role, backend.info),
             )
             call = _Attempt(
                 self._tracer.next_id(task_id, "mc"),
@@ -205,7 +210,7 @@ class ModelGateway:
 
     def _window(self, role: ModelRole) -> int:
         """Токенов на весь промпт: окно модели минус ответ роли."""
-        return self.capabilities(role).context_window - ROLE_REQUIREMENTS[role].reply_tokens
+        return self.capabilities(role).context_window - reply_tokens(role, self._backend(role).info)
 
     def _backend(self, role: ModelRole) -> ModelBackend:
         backend = self._backends.get(role)

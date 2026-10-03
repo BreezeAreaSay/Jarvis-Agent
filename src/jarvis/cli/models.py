@@ -15,7 +15,7 @@ from pydantic import JsonValue, ValidationError
 from jarvis.app.composition import build_app, model_backends
 from jarvis.cli.common import load_or_exit
 from jarvis.core.agent.actions import decision_output
-from jarvis.core.models.gateway import ROLE_REQUIREMENTS, check_requirements, extract_json
+from jarvis.core.models.gateway import ROLE_REQUIREMENTS, check_requirements, extract_json, reply_tokens
 from jarvis.core.timeline import clean_line
 from jarvis.domain.errors import ConfigError, ModelError
 from jarvis.domain.models import BackendRequest, BackendResponse, ChatMessage, ModelRole
@@ -160,7 +160,7 @@ async def _probe_decision(backend: ModelBackend, definitions: list[ToolDefinitio
             ChatMessage(role="user", content="Проверка связи: закончи сразу."),
         ],
         json_schema=output.schema,
-        max_tokens=ROLE_REQUIREMENTS[ModelRole.EXECUTOR].reply_tokens,
+        max_tokens=reply_tokens(ModelRole.EXECUTOR, backend.info),
     )
     try:
         response = await backend.complete(request)

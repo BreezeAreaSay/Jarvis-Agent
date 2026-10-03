@@ -1,0 +1,21 @@
+# Ollama-профиль для уже установленной локальной модели qwen3:4b.
+# Запуск: установить JARVIS_CONFIG на этот файл и оставить Ollama запущенным.
+schema_version = 1
+
+[models.endpoints.ollama4b]
+base_url = "http://127.0.0.1:11434/v1"
+model = "qwen3:4b-jarvis"
+request_timeout_s = 180
+
+[models.endpoints.ollama4b.capabilities]
+# qwen3:4b в Ollama 0.33.3 расходует ответ на reasoning; Jarvis применяет repair-путь.
+structured_output = false
+context_window = 16384
+max_output_tokens = 8192
+
+[models.endpoints.ollama4b.sampling]
+temperature = 0.0
+seed = 42
+
+[models.roles]
+executor = "ollama4b"

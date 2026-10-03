@@ -140,7 +140,7 @@ async def test_list_is_sorted_typed_and_sized(machine: Machine) -> None:
     assert output.path == str(machine.work / "docs")
     assert [(e.name, e.kind, e.size) for e in output.entries] == [
         ("a", "dir", None),
-        ("a.txt", "file", len("первый файл\n".encode())),
+        ("a.txt", "file", len(("первый файл" + os.linesep).encode())),
         ("b", "dir", None),
         ("B.txt", "file", 5),
         ("c.bin", "file", 5),
@@ -454,7 +454,7 @@ async def test_a_pipe_swapped_in_after_the_check_does_not_hang_read_text(
     import jarvis.adapters.tools.filesystem as filesystem
 
     pipe = machine.work / "pipe"
-    os.mkfifo(pipe)
+    os.mkfifo(pipe)  # pyright: ignore[reportAttributeAccessIssue]  # POSIX-only test
     # Подмена случилась уже после проверки «путь не изменился».
     monkeypatch.setattr(filesystem, "unchanged", lambda path, expect="any": Path(path))
     with pytest.raises(ToolExecutionFailed, match="не обычный файл"):

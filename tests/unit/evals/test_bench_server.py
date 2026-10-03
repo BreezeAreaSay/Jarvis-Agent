@@ -10,9 +10,11 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from jarvis.domain.models import ModelRole
+from jarvis.evals.bench import run as bench_run
 from jarvis.evals.bench.dataset import load_dataset
 from jarvis.evals.bench.report import (
     BenchReport,
@@ -108,6 +110,27 @@ def test_candidate_config_points_the_executor_at_the_server() -> None:
     assert endpoint.capabilities.structured_output
     assert endpoint.sampling.temperature == 0.0
     assert endpoint.extra_body == {"cache_prompt": True}
+
+
+def test_speed_probe_retries_a_transient_disconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = 0
+
+    def flaky_speed(_candidate: Candidate, *, repeats: int) -> Speed:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.RemoteProtocolError("server disconnected without sending a response")
+        return Speed(generation_tokens_per_s=[42.0])
+
+    monkeypatch.setattr(bench_run, "measure_speed", flaky_speed)
+    notes: list[str] = []
+    result = bench_run._measure_speed_with_retry(
+        candidate(), repeats=3, server_alive=lambda: True, notes=notes, say=lambda _message: None
+    )
+
+    assert attempts == 2
+    assert result.generation_tokens_per_s == [42.0]
+    assert "повтор выполнен" in notes[0]
 
 
 # --- лог сервера и offload

@@ -23,6 +23,7 @@ from jarvis.core import approvals
 from jarvis.core.budget import BudgetMeter
 from jarvis.core.leases import Holder, Leases
 from jarvis.core.trace import Tracer, shorten
+from jarvis.domain.agent import AgentState
 from jarvis.domain.approvals import ApprovalStatus
 from jarvis.domain.budget import Budget, BudgetUsage
 from jarvis.domain.errors import (
@@ -369,8 +370,12 @@ class TaskRunner:
         except InvalidTransition as exc:
             return self._failed(task, run, exc.to_info(), usage)
 
+        state = outcome.changes.state
         if target is task.status:
-            return self._commit(task, run, {"usage": usage}, events=[])
+            changes: dict[str, Any] = {"usage": usage}
+            if state is not None:
+                changes["state"] = state
+            return self._commit(task, run, changes, events=[])
         if route is not None:
             # Решение роутера: дальше действует бюджет маршрута, расход фазы считается с нуля.
             return self._checkpoint(
@@ -382,8 +387,11 @@ class TaskRunner:
                 route=route,
                 budget=self._budgets.for_route(route),
                 answer=outcome.changes.answer,
+                state=state,
             )
-        return self._checkpoint(task, run, target, outcome.reason, usage=usage, answer=outcome.changes.answer)
+        return self._checkpoint(
+            task, run, target, outcome.reason, usage=usage, answer=outcome.changes.answer, state=state
+        )
 
     def _has_pending_approval(self, task_id: TaskId) -> bool:
         with self._uow() as uow:
@@ -447,6 +455,7 @@ class TaskRunner:
         route: Route | None = None,
         budget: Budget | None = None,
         answer: str | None = None,
+        state: AgentState | None = None,
         error: ErrorInfo | None = None,
         explanations: Sequence[Explanation] = (),
         interruption: Interruption | None = None,
@@ -454,6 +463,8 @@ class TaskRunner:
         """Переход: задача, событие перехода и объясняющие его события — одной транзакцией."""
         check_transition(task.status, target)
         changes: dict[str, Any] = {"status": target, "usage": usage}
+        if state is not None:
+            changes["state"] = state
         if route is not None:
             changes["route"] = route
         if budget is not None:

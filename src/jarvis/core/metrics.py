@@ -1,5 +1,6 @@
 """Метрики из трассы: свёртка событий. Незнакомые виды событий пропускаются, поэтому новые события
-(вызовы модели и инструментов) добавят свои счётчики, не ломая старые трассы."""
+добавляют свои счётчики, не ломая старые трассы. Вызовы модели считаются по `model.called` (каждая
+попытка, в том числе ремонт и сбой), токены — по данным сервера."""
 
 from collections.abc import Sequence
 from datetime import datetime
@@ -20,7 +21,7 @@ def compute_metrics(events: Sequence[TraceEvent]) -> TaskMetrics:
     end = finished or events[-1].ts
 
     active = 0.0
-    transitions = replans = failures = tool_calls = 0
+    transitions = replans = failures = tool_calls = model_calls = prompt_tokens = completion_tokens = 0
     state: TaskStatus | None = TaskStatus.CREATED
     since = start
     for event in events:
@@ -28,6 +29,10 @@ def compute_metrics(events: Sequence[TraceEvent]) -> TaskMetrics:
             failures += 1
         elif event.kind is EventKind.TOOL_STARTED:
             tool_calls += 1
+        elif event.kind is EventKind.MODEL_CALLED:
+            model_calls += 1
+            prompt_tokens += _count(event.payload.get("prompt_tokens"))
+            completion_tokens += _count(event.payload.get("completion_tokens"))
         elif event.kind is EventKind.TASK_TRANSITION:
             transitions += 1
             target = _status(event.payload.get("to"))
@@ -44,6 +49,9 @@ def compute_metrics(events: Sequence[TraceEvent]) -> TaskMetrics:
         failures=failures,
         replans=replans,
         tool_calls=tool_calls,
+        model_calls=model_calls,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
         finished=finished is not None,
     )
 
@@ -54,6 +62,10 @@ def _status(value: object) -> TaskStatus | None:
         return TaskStatus(str(value))
     except ValueError:
         return None
+
+
+def _count(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
 
 
 def _seconds(start: datetime, end: datetime) -> float:

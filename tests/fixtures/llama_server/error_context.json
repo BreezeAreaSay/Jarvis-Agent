@@ -1,0 +1,9 @@
+{
+ "error": {
+  "code": 400,
+  "message": "request (18019 tokens) exceeds the available context size (8192 tokens), try increasing it",
+  "type": "exceed_context_size_error",
+  "n_prompt_tokens": 18019,
+  "n_ctx": 8192
+ }
+}

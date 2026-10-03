@@ -1,0 +1,14 @@
+{
+ "total_slots": 4,
+ "model_alias": "tiny-qwen2.gguf",
+ "model_path": "tiny-qwen2.gguf",
+ "build_info": "b1-b92761a",
+ "modalities": {
+  "vision": false,
+  "video": false,
+  "audio": false
+ },
+ "default_generation_settings": {
+  "n_ctx": 8192
+ }
+}

@@ -84,6 +84,8 @@ Jarvis-Agent/
   (аргументы, риск, постусловия), а ввод-вывод делают через порты `FileSystem` и `ProcessRunner`.
   *Session 3:* инструменты — адаптеры `jarvis/adapters/tools` (порт `jarvis.ports.tools.Tool`); в ядре
   остались реестр, Tool Runtime и политика ([ADR 0022](../adr/0022-tool-runtime-v1.md)).
+- *Session 4:* Model Gateway — `core/models` (не `core/gateway`), бэкенд — `adapters/models`
+  (не `adapters/llm_openai`), агент — `core/agent` ([ADR 0023](../adr/0023-model-gateway-v1.md)).
 - **`app/composition.py` — единственный composition root.** Никаких реестров, заполняемых побочными
   эффектами импорта: список инструментов, стадий и адаптеров собирается явно, конструкторами.
 - **Данные (грамматики, каталог команд, промпты) лежат рядом с кодом**, который их читает, и попадают в

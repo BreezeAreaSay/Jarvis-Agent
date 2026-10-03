@@ -98,6 +98,10 @@ runtime overrides   флаги CLI, параметры сценария eval    
 
 ### Схема (эскиз)
 
+> Раздел `models` реализован в Session 4 по [ADR 0023](../adr/0023-model-gateway-v1.md): `models.endpoints.<id>`
+> (`base_url` только на этом компьютере, `model`, `request_timeout_s`, `capabilities`, `sampling`,
+> `extra_body`), `models.roles`, `models.repair_attempts`; пример — в `docs/development.md`.
+
 ```python
 class JarvisConfig(BaseModel, extra="forbid"):
     schema_version: Literal[1] = 1

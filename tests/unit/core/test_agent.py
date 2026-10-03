@@ -8,7 +8,7 @@ import pytest
 from jarvis.adapters.clock import ManualClock
 from jarvis.adapters.memory import InMemoryStorage
 from jarvis.app.composition import App, build_app
-from jarvis.core.agent.context import OMITTED, executor_prompt
+from jarvis.core.agent.context import OMITTED, executor_prompt, system_rules
 from jarvis.core.models.prompt import DATA_CLOSE, DATA_OPEN, render
 from jarvis.domain.agent import AgentState, AgentStep, Observation, ProposedAction, ToolAction
 from jarvis.domain.approvals import ApprovalDecision
@@ -375,3 +375,11 @@ def test_old_data_is_omitted_when_the_prompt_does_not_fit() -> None:
 
 def _text(prompt: Any) -> str:
     return "\n".join(message.content for message in render(prompt))
+
+
+def test_rules_describe_what_the_tools_can_do() -> None:
+    reader = FakeTool(READER).definition
+    writer = FakeTool("fake.write", effects=((EffectKind.WRITE, "{path}"),)).definition
+    assert "Инструменты только читают" in system_rules([reader])
+    assert "Инструменты только читают" not in system_rules([reader, writer])
+    assert "решает политика Jarvis" in system_rules([reader, writer])

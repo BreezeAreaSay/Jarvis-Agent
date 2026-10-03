@@ -1,0 +1,93 @@
+# Кандидаты на роль исполнителя Jarvis для ПК: i5-12400 (6P/12T), 32 GB RAM, RX 7600 8 GB, Windows 11.
+# Запуск: uv run jarvis bench run benchmarks/candidates.toml --server C:/llama.cpp/llama-server.exe
+# Порядок и смысл — benchmarks/README.md. Всё модельно-специфичное — здесь, а не в коде Jarvis.
+#
+# Как выбраны (не по популярности):
+# - instruct-модели с обучением на вызов инструментов и ответ по JSON-схеме, с русским в обучающих данных;
+# - две семьи в каждом классе, где это возможно (Qwen3.5 / Gemma 4 / Ministral 3) — чтобы сравнивать
+#   модели, а не одну линейку разных размеров;
+# - размер под 8 GB VRAM: FAST и BALANCED целиком на GPU с запасом под рабочий стол Windows,
+#   MAXIMUM PRACTICAL — MoE с малым числом активных параметров, эксперты на CPU (RAM 32 GB).
+#
+# Размеры файлов (примерно): 4B Q4 ≈ 2.7 GB, E4B Q4 ≈ 5 GB, 9B Q4 ≈ 5.7 GB, 9B Q5 ≈ 6.6 GB,
+# 8B Q4 ≈ 5 GB, 26B-A4B Q4 ≈ 16 GB, 35B-A3B Q4 ≈ 21 GB. Скачиваются один раз (кэш llama.cpp).
+# Если репозитория нет или квант назван иначе — server.log покажет ошибку загрузки; замените `hf`
+# на другой источник GGUF или на `model = "D:/models/<файл>.gguf"`.
+
+[defaults]
+server = "llama-server"   # путь к Vulkan-сборке; или --server в командной строке
+host = "127.0.0.1"
+port = 8090
+ctx = 16384               # исполнителю нужно ≥ 8192; 16k — запас под вывод инструментов
+gpu_layers = "all"        # все слои на GPU; что именно ушло на GPU — из лога, а не из этого числа
+threads = 6               # 6 производительных ядер i5-12400: для слоёв/экспертов на CPU
+batch = 2048
+ubatch = 512
+flash_attn = "on"         # Vulkan поддерживает; нужен для квантованного KV-кэша
+cache_type_k = "q8_0"
+cache_type_v = "q8_0"
+parallel = 1              # один слот: агент делает запросы по одному
+# Без режима размышлений: исполнитель отвечает одним JSON-решением за шаг. --no-mmproj: проектор
+# изображений не загружается — он занял бы VRAM, а агенту не нужен.
+extra_args = ["--reasoning", "off", "--no-mmproj"]
+temperature = 0.0
+seed = 42
+
+# --- FAST: целиком на GPU, большой запас VRAM
+
+[[candidates]]
+id = "qwen3.5-4b-q4"
+class = "fast"
+description = "Qwen3.5 4B: гибридное внимание (линейное + полное) — маленький KV-кэш и быстрый промпт; обучена на tool use"
+hf = "unsloth/Qwen3.5-4B-GGUF:Q4_K_M"
+quant = "Q4_K_M"
+
+[[candidates]]
+id = "gemma4-e4b-q4"
+class = "fast"
+description = "Gemma 4 E4B: другая семья, сильная в многоязычии (русский); вычисления как у 4B"
+hf = "ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M"
+quant = "Q4_K_M"
+
+# --- BALANCED (7–9B): целиком на GPU; Q4 против Q5 на основном размере
+
+[[candidates]]
+id = "qwen3.5-9b-q4"
+class = "balanced"
+description = "Qwen3.5 9B: старший размер, который целиком помещается в 8 GB вместе с KV-кэшем 16k"
+hf = "unsloth/Qwen3.5-9B-GGUF:Q4_K_M"
+quant = "Q4_K_M"
+
+[[candidates]]
+id = "qwen3.5-9b-q5"
+class = "balanced"
+description = "Та же модель в Q5_K_M: стоит ли качество ~0.9 GB VRAM и скорости"
+hf = "unsloth/Qwen3.5-9B-GGUF:Q5_K_M"
+quant = "Q5_K_M"
+
+[[candidates]]
+id = "ministral3-8b-q4"
+class = "balanced"
+description = "Ministral 3 8B Instruct: третья семья, обучена на function calling; обычное внимание — больший KV-кэш"
+hf = "mistralai/Ministral-3-8B-Instruct-2512-GGUF:Q4_K_M"
+quant = "Q4_K_M"
+
+# --- MAXIMUM PRACTICAL: MoE, эксперты на CPU (--cpu-moe), внимание и общие слои на GPU
+
+[[candidates]]
+id = "gemma4-26b-a4b-q4"
+class = "max"
+description = "Gemma 4 26B-A4B MoE: 4B активных параметров; эксперты (~14 GB) в RAM, остальное на GPU"
+hf = "ggml-org/gemma-4-26B-A4B-it-GGUF:Q4_K_M"
+quant = "Q4_K_M"
+cpu_moe = true
+expect_offload = "partial"
+
+[[candidates]]
+id = "qwen3.6-35b-a3b-q4"
+class = "max"
+description = "Qwen3.6 35B-A3B MoE: 3B активных; ~19 GB экспертов в RAM — проверка, тянет ли 32 GB"
+hf = "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M"
+quant = "Q4_K_M"
+cpu_moe = true
+expect_offload = "partial"

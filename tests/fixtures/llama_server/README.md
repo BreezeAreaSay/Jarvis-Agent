@@ -15,3 +15,15 @@
 | `error_context.json` | промпт длиннее окна контекста (HTTP 400) |
 | `models.json` | `GET /v1/models` |
 | `props_trimmed.json` | `GET /props` |
+
+## Логи `llama-server` (бенчмарк, `tests/unit/evals/test_bench_server.py`)
+
+| Файл | Что это |
+| --- | --- |
+| `server_log_cpu.txt` | настоящий лог загрузки с `-lv 4` (сборка CPU, крошечная модель), строки, которые разбирает бенчмарк |
+| `server_log_full_vulkan.txt` | **синтетический**: те же строки в формате Vulkan-сборки — RX 7600, все слои на GPU |
+| `server_log_moe_vulkan.txt` | **синтетический**: MoE с `--cpu-moe` — эксперты в RAM |
+| `server_log_partial_vulkan.txt` | **синтетический**: на GPU 20 из 33 слоёв |
+
+Синтетические логи нужны, потому что GPU в контейнере разработки нет; настоящий лог Vulkan появится с
+первым прогоном бенчмарка на ПК (`benchmarks/results/*/server.log`).

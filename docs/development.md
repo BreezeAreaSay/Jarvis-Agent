@@ -52,6 +52,9 @@ uv run jarvis --version
 | `jarvis cancel <task_id> [--reason текст]` | отменить задачу, которую не ведёт другой живой процесс |
 | `jarvis tools` | встроенные инструменты: ID, возможные эффекты, краткое описание |
 | `jarvis tools show <id>` | определение инструмента: описание, эффекты, цели, таймаут, схемы аргументов и результата |
+| `jarvis bench run [кандидаты.toml] [--server путь] [--only ID] [-t задача]` | бенчмарк кандидатов: запуск llama-server с параметрами кандидата, проверка GPU offload, память и скорость, датасет агентных задач, отчёты и сравнение (`benchmarks/README.md`) |
+| `jarvis bench agent [--reference] [-t задача] [--label имя]` | датасет на модели из конфига (сервер запущен вручную) или на эталонных решениях (`--reference`, проверка датасета) |
+| `jarvis bench compare <отчёты или папки>` | сравнить отчёты и применить правило выбора модели |
 
 Исполнить инструмент из CLI напрямую нельзя: вызов возможен только из стадии задачи через Tool Runtime
 (`jarvis run` принимает только текст запроса — инструменты выбирает модель, исполняет runtime).
@@ -201,3 +204,23 @@ llama.cpp `llama-server` ([ADR 0023](adr/0023-model-gateway-v1.md)); серве�
 `observations`, `answer_contains`, `data_only`. Адаптер проверяется на записанных ответах llama-server
 (`tests/fixtures/llama_server`), CLI — на заглушке сервера по настоящему HTTP
 (`tests/integration/llm_stub.py`). Решения — [ADR 0023](adr/0023-model-gateway-v1.md).
+
+## Бенчмарк модели (Session 4.5)
+
+`jarvis.evals.bench` — код бенчмарка, не продукта: `server.py` запускает `llama-server` с явными
+параметрами кандидата (`Candidate`, `server_args`), разбирает лог (`parse_server_log`) и выносит вердикт
+offload (`offload_verdict`), меряет память и скорость; `dataset.py` — датасет и условия задач;
+`agent.py` — прогон задачи по настоящему пути Jarvis во временной рабочей папке (подтверждения
+отклоняются, настоящие `~/.ssh` и `JARVIS_HOME` закрыты); `grading.py` — оценка и сводка; `report.py` —
+отчёты и правило выбора; `run.py` — сценарии прогона. Ядро о бенчмарке не знает.
+
+Проверки: `tests/unit/evals/test_bench_agent.py` (датасет, эталон на 100 %, ошибки модели, которые
+должен увидеть оценщик), `test_bench_server.py` (аргументы, логи CPU и Vulkan, offload, отчёты),
+`tests/integration/test_cli_bench.py` (CLI). Живой прогон с настоящим сервером:
+
+```bash
+JARVIS_TEST_LLAMA_SERVER=/путь/к/llama-server JARVIS_TEST_GGUF=/путь/к/model.gguf \
+    uv run pytest tests/integration/test_live_bench.py
+```
+
+Протокол прогона на ПК — `benchmarks/README.md`, методика — [ADR 0024](adr/0024-agent-benchmark.md).

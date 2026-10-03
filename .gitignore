@@ -8,3 +8,5 @@ build/
 dist/
 *.egg-info/
 evals/reports/
+# Бенчмарк: логи сервера (полные пути, сотни КБ); отчёты коммитятся после просмотра.
+benchmarks/results/**/*.log

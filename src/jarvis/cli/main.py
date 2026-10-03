@@ -1,4 +1,4 @@
-"""Точка входа `jarvis`: --version, config, eval, run, model, tasks, trace, cancel, tools."""
+"""Точка входа `jarvis`: --version, config, eval, bench, run, model, tasks, trace, cancel, tools."""
 
 import asyncio
 import io
@@ -11,6 +11,7 @@ from typing import Annotated, Any
 
 import typer
 
+from jarvis.cli.bench import bench_app
 from jarvis.cli.common import load_or_exit
 from jarvis.cli.models import model_app
 from jarvis.cli.run import run_command
@@ -33,6 +34,7 @@ app.command("tasks")(tasks_command)
 app.command("trace")(trace_command)
 app.command("cancel")(cancel_command)
 app.add_typer(tools_app, name="tools")
+app.add_typer(bench_app, name="bench")
 
 
 def _print_version(value: bool) -> None:

@@ -80,7 +80,7 @@ async def run_scenario(
         config = with_overrides(config, {"budgets": dict.fromkeys(routes, scenario.budget)})
     storage = storage if storage is not None else InMemoryStorage()
     with tempfile.TemporaryDirectory(prefix="jarvis-eval-") as temp:
-        machine = _Machine.create(Path(temp).resolve(), scenario.files)
+        machine = Machine.create(Path(temp).resolve(), scenario.files)
         hung = asyncio.Event()  # шаг завис или инструмент eval начал ждать — клиент может отменять
         script = ScriptedStages([machine.bind(step) for step in scenario.script or []], hung=hung)
         model = _model(scenario.model, machine, hung) if scenario.model is not None else None
@@ -139,14 +139,14 @@ async def run_scenario(
 
 
 @dataclass(frozen=True)
-class _Machine:
+class Machine:
     root: Path
     workspace: Path
     home: Path  # JARVIS_HOME сценария: его данные — внутренняя зона
     user: Path  # домашняя папка пользователя: её .ssh и другие — зона секретов
 
     @classmethod
-    def create(cls, root: Path, files: dict[str, str]) -> "_Machine":
+    def create(cls, root: Path, files: dict[str, str]) -> "Machine":
         machine = cls(root=root, workspace=root / "workspace", home=root / "jarvis-home", user=root / "user")
         for folder in (machine.workspace, machine.home / "data", machine.user / ".ssh"):
             folder.mkdir(parents=True)
@@ -178,7 +178,7 @@ class _Machine:
         return value
 
 
-def _model(script: ModelScript, machine: "_Machine", hung: asyncio.Event) -> ScriptedModel:
+def _model(script: ModelScript, machine: "Machine", hung: asyncio.Event) -> ScriptedModel:
     replies = [
         reply.model_copy(update={"json_": machine.substitute(reply.json_)})
         if reply.json_ is not None

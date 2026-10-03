@@ -157,6 +157,44 @@ class ApprovalClosed(JarvisError):
     category = "approval_closed"
 
 
+class ModelError(JarvisError):
+    """Сбой обращения к модели: сервер недоступен, не ответил вовремя или отклонил запрос."""
+
+    category = "model_error"
+
+
+class ModelUnavailable(ModelError):
+    """Сервер не принимает соединение или отвечает 5xx (модель ещё грузится)."""
+
+    category = "model_unavailable"
+    disposition = Disposition.RETRY
+    retryable = True
+
+
+class ModelTimeout(ModelError):
+    category = "model_timeout"
+
+
+class ModelRequestRejected(ModelError):
+    """Сервер отклонил запрос (4xx) или ответил не по протоколу: повтор не поможет."""
+
+    category = "model_request_rejected"
+
+
+class InvalidModelOutput(JarvisError):
+    """Ответ модели не прошёл схему или семантическую проверку и после всех попыток ремонта."""
+
+    category = "invalid_model_output"
+    disposition = Disposition.FEEDBACK
+
+
+class VerificationFailed(JarvisError):
+    """Итог задачи не подтверждается тем, что действительно произошло."""
+
+    category = "verification_failed"
+    disposition = Disposition.REPLAN
+
+
 class InvalidTransition(JarvisError):
     category = "invalid_transition"
 

@@ -4,11 +4,21 @@
 объект. Разделы появляются вместе с потребителем.
 """
 
-from typing import Literal
+import re
+from typing import Literal, Self
 
-from pydantic import BaseModel, PositiveFloat
+from pydantic import (
+    BaseModel,
+    Field,
+    JsonValue,
+    NonNegativeInt,
+    PositiveFloat,
+    field_validator,
+    model_validator,
+)
 
 from jarvis.domain.budget import Budget
+from jarvis.domain.models import ModelCapabilities, ModelRole
 from jarvis.domain.task import Route
 
 
@@ -77,8 +87,74 @@ class PolicySettings(BaseModel, frozen=True, extra="forbid"):
     approval_ttl_s: PositiveFloat = 1800.0  # срок запроса подтверждения
 
 
+_BASE_URL = re.compile(
+    r"(?P<scheme>https?)://(?P<host>\[[0-9a-fA-F:.]+\]|[^/:?#@\[\]\s]+)(?::(?P<port>[0-9]{1,5}))?(?:/[^?#\s]*)?"
+)
+_LOOPBACK_V4 = re.compile(r"127(?:\.[0-9]{1,3}){3}")
+_ENDPOINT_ID = re.compile(r"[a-z0-9][a-z0-9_-]*")
+
+
+def is_loopback_url(url: str) -> bool:
+    match = _BASE_URL.fullmatch(url)
+    if match is None:
+        return False
+    host = match.group("host").lower()
+    return host in ("localhost", "[::1]") or _LOOPBACK_V4.fullmatch(host) is not None
+
+
+class SamplingSettings(BaseModel, frozen=True, extra="forbid"):
+    """Параметры генерации: их читает только адаптер. None — умолчание сервера."""
+
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    top_p: float | None = Field(default=None, gt=0, le=1)
+    seed: int | None = None
+    stop: list[str] = []
+
+
+class EndpointSettings(BaseModel, frozen=True, extra="forbid"):
+    """Локальный сервер модели с OpenAI-совместимым API (llama.cpp `llama-server`)."""
+
+    backend: Literal["openai_compat"] = "openai_compat"  # единственный вид бэкенда (ADR 0023)
+    base_url: str  # "http://127.0.0.1:8080/v1"
+    model: str = Field(default="local", min_length=1)  # имя модели на сервере
+    request_timeout_s: PositiveFloat = 120.0
+    capabilities: ModelCapabilities  # объявленные; `jarvis model check` сверяет их с сервером
+    sampling: SamplingSettings = SamplingSettings()
+    # Особенности сервера и шаблона чата, например {chat_template_kwargs = {enable_thinking = false}}.
+    extra_body: dict[str, JsonValue] = {}
+
+    @field_validator("base_url")
+    @classmethod
+    def _local(cls, value: str) -> str:
+        # Промпт содержит файлы пользователя: он уходит только на этот компьютер (local-first).
+        if _BASE_URL.fullmatch(value) is None:
+            raise ValueError(f"нужен адрес вида http://127.0.0.1:8080/v1, а не {value!r}")
+        if not is_loopback_url(value):
+            raise ValueError(
+                f"сервер модели должен быть на этом компьютере (localhost, 127.0.0.1, [::1]): {value}"
+            )
+        return value.rstrip("/")
+
+
+class ModelsSettings(BaseModel, frozen=True, extra="forbid"):
+    endpoints: dict[str, EndpointSettings] = {}
+    roles: dict[ModelRole, str] = {}  # роль → ID эндпоинта; без назначения агент не запускается
+    repair_attempts: NonNegativeInt = Field(default=2, le=5)  # повторов после ответа не по схеме
+
+    @model_validator(mode="after")
+    def _known_endpoints(self) -> Self:
+        for name in self.endpoints:
+            if _ENDPOINT_ID.fullmatch(name) is None:
+                raise ValueError(f"ID эндпоинта — строчные латинские буквы, цифры, «_» и «-»: {name!r}")
+        for role, name in self.roles.items():
+            if name not in self.endpoints:
+                raise ValueError(f"роли {role} назначен неизвестный эндпоинт {name!r}")
+        return self
+
+
 class JarvisConfig(BaseModel, frozen=True, extra="forbid"):
     schema_version: Literal[1] = 1
     budgets: BudgetsSettings = BudgetsSettings()
     runtime: RuntimeSettings = RuntimeSettings()
     policy: PolicySettings = PolicySettings()
+    models: ModelsSettings = ModelsSettings()

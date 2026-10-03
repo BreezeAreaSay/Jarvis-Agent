@@ -16,6 +16,7 @@ from jarvis.domain.audit import AuditRecord
 from jarvis.domain.errors import ApprovalNotFound, ConcurrentModification, StorageError, TaskNotFound
 from jarvis.domain.ids import ChildKind, TaskId, child_id, child_number, task_id, task_number
 from jarvis.domain.lease import Lease
+from jarvis.domain.models import ModelCallRecord
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Task
 from jarvis.domain.trace import TraceEvent
@@ -29,6 +30,7 @@ class _State:
     leases: dict[TaskId, str] = field(default_factory=dict[TaskId, str])
     approvals: dict[str, str] = field(default_factory=dict[str, str])
     audit: list[str] = field(default_factory=list[str])
+    model_calls: dict[str, str] = field(default_factory=dict[str, str])
     last_task: int = 0
     last_child: dict[tuple[TaskId, ChildKind], int] = field(
         default_factory=dict[tuple[TaskId, ChildKind], int]
@@ -45,6 +47,7 @@ class _Snapshot:
     leases: dict[TaskId, str]
     approvals: dict[str, str]
     audit_count: int
+    model_calls: dict[str, str]
 
 
 class InMemoryStorage:
@@ -84,6 +87,7 @@ class InMemoryUnitOfWork:
         self._leases = _Leases(self)
         self._approvals = _Approvals(self)
         self._audit = _Audit(self)
+        self._model_calls = _ModelCalls(self)
         self._done = False
 
     @property
@@ -106,6 +110,10 @@ class InMemoryUnitOfWork:
     def audit(self) -> "_Audit":
         return self._audit
 
+    @property
+    def model_calls(self) -> "_ModelCalls":
+        return self._model_calls
+
     def stored_audit(self) -> list[str]:
         return self._state.audit[: self.snapshot().audit_count]
 
@@ -118,6 +126,7 @@ class InMemoryUnitOfWork:
                 leases=dict(state.leases),
                 approvals=dict(state.approvals),
                 audit_count=len(state.audit),
+                model_calls=dict(state.model_calls),
             )
         return self._snapshot
 
@@ -166,6 +175,11 @@ class InMemoryUnitOfWork:
                 raise StorageError(f"запрос {approval.id} уже существует", approval_id=approval.id)
             if approval.task_id not in known:
                 raise StorageError(f"запрос {approval.id}: задачи {approval.task_id} нет")
+        for call in self._model_calls.added.values():
+            if call.id in state.model_calls:
+                raise StorageError(f"вызов модели {call.id} уже записан", model_call_id=call.id)
+            if call.task_id not in known:
+                raise StorageError(f"вызов модели {call.id}: задачи {call.task_id} нет")
         for key, (_, expected) in self._approvals.saved.items():
             stored = state.approvals.get(key)
             if key not in self._approvals.added and (
@@ -196,6 +210,9 @@ class InMemoryUnitOfWork:
         for key, (approval, _) in self._approvals.saved.items():
             state.approvals[key] = approval.model_dump_json()
         state.audit.extend(record.model_dump_json() for record in self._audit.appended)
+        state.model_calls.update(
+            {key: call.model_dump_json() for key, call in self._model_calls.added.items()}
+        )
 
 
 def _lease(raw: str | None) -> Lease | None:
@@ -345,3 +362,21 @@ class _Audit:
         return [
             record for record in [*stored, *self.appended] if task_id is None or record.task_id == task_id
         ]
+
+
+class _ModelCalls:
+    def __init__(self, uow: InMemoryUnitOfWork) -> None:
+        self._uow = uow
+        self.added: dict[str, ModelCallRecord] = {}
+
+    def add(self, call: ModelCallRecord) -> None:
+        if call.id in self.added or call.id in self._uow.snapshot().model_calls:
+            raise StorageError(f"вызов модели {call.id} уже записан", model_call_id=call.id)
+        self.added[call.id] = call
+
+    def for_task(self, task_id: TaskId) -> list[ModelCallRecord]:
+        stored = [
+            ModelCallRecord.model_validate_json(raw) for raw in self._uow.snapshot().model_calls.values()
+        ]
+        found = [call for call in [*stored, *self.added.values()] if call.task_id == task_id]
+        return sorted(found, key=lambda call: child_number(call.id))

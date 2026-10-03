@@ -3,6 +3,7 @@
 import os
 import sqlite3
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -11,8 +12,12 @@ from jarvis.adapters.sqlite import Migration, SqliteStorage, storage_error
 from jarvis.adapters.sqlite import migrate as migrate_module
 from jarvis.adapters.sqlite.migrate import bundled_migrations, check_sequence
 from jarvis.app.composition import build_app
+from jarvis.domain.budget import BudgetUsage
 from jarvis.domain.errors import StorageError
-from jarvis.domain.settings import JarvisConfig
+from jarvis.domain.ids import TaskId
+from jarvis.domain.settings import BudgetsSettings, JarvisConfig
+from jarvis.domain.states import TaskStatus
+from jarvis.domain.task import Origin, Task, TaskRequest
 from tests.helpers import request
 
 V1 = Migration(
@@ -330,3 +335,41 @@ def test_full_disk_is_reported_as_such(tmp_path: Path) -> None:
             fill()
     assert "нет места" in raised.value.message
     assert "rollback" not in raised.value.message
+
+
+def test_session_3_database_is_upgraded_and_keeps_its_tasks(tmp_path: Path) -> None:
+    """База Session 3 (миграции 001–002) с задачей: после 003 задача читается, рабочей памяти у неё нет."""
+    path = tmp_path / "jarvis.db"
+    with SqliteStorage(path, migrations=bundled_migrations()[:2]):
+        pass
+    task = Task(
+        id=TaskId("task_1"),
+        version=1,
+        request=TaskRequest(text="старая задача", origin=Origin.EVAL),
+        status=TaskStatus.CREATED,
+        budget=BudgetsSettings().routing,
+        usage=BudgetUsage(),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    with sqlite3.connect(path) as conn:  # строка в том виде, в каком её писала Session 3
+        conn.execute(
+            "INSERT INTO tasks (id, seq, version, status, route, request_json, budget_json, usage_json, "
+            "outcome_json, created_at, updated_at) VALUES (?, 1, 1, ?, NULL, ?, ?, ?, NULL, ?, ?)",
+            (
+                task.id,
+                task.status.value,
+                task.request.model_dump_json(),
+                task.budget.model_dump_json(),
+                task.usage.model_dump_json(),
+                task.created_at.isoformat(),
+                task.updated_at.isoformat(),
+            ),
+        )
+    conn.close()
+    with SqliteStorage(path) as storage:
+        assert storage.schema_version == len(bundled_migrations())
+        with storage.unit_of_work() as uow:
+            assert uow.tasks.get(task.id) == task
+            assert uow.model_calls.for_task(task.id) == []
+    assert path.with_name("jarvis.db.v2.bak").is_file()

@@ -18,18 +18,21 @@ from types import TracebackType
 from typing import Self
 
 from jarvis.adapters.sqlite.migrate import Migration, bundled_migrations, migrate
+from jarvis.domain.agent import AgentState
 from jarvis.domain.approvals import ApprovalRequest, ApprovalStatus
 from jarvis.domain.audit import AuditRecord
 from jarvis.domain.budget import Budget, BudgetUsage
 from jarvis.domain.errors import ApprovalNotFound, ConcurrentModification, StorageError, TaskNotFound
 from jarvis.domain.ids import ChildKind, TaskId, child_id, child_number, task_id, task_number
 from jarvis.domain.lease import Lease
+from jarvis.domain.models import ModelCallRecord
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Route, Task, TaskOutcome, TaskRequest
 from jarvis.domain.trace import EventKind, TraceEvent
 
 _TASK_COLUMNS = (
-    "id, version, status, route, request_json, budget_json, usage_json, outcome_json, created_at, updated_at"
+    "id, version, status, route, request_json, budget_json, usage_json, outcome_json, state_json, "
+    "created_at, updated_at"
 )
 
 
@@ -185,6 +188,7 @@ class SqliteUnitOfWork:
         self._leases = _Leases(self)
         self._approvals = _Approvals(self)
         self._audit = _Audit(self)
+        self._model_calls = _ModelCalls(self)
 
     @property
     def tasks(self) -> "_Tasks":
@@ -205,6 +209,10 @@ class SqliteUnitOfWork:
     @property
     def audit(self) -> "_Audit":
         return self._audit
+
+    @property
+    def model_calls(self) -> "_ModelCalls":
+        return self._model_calls
 
     def __enter__(self) -> Self:
         return self
@@ -241,6 +249,7 @@ class SqliteUnitOfWork:
                 self._approvals.added,
                 self._approvals.saved,
                 self._audit.appended,
+                self._model_calls.added,
             )
             if any(staged):
                 with self._storage.guard():
@@ -264,7 +273,7 @@ class SqliteUnitOfWork:
             final = tasks.saved[key][0] if key in tasks.saved else task
             try:
                 conn.execute(
-                    f"INSERT INTO tasks (seq, {_TASK_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    f"INSERT INTO tasks (seq, {_TASK_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (task_number(final.id), *_task_row(final)),
                 )
             except sqlite3.IntegrityError:
@@ -275,7 +284,7 @@ class SqliteUnitOfWork:
             row = _task_row(task)
             changed = conn.execute(
                 "UPDATE tasks SET version = ?, status = ?, route = ?, request_json = ?, budget_json = ?, "
-                "usage_json = ?, outcome_json = ?, created_at = ?, updated_at = ? "
+                "usage_json = ?, outcome_json = ?, state_json = ?, created_at = ?, updated_at = ? "
                 "WHERE id = ? AND version = ?",
                 (*row[1:], key, expected),
             ).rowcount
@@ -337,6 +346,24 @@ class SqliteUnitOfWork:
                     record.model_dump_json(),
                 ),
             )
+        for call in self._model_calls.added.values():
+            try:
+                conn.execute(
+                    "INSERT INTO model_calls (id, task_id, seq, created_at, status, record_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        call.id,
+                        call.task_id,
+                        child_number(call.id),
+                        call.created_at.isoformat(),
+                        call.status,
+                        call.model_dump_json(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                if "foreign key" in str(exc).lower():
+                    raise StorageError(f"вызов модели {call.id}: задачи {call.task_id} нет") from None
+                raise StorageError(f"вызов модели {call.id} уже записан", model_call_id=call.id) from None
 
     def _open(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -384,13 +411,14 @@ def _task_row(task: Task) -> tuple[object, ...]:
         task.budget.model_dump_json(),
         task.usage.model_dump_json(),
         task.outcome.model_dump_json() if task.outcome else None,
+        task.state.model_dump_json() if task.state else None,
         task.created_at.isoformat(),
         task.updated_at.isoformat(),
     )
 
 
 def _task_from(row: tuple[object, ...]) -> Task:
-    key, version, status, route, request, budget, usage, outcome, created, updated = row
+    key, version, status, route, request, budget, usage, outcome, state, created, updated = row
     return Task(
         id=TaskId(str(key)),
         version=int(str(version)),
@@ -400,6 +428,7 @@ def _task_from(row: tuple[object, ...]) -> Task:
         budget=Budget.model_validate_json(str(budget)),
         usage=BudgetUsage.model_validate_json(str(usage)),
         outcome=TaskOutcome.model_validate_json(str(outcome)) if outcome is not None else None,
+        state=AgentState.model_validate_json(str(state)) if state is not None else None,
         created_at=datetime.fromisoformat(str(created)),
         updated_at=datetime.fromisoformat(str(updated)),
     )
@@ -598,3 +627,23 @@ class _Audit:
             *stored,
             *(record for record in self.appended if task_id is None or record.task_id == task_id),
         ]
+
+
+class _ModelCalls:
+    def __init__(self, uow: SqliteUnitOfWork) -> None:
+        self._uow = uow
+        self.added: dict[str, ModelCallRecord] = {}
+
+    def add(self, call: ModelCallRecord) -> None:
+        exists = self._uow.query("SELECT 1 FROM model_calls WHERE id = ?", (call.id,))
+        if call.id in self.added or exists:
+            raise StorageError(f"вызов модели {call.id} уже записан", model_call_id=call.id)
+        self.added[call.id] = call
+
+    def for_task(self, task_id: TaskId) -> list[ModelCallRecord]:
+        rows = self._uow.query(
+            "SELECT record_json FROM model_calls WHERE task_id = ? ORDER BY seq", (task_id,)
+        )
+        stored = [ModelCallRecord.model_validate_json(str(row[0])) for row in rows]
+        pending = [call for call in self.added.values() if call.task_id == task_id]
+        return sorted([*stored, *pending], key=lambda call: child_number(call.id))

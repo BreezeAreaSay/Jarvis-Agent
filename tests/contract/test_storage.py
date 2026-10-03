@@ -8,6 +8,7 @@ import pytest
 
 from jarvis.adapters.memory import InMemoryStorage
 from jarvis.adapters.sqlite import SqliteStorage
+from jarvis.domain.agent import AgentState, AgentStep, FinishAction, Observation, ProposedAction, ToolAction
 from jarvis.domain.approvals import ApprovalRequest, ApprovalStatus
 from jarvis.domain.audit import AuditAction, AuditRecord
 from jarvis.domain.budget import BudgetUsage
@@ -21,6 +22,7 @@ from jarvis.domain.errors import (
 )
 from jarvis.domain.ids import TaskId, child_number
 from jarvis.domain.lease import Lease
+from jarvis.domain.models import ChatMessage, ModelCallRecord, ModelRole
 from jarvis.domain.settings import BudgetsSettings
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Origin, Route, Task, TaskOutcome, TaskRequest
@@ -116,6 +118,25 @@ def test_task_round_trip_keeps_every_field(storage: Storage) -> None:
                     message="m",
                     details={"k": 1},
                 ),
+            ),
+            "state": AgentState(
+                steps=[
+                    AgentStep(
+                        proposal=ProposedAction(
+                            decision="посмотрю папку",
+                            action=ToolAction(type="tool", tool="filesystem.list", arguments={"path": "."}),
+                        ),
+                        call_id="task_1.call_1",
+                        observation=Observation(status="executed", summary="исполнен", data='{"a": "«б»"}'),
+                    ),
+                    AgentStep(problems=["нет поля decision"]),
+                    AgentStep(
+                        proposal=ProposedAction(
+                            decision="готово",
+                            action=FinishAction(type="finish", answer="ответ", evidence=["task_1.call_1"]),
+                        )
+                    ),
+                ]
             ),
             "updated_at": NOW + timedelta(seconds=5),
         }
@@ -479,3 +500,66 @@ def test_audit_is_append_only_and_ordered(storage: Storage) -> None:
     with storage.unit_of_work() as uow:
         assert uow.audit.list() == records
         assert uow.audit.list(task_id=task.id) == [records[0], records[1], records[3]]
+
+
+# --- вызовы модели
+
+
+def model_call(storage: Storage, task: Task, **changes: object) -> ModelCallRecord:
+    record = ModelCallRecord(
+        id=storage.ids.next_child_id(task.id, "mc"),
+        task_id=task.id,
+        role=ModelRole.EXECUTOR,
+        endpoint="main",
+        model="local",
+        template_id="executor.v1",
+        attempt=1,
+        prompt_sha256="p" * 64,
+        messages=[ChatMessage(role="system", content="правила"), ChatMessage(role="user", content="запрос")],
+        json_schema=True,
+        response_text='{"decision": "…"}',
+        status="ok",
+        prompt_tokens=120,
+        completion_tokens=30,
+        latency_ms=850,
+        prompt_ms=90,
+        finish_reason="stop",
+        created_at=NOW,
+    )
+    return record.model_copy(update=changes)
+
+
+def test_model_calls_are_append_only_and_ordered(storage: Storage) -> None:
+    task = add(storage)
+    other = add(storage)
+    first = model_call(storage, task)
+    failed = model_call(
+        storage,
+        task,
+        attempt=2,
+        status="error",
+        response_text=None,
+        error=ErrorInfo(
+            category="model_timeout", disposition=Disposition.FATAL, retryable=False, message="m"
+        ),
+    )
+    with storage.unit_of_work() as uow:
+        uow.model_calls.add(first)
+        uow.model_calls.add(model_call(storage, other))
+        assert uow.model_calls.for_task(task.id) == [first]  # свои записи видны до commit
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        uow.model_calls.add(failed)
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        assert uow.model_calls.for_task(task.id) == [first, failed]
+        with pytest.raises(StorageError):
+            uow.model_calls.add(first)
+
+
+def test_model_calls_of_an_unknown_task_are_rejected(storage: Storage) -> None:
+    ghost = new_task(TaskId("task_99"))
+    with storage.unit_of_work() as uow:
+        uow.model_calls.add(model_call(storage, ghost))
+        with pytest.raises(StorageError):
+            uow.commit()

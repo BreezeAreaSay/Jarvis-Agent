@@ -15,6 +15,7 @@ from jarvis.domain.approvals import ApprovalRequest, ApprovalStatus
 from jarvis.domain.audit import AuditRecord
 from jarvis.domain.ids import ChildKind, TaskId
 from jarvis.domain.lease import Lease
+from jarvis.domain.models import ModelCallRecord
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Task
 from jarvis.domain.trace import TraceEvent
@@ -88,6 +89,18 @@ class AuditLog(Protocol):
         ...
 
 
+class ModelCallRepository(Protocol):
+    """Вызовы модели: только добавление."""
+
+    def add(self, call: ModelCallRecord) -> None:
+        """Новая запись; ID уже занят — StorageError."""
+        ...
+
+    def for_task(self, task_id: TaskId) -> list[ModelCallRecord]:
+        """Вызовы задачи в порядке номеров."""
+        ...
+
+
 class UnitOfWork(Protocol):
     """Одна транзакция: всё, что записано через репозитории, применяется вместе на `commit()`.
 
@@ -109,6 +122,9 @@ class UnitOfWork(Protocol):
 
     @property
     def audit(self) -> AuditLog: ...
+
+    @property
+    def model_calls(self) -> ModelCallRepository: ...
 
     def __enter__(self) -> Self: ...
 

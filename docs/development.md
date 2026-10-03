@@ -45,13 +45,16 @@ uv run jarvis --version
 | `jarvis config check` | проверить конфиг: синтаксис TOML, схема, неизвестные ключи |
 | `jarvis config show [--sources]` | итоговые значения и слой, откуда пришло каждое |
 | `jarvis eval [пути] [-s ID] [--report-dir папка]` | прогнать сценарии из `evals/scenarios`, записать отчёт `.json` и `.md` |
+| `jarvis run "<запрос>" [--dry-run]` | выполнить запрос: модель выбирает действия, Jarvis исполняет их через Tool Runtime; подтверждения спрашивает в терминале, Ctrl+C отменяет задачу |
+| `jarvis model check [--no-probe]` | сверить модели ролей с сервером: требования, доступность, окно контекста, structured output, схема решения исполнителя |
 | `jarvis tasks [-s running\|waiting\|finished\|<статус>] [-n N]` | последние задачи: статус, маршрут, время, причина завершения |
-| `jarvis trace <task_id> [--json]` | таймлайн задачи и метрики; `--json` — полная трасса |
+| `jarvis trace <task_id> [--json] [--model-io]` | таймлайн задачи и метрики; `--json` — полная трасса; `--model-io` — промпты и ответы модели |
 | `jarvis cancel <task_id> [--reason текст]` | отменить задачу, которую не ведёт другой живой процесс |
 | `jarvis tools` | встроенные инструменты: ID, возможные эффекты, краткое описание |
 | `jarvis tools show <id>` | определение инструмента: описание, эффекты, цели, таймаут, схемы аргументов и результата |
 
-Исполнить инструмент из CLI нельзя: вызов возможен только из стадии задачи через Tool Runtime.
+Исполнить инструмент из CLI напрямую нельзя: вызов возможен только из стадии задачи через Tool Runtime
+(`jarvis run` принимает только текст запроса — инструменты выбирает модель, исполняет runtime).
 
 Данные Jarvis лежат в `JARVIS_HOME` (по умолчанию `AppData\Local\Jarvis` в профиле пользователя
 на Windows, `~/.local/share/jarvis` на Linux); конфиг — `JARVIS_HOME/config/config.toml` или путь из `JARVIS_CONFIG`.
@@ -72,6 +75,72 @@ lease_ttl_s = 30   # через сколько секунд задача упа�
 workspace_roots = ["C:/projects"]   # где запись допустима с подтверждением (инструментов записи пока нет)
 approval_ttl_s = 1800               # срок запроса подтверждения
 ```
+
+Раздел `[models]` — в «Настройке модели» ниже.
+
+## Настройка модели
+
+Jarvis работает с локальной моделью через OpenAI-совместимый HTTP API. Проверенный рантайм —
+llama.cpp `llama-server` ([ADR 0023](adr/0023-model-gateway-v1.md)); сервер должен слушать этот компьютер
+(`localhost`, `127.0.0.1`, `[::1]`): адрес в другой сети конфиг не примет — в промпт попадают ваши файлы.
+
+1. **llama.cpp.** На Windows с AMD — сборка с Vulkan из
+   [релизов llama.cpp](https://github.com/ggml-org/llama.cpp/releases) (`llama-<сборка>-bin-win-vulkan-x64.zip`);
+   на Linux можно собрать из исходников (`cmake -B build && cmake --build build --target llama-server`).
+2. **Модель** — инструктивная модель в GGUF, которая помещается в VRAM вместе с окном контекста. Основная
+   модель будет выбрана по бенчмарку (M4); для начала подойдёт модель 7–8B в квантовании Q4_K_M (≈5 ГБ)
+   с окном 16k на 8 ГБ VRAM. Если модель «размышляет» (блоки `<think>`), отключите это через
+   `extra_body` (пример ниже): ответ исполнителя ограничен 1024 токенами.
+3. **Запуск сервера:**
+
+   ```
+   llama-server -m C:\models\model.gguf -c 16384 -np 1 -ngl 99 --host 127.0.0.1 --port 8080 --jinja
+   ```
+
+   `-c` — окно контекста (не меньше 8192: требование роли executor), `-np 1` — один запрос за раз и всё
+   окно ему, `-ngl 99` — все слои на GPU, `--jinja` — шаблон чата из модели.
+4. **Конфиг** (`JARVIS_HOME/config/config.toml`):
+
+   ```toml
+   [models]
+   repair_attempts = 2              # повторов, если ответ не прошёл схему
+
+   [models.endpoints.main]
+   base_url = "http://127.0.0.1:8080/v1"
+   model = "local"                  # имя модели на сервере (llama-server его не проверяет)
+   request_timeout_s = 120
+
+   [models.endpoints.main.capabilities]
+   structured_output = true         # сервер применяет JSON Schema (у llama-server — да)
+   context_window = 16384           # не больше, чем -c сервера
+
+   [models.endpoints.main.sampling]
+   temperature = 0.2
+   # seed = 1
+
+   # [models.endpoints.main.extra_body]          # особенности сервера и шаблона чата
+   # chat_template_kwargs = { enable_thinking = false }
+
+   [models.roles]
+   executor = "main"
+   ```
+
+5. **Проверка:** `jarvis model check` — сервер отвечает, окно контекста совпадает с объявленным, проба
+   structured output и проба настоящей схемы решения исполнителя проходят; печатает задержку и скорость.
+6. **Запуск:** `jarvis run "какие файлы лежат в этой папке?"` в нужной папке; ход задачи — строками
+   `· шаг N: …`, подтверждения — вопросом `Разрешить? [y/N]`, подробности — `jarvis trace task_N`
+   и `jarvis trace task_N --model-io`.
+
+| Симптом | Что делать |
+| --- | --- |
+| `сервер модели недоступен` | сервер не запущен или другой порт в `base_url` |
+| `exceeds the available context size` | увеличить `-c` сервера или уменьшить `context_window` |
+| `объявлен structured_output, но ответ не по схеме` | сервер не применяет JSON Schema: `structured_output = false` (схема пойдёт в промпт) |
+| `окно контекста N токенов, нужно не меньше 8192` | запустить сервер с `-c 8192` или больше |
+
+Живой тест (в CI пропускается): `JARVIS_TEST_LLM_URL=http://127.0.0.1:8080/v1 uv run pytest tests/integration/test_live_model.py`.
+Другие OpenAI-совместимые серверы (LM Studio, Ollama) должны работать через тот же адаптер, но не
+проверялись.
 
 ## Правила кода
 
@@ -115,3 +184,20 @@ approval_ttl_s = 1800               # срок запроса подтвержд
 постусловиями, регистрация в `builtin_tools()`, пример в `tests/contract/test_tool_contract.py`.
 В unit-тестах — `tests/fakes.FakeTool`, в интеграционных — временные папки.
 Решения — [ADR 0022](adr/0022-tool-runtime-v1.md).
+
+## Как устроен агент (Session 4)
+
+`jarvis run` создаёт задачу; ROUTING и PLANNING пока передают её агенту без модели. Такт EXECUTING
+(`core.agent.stages.Executor`): шаг бюджета → промпт `executor.v1` (`core.agent.context`: правила,
+инструменты, запрос, история; результаты вызовов — только блоками DATA) → `ModelGateway.generate`
+(`core.models.gateway`: схема решения из реестра инструментов, разбор, проверка, ремонт, бюджет, запись
+`model_calls` и `model.called`) → действие `tool` уходит в `ToolRuntime.call`, итог становится
+наблюдением в `Task.state`; действие `finish` ведёт в VERIFYING, где ответ проверяется по исполненным
+вызовам. Модель ничего не исполняет сама: её выход — проверенный JSON.
+
+Бэкенды моделей — `jarvis/adapters/models` (создаёт только `app/composition.py`); в тестах и eval —
+`jarvis.evals.models.ScriptedModel` (реплики по порядку). Сценарий eval с полем `model` ведут настоящие
+стадии агента со scripted-моделью (`evals/scenarios/agent`, `evals/scenarios/model`); ожидания
+`observations`, `answer_contains`, `data_only`. Адаптер проверяется на записанных ответах llama-server
+(`tests/fixtures/llama_server`), CLI — на заглушке сервера по настоящему HTTP
+(`tests/integration/llm_stub.py`). Решения — [ADR 0023](adr/0023-model-gateway-v1.md).

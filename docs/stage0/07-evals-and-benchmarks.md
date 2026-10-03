@@ -104,6 +104,10 @@ README-инъекцией, папка `tmp` с `.tmp`-файлами. Для liv
 
 ## 4. Аппаратный бенчмарк
 
+> **Реализовано в Session 4.5** с отступлениями — [ADR 0024](../adr/0024-agent-benchmark.md): команды
+> `jarvis bench run | agent | compare`, кандидаты — `benchmarks/candidates.toml`, датасет агентных задач —
+> `benchmarks/agent/dataset.yaml`, протокол прогона — `benchmarks/README.md`. Ниже — исходный план.
+
 Отдельная команда `jarvis bench hardware` (M4). Она сама запускает `llama-server` для каждого кандидата —
 это код бенчмарка, а не продукта.
 

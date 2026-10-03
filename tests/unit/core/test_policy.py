@@ -1,6 +1,8 @@
 """Policy Engine v1: решение — чистая функция вызова, preview и зон; самое строгое правило побеждает."""
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from jarvis.core.policy import PolicyEngine, PolicyZones
 from jarvis.domain.ids import TaskId
@@ -158,3 +160,33 @@ def test_windows_path_forms_that_dodge_zones_are_denied(resource: str) -> None:
 def test_relative_posix_path_is_denied_but_named_resources_are_not_paths() -> None:
     assert decide((EffectKind.READ, "relative/notes.txt")) == (DENY, ["path.unsupported_form"])
     assert decide((EffectKind.READ, "process-table")) == (ALLOW, ["effect.read"])
+
+
+SIDE_EFFECTS = [kind for kind in EffectKind if kind is not EffectKind.READ]
+RESOURCES = st.one_of(
+    st.sampled_from(
+        [
+            "/home/u/work/a.txt",
+            "/home/u/work",
+            "/tmp/x",
+            "/home/u/.ssh/id_rsa",
+            "process-table",
+            "example.com",
+        ]
+    ),
+    st.text(min_size=1, max_size=40),
+)
+
+
+@given(
+    st.lists(st.tuples(st.sampled_from(SIDE_EFFECTS), RESOURCES), min_size=1, max_size=4),
+    st.lists(st.tuples(st.just(EffectKind.READ), RESOURCES), max_size=3),
+)
+def test_a_call_with_side_effects_is_never_allowed_without_a_human(
+    side: list[tuple[EffectKind, str]], reads: list[tuple[EffectKind, str]]
+) -> None:
+    """Инвариант v1: побочный эффект — отказ или подтверждение человеком. Поэтому данные, которые
+    модель прочитала (недоверенный контент), не могут привести к эффекту без человека, даже пока
+    признака «задача заражена» нет (ADR 0006, ADR 0023): он понадобится первому разрешённому эффекту."""
+    outcome, _ = decide(*side, *reads)
+    assert outcome in (DENY, ASK)

@@ -10,8 +10,7 @@ class TaskMetrics(BaseModel, frozen=True, extra="forbid"):
     failures: NonNegativeInt  # события error
     replans: NonNegativeInt  # переходы в REPLANNING
     tool_calls: NonNegativeInt = 0  # начатые исполнения инструментов (tool.started); dry run и отказы — нет
-    # Источник появится вместе с событиями вызовов модели (Model Gateway); до тех пор — нули.
-    model_calls: NonNegativeInt = 0
+    model_calls: NonNegativeInt = 0  # попытки вызова модели (model.called)
     prompt_tokens: NonNegativeInt = 0
     completion_tokens: NonNegativeInt = 0
     finished: bool

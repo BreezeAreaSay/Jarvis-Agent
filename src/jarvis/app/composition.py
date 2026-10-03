@@ -1,8 +1,10 @@
 """Сборка приложения (01-structure.md §6): единственное место, где создаются адаптеры.
 
-Стадии задачи передаёт вызывающий (eval и тесты — scripted-стадии); настоящие стадии появятся со
-своими milestone. Стадиям, которые вызывают инструменты, нужен Tool Runtime — их передают фабрикой,
-которая его получает. Хранилище по умолчанию — в памяти; CLI открывает SQLite через `open_storage`.
+По умолчанию задачу ведёт агент: стадии из `core.agent` с Model Gateway над бэкендами моделей из
+конфига (или переданными — scripted-модель в eval и тестах). Вызывающий может передать свои стадии
+(scripted-сценарии, команды, которые задачи не выполняют); стадиям, которые вызывают инструменты,
+нужен Tool Runtime — их передают фабрикой, которая его получает. Хранилище по умолчанию — в памяти;
+CLI открывает SQLite через `open_storage`.
 """
 
 import os
@@ -14,19 +16,24 @@ from pathlib import Path
 
 from jarvis.adapters.clock import SystemClock
 from jarvis.adapters.memory import InMemoryStorage
+from jarvis.adapters.models import OpenAICompatibleBackend
 from jarvis.adapters.sqlite import SqliteStorage
 from jarvis.adapters.tools import HOST, OS_FAMILY, builtin_tools
+from jarvis.core.agent.stages import agent_stages
 from jarvis.core.approvals import Approvals
 from jarvis.core.leases import Leases
+from jarvis.core.models.gateway import ModelGateway
 from jarvis.core.policy import PolicyEngine, PolicyZones
 from jarvis.core.runner import StageHandler, TaskRunner
 from jarvis.core.service import TaskService
 from jarvis.core.tools.registry import ToolRegistry
 from jarvis.core.tools.runtime import ToolRuntime
 from jarvis.core.trace import Tracer
+from jarvis.domain.models import ModelRole
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
 from jarvis.ports.clock import Clock
+from jarvis.ports.models import ModelBackend
 from jarvis.ports.tools import Tool
 
 Storage = InMemoryStorage | SqliteStorage
@@ -67,6 +74,15 @@ class App:
     config: JarvisConfig
     tasks: TaskService
     tools: ToolRuntime
+    models: ModelGateway | None  # есть, когда задачу ведёт агент
+
+
+def model_backends(config: JarvisConfig) -> dict[ModelRole, ModelBackend]:
+    """Бэкенды ролей по конфигу: у каждой роли — свой эндпоинт."""
+    endpoints = config.models.endpoints
+    return {
+        role: OpenAICompatibleBackend(name, endpoints[name]) for role, name in config.models.roles.items()
+    }
 
 
 def database_path(home: Path) -> Path:
@@ -110,7 +126,8 @@ def _canonical(path: Path) -> str:
 def build_app(
     config: JarvisConfig,
     *,
-    stages: Stages | StagesFactory,
+    stages: Stages | StagesFactory | None = None,
+    models: Mapping[ModelRole, ModelBackend] | None = None,
     storage: Storage | None = None,
     clock: Clock | None = None,
     owner: str | None = None,
@@ -120,8 +137,9 @@ def build_app(
     home: Path | None = None,
     config_file: Path | None = None,
 ) -> App:
-    """`home` — JARVIS_HOME: его данные недоступны инструментам. `tools` по умолчанию — встроенные;
-    `extra_tools` добавляются к ним (инструменты eval)."""
+    """`stages` не задан — задачу ведёт агент, модели — `models` или из конфига (ConfigError, если
+    модель не подходит роли). `home` — JARVIS_HOME: его данные недоступны инструментам. `tools` по
+    умолчанию — встроенные; `extra_tools` добавляются к ним (инструменты eval)."""
     storage = storage if storage is not None else InMemoryStorage()
     clock = clock if clock is not None else SystemClock()
     owner = owner if owner is not None else process_owner()
@@ -139,6 +157,16 @@ def build_app(
         leases=leases,
         protected_roots=(*zones.internal, *zones.secrets),
     )
+    gateway: ModelGateway | None = None
+    if stages is None:
+        gateway = ModelGateway(
+            backends=models if models is not None else model_backends(config),
+            uow=storage.unit_of_work,
+            tracer=tracer,
+            clock=clock,
+            repair_attempts=config.models.repair_attempts,
+        )
+        stages = agent_stages(gateway=gateway, tools=runtime, uow=storage.unit_of_work, tracer=tracer)
     runner = TaskRunner(
         stages=stages(runtime) if callable(stages) else stages,
         uow=storage.unit_of_work,
@@ -157,4 +185,4 @@ def build_app(
         leases=leases,
         approvals=Approvals(uow=storage.unit_of_work, tracer=tracer, clock=clock),
     )
-    return App(config=config, tasks=tasks, tools=runtime)
+    return App(config=config, tasks=tasks, tools=runtime, models=gateway)

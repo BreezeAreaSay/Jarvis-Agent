@@ -97,6 +97,28 @@ def _render_event(event: TraceEvent, tz: tzinfo) -> list[str]:
         case EventKind.TOOL_VERIFIED:
             verdict = "passed" if payload.get("passed") else "FAILED"
             return [f"{time} verify {verdict}  {payload.get('call_id')}"]
+        case EventKind.MODEL_CALLED:
+            tokens = ""
+            if payload.get("prompt_tokens") is not None or payload.get("completion_tokens") is not None:
+                tokens = f"  {payload.get('prompt_tokens')}+{payload.get('completion_tokens')} токенов"
+            latency = f"  {payload['latency_ms']} мс" if payload.get("latency_ms") is not None else ""
+            lines = [
+                f"{time} model {payload.get('role')} {payload.get('status')}  {payload.get('call_id')}"
+                f"  попытка {payload.get('attempt')}{tokens}{latency}"
+            ]
+            problems = payload.get("problems")
+            if isinstance(problems, list):
+                lines.extend(f"{_INDENT}{_clean(problem)}" for problem in problems)
+            error = payload.get("error")
+            if isinstance(error, dict):
+                lines.append(f"{_INDENT}{error.get('category')}: {_clean(error.get('message'))}")
+            return lines
+        case EventKind.ACTION_PROPOSED:
+            target = payload.get("tool") if payload.get("type") == "tool" else "ответ"
+            return [
+                f"{time} STEP {payload.get('step')}  {payload.get('type')} {_clean(target)}",
+                f"{_INDENT}{_quote(payload.get('decision'))}",
+            ]
         case _:  # вид события из более новой версии: показать как есть
             return [f"{time} {event.kind}", f"{_INDENT}{_clean(json.dumps(payload, ensure_ascii=False))}"]
 

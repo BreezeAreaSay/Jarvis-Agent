@@ -3,8 +3,14 @@ from datetime import UTC
 import pytest
 
 from jarvis.adapters.clock import ManualClock
+from jarvis.adapters.memory import InMemoryStorage
+from jarvis.app.composition import build_app
 from jarvis.core.timeline import render_timeline
 from jarvis.domain.approvals import ApprovalDecision
+from jarvis.domain.models import ModelRole
+from jarvis.domain.settings import JarvisConfig
+from jarvis.evals.models import ModelReply, ScriptedModel
+from tests.fakes import FakeTool
 from tests.helpers import S, approval_step, budget_config, request, scripted, step
 
 pytestmark = pytest.mark.anyio
@@ -97,3 +103,33 @@ async def test_control_characters_from_data_are_escaped() -> None:
     assert "\x1b" not in text
     assert "\x07" not in text
     assert "request=«имя\\x1b[31mКРАСНОЕ\\x07»" in text
+
+
+async def test_agent_steps_in_the_timeline() -> None:
+    call = {"type": "tool", "tool": "fake.read", "arguments": {"path": "/data/a.txt"}}
+    done = {"type": "finish", "answer": "готово", "evidence": ["task_1.call_1"]}
+    model = ScriptedModel(
+        [
+            ModelReply(text="не JSON"),
+            ModelReply.model_validate({"json": {"decision": "посмотрю\x1b[31m файл", "action": call}}),
+            ModelReply.model_validate({"json": {"decision": "отвечаю", "action": done}}),
+        ]
+    )
+    app = build_app(
+        JarvisConfig(),
+        models={ModelRole.EXECUTOR: model},
+        storage=InMemoryStorage(),
+        clock=ManualClock(),
+        tools=[FakeTool("fake.read")],
+    )
+    task_id = app.tasks.submit(request("что в файле?"))
+    await app.tasks.run_until_blocked(task_id)
+    inspection = app.tasks.inspect(task_id)
+    text = render_timeline(inspection.task, inspection.events, inspection.metrics, tz=UTC)
+    assert "00:00:00 model executor invalid  task_1.mc_1  попытка 1  " in text
+    assert "          ответ — не JSON: Expecting value (символ 0)\n" in text
+    assert "00:00:00 STEP 1  tool fake.read\n          «посмотрю\\x1b[31m файл»\n" in text
+    assert "00:00:00 STEP 2  finish ответ\n          «отвечаю»\n" in text
+    assert inspection.metrics.model_calls == 3
+    assert inspection.metrics.prompt_tokens > 0
+    assert "вызовов модели 3 · инструментов 1 · токенов " in text

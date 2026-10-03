@@ -13,11 +13,12 @@ FORBIDDEN_MODULES = {
 
 PROGRAM = """
 import importlib, json, pkgutil, sys
+baseline = set(sys.modules)
 import jarvis.domain, jarvis.ports, jarvis.core
 for package in (jarvis.domain, jarvis.ports, jarvis.core):
     for module in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
         importlib.import_module(module.name)
-print(json.dumps(sorted(sys.modules)))
+print(json.dumps(sorted(set(sys.modules) - baseline)))
 """
 
 

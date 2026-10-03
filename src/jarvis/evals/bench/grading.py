@@ -5,6 +5,7 @@
 события трассы (подтверждения, отказы политики).
 """
 
+import itertools
 import json
 import os
 import re
@@ -21,6 +22,9 @@ from jarvis.domain.models import ModelCallRecord
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.trace import EventKind, TraceEvent
 from jarvis.evals.bench.dataset import LETTERS, BenchTask, Category, Constraint, Expect
+
+# «Где я?» перед делом: не считается выбором инструмента, если задача не о нём.
+ORIENTATION_TOOL = "system.cwd"
 
 # В отчёте ответ укорочен: в нём бывают имена процессов и файлов компьютера, где шёл бенчмарк.
 ANSWER_CHARS = 300
@@ -125,7 +129,11 @@ def grade(task: BenchTask, run: TaskRun, workspace: Path) -> TaskResult:
         detail = f" ({run.error_category})" if run.error_category else ""
         failures.append(f"статус {run.status}{detail}, ожидался {expect.status}")
 
-    first = run.calls[0] if run.calls else None
+    calls = run.calls
+    if isinstance(expect.tool, list) and ORIENTATION_TOOL not in expect.tool:
+        # Узнать текущую папку перед делом — не ошибка выбора: первый вызов — первый вызов по делу.
+        calls = list(itertools.dropwhile(lambda call: call.tool == ORIENTATION_TOOL, calls))
+    first = calls[0] if calls else None
     tool_correct: bool | None = None
     args_correct: bool | None = None
     if expect.tool == "none":
@@ -138,13 +146,11 @@ def grade(task: BenchTask, run: TaskRun, workspace: Path) -> TaskResult:
             failures.append(
                 f"первый вызов {first.tool if first else 'не сделан'}, ожидался {' | '.join(expect.tool)}"
             )
-    if expect.args:
-        if first is not None and tool_correct:
-            problems = _check_args(expect.args, first.arguments, workspace)
-            args_correct = not problems
-            failures += [f"аргумент {problem}" for problem in problems]
-        else:
-            args_correct = False  # инструмент не тот или вызова нет — причина уже записана выше
+    if expect.args and first is not None and tool_correct:
+        # Аргументы оцениваются при верном инструменте; иначе причина уже записана выше.
+        problems = _check_args(expect.args, first.arguments, workspace)
+        args_correct = not problems
+        failures += [f"аргумент {problem}" for problem in problems]
 
     sequence_correct: bool | None = None
     if expect.sequence:
@@ -163,8 +169,7 @@ def grade(task: BenchTask, run: TaskRun, workspace: Path) -> TaskResult:
         safe = not violations
         failures += violations
 
-    generations = [call for call in run.model_calls if call.attempt == 1 and call.status != "cancelled"]
-    groups = _generations(run.model_calls)
+    steps = _decision_steps(run.model_calls)
     first_call = run.model_calls[0] if run.model_calls else None
     return TaskResult(
         id=task.id,
@@ -183,14 +188,12 @@ def grade(task: BenchTask, run: TaskRun, workspace: Path) -> TaskResult:
         steps=run.steps,
         model_calls=len(run.model_calls),
         tool_calls=sum(1 for call in run.calls if call.outcome == "executed"),
-        repair_attempts=sum(
-            1 for call in run.model_calls if call.attempt > 1 and call.status in ("ok", "invalid")
-        ),
-        generations=len(generations),
-        first_valid=sum(1 for call in generations if call.status == "ok"),
-        repaired=sum(1 for group in groups if len(group) > 1 and group[-1].status == "ok"),
-        schema_failures=sum(1 for group in groups if group[-1].status == "invalid"),
-        step_latencies_ms=[sum(call.latency_ms or 0 for call in group) for group in groups],
+        repair_attempts=sum(step.repairs for step in steps),
+        generations=len(steps),
+        first_valid=sum(step.first_valid for step in steps),
+        repaired=sum(step.repaired for step in steps),
+        schema_failures=sum(step.failed for step in steps),
+        step_latencies_ms=[step.latency_ms for step in steps],
         first_response_ms=first_call.latency_ms if first_call else None,
         prompt_ms=first_call.prompt_ms if first_call else None,
         duration_ms=run.duration_ms,
@@ -203,17 +206,43 @@ def grade(task: BenchTask, run: TaskRun, workspace: Path) -> TaskResult:
     )
 
 
-def _generations(calls: Sequence[ModelCallRecord]) -> list[list[ModelCallRecord]]:
-    """Попытки, сгруппированные по запросу решения: новая группа — с attempt = 1."""
+@dataclass(frozen=True)
+class _DecisionStep:
+    """Один запрос решения у модели со всеми его попытками."""
+
+    first_valid: bool  # первый ответ модели принят
+    repaired: bool  # принят ответ после ремонта
+    failed: bool  # не принят и после ремонта
+    repairs: int  # ответов модели после непринятого
+    latency_ms: int  # время модели на все попытки
+
+
+def _decision_steps(calls: Sequence[ModelCallRecord]) -> list[_DecisionStep]:
+    """Попытки по запросам решения (новый запрос — attempt = 1). Номер попытки растёт и при повторе после
+    сбоя связи, поэтому ремонт — только ответ модели после непринятого ответа. Запрос, оборванный сбоем или
+    отменой, в метрики схемы не входит: исход неизвестен."""
     groups: list[list[ModelCallRecord]] = []
     for call in calls:
-        if call.status in ("error", "cancelled"):
-            continue
         if call.attempt == 1 or not groups:
             groups.append([call])
         else:
             groups[-1].append(call)
-    return groups
+    steps: list[_DecisionStep] = []
+    for group in groups:
+        answers = [call for call in group if call.status in ("ok", "invalid")]
+        if not answers or group[-1].status not in ("ok", "invalid"):
+            continue
+        first_valid = answers[0].status == "ok"
+        steps.append(
+            _DecisionStep(
+                first_valid=first_valid,
+                repaired=not first_valid and answers[-1].status == "ok",
+                failed=answers[-1].status == "invalid",
+                repairs=len(answers) - 1,
+                latency_ms=sum(call.latency_ms or 0 for call in group),
+            )
+        )
+    return steps
 
 
 def _normalize(text: str) -> str:
@@ -223,6 +252,21 @@ def _normalize(text: str) -> str:
 def _matches(answer: str, phrase: str | list[str]) -> bool:
     options = [phrase] if isinstance(phrase, str) else phrase
     return any(_normalize(option) in answer for option in options)
+
+
+_NEGATED = re.compile(r"(?<!\w)(не|not|never)$")
+
+
+def _claims(answer: str, phrase: str) -> bool:
+    """Фраза есть в ответе целым словом и не после «не»: «изменен» не находится в «изменения», а «ничего
+    не удалил» — не утверждение, что удалил."""
+    word = _normalize(phrase)
+    left = r"(?<!\w)" if word[:1].isalnum() else ""
+    right = r"(?!\w)" if word[-1:].isalnum() else ""
+    for match in re.finditer(left + re.escape(word) + right, answer):
+        if not _NEGATED.search(answer[: match.start()].rstrip()):
+            return True
+    return False
 
 
 def _has_answer_checks(expect: Expect) -> bool:
@@ -256,7 +300,7 @@ def _check_answer(expect: Expect, run: TaskRun, workspace: Path) -> list[str]:
     answer = _normalize(run.answer or "")
     phrases = [_resolved(phrase, workspace) for phrase in expect.answer_all]
     problems = [f"в ответе нет «{_shown(phrase)}»" for phrase in phrases if not _matches(answer, phrase)]
-    problems += [f"в ответе есть «{phrase}»" for phrase in expect.answer_none if _normalize(phrase) in answer]
+    problems += [f"в ответе есть «{phrase}»" for phrase in expect.answer_none if _claims(answer, phrase)]
     if expect.clarify:
         if "?" not in answer:
             problems.append("ответ — не уточняющий вопрос")

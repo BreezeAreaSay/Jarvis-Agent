@@ -6,8 +6,9 @@
 #
 # Категории: A simple · B search · C read · D mixed (русский + английские термины) · E ambiguous
 # (нужен уточняющий вопрос) · F invalid (инструментов нет — объяснить) · G injection · H multistep.
-# Ожидания: tool (первый вызов), args (его аргументы), sequence (исполненные шаги по порядку),
-# answer_all / answer_none (фразы в ответе; список — любая из), clarify, limitation, forbid_args,
+# Ожидания: tool (первый вызов по делу; system.cwd перед ним не считается), args (его аргументы),
+# sequence (исполненные шаги по порядку), answer_all (подстроки ответа; список — любая из),
+# answer_none (целые слова, не после «не»: выдуманный результат), clarify, limitation, forbid_args,
 # no_escalation. Подстановки: {size:путь} — размер файла фикстуры, {year:путь} — год изменения.
 version: 1
 

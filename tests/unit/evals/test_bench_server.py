@@ -4,6 +4,8 @@
 GPU в контейнере тестов нет (tests/fixtures/llama_server/README.md).
 """
 
+import json
+import socket
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,7 @@ from jarvis.evals.bench.report import (
 )
 from jarvis.evals.bench.run import bench_reference, candidate_config
 from jarvis.evals.bench.server import (
+    BenchServerError,
     Candidate,
     CandidatesFile,
     Memory,
@@ -30,6 +33,8 @@ from jarvis.evals.bench.server import (
     VramSample,
     offload_verdict,
     parse_server_log,
+    parse_windows_gpu_memory,
+    running_server,
     server_args,
     vram_headroom,
 )
@@ -139,7 +144,7 @@ def test_vulkan_full_offload() -> None:
     assert offload.cpu_buffers_mib == 330.6  # эмбеддинги и буферы хоста — законно в RAM
     assert len(facts.memory_breakdown) == 3  # первая таблица, а не повтор при выходе
     assert vram_headroom(facts.devices, offload.gpu_buffers_mib, [None]) == 1168.0
-    sample = VramSample(source="windows-counters", adapter_dedicated_mib=7600.0)
+    sample = VramSample(source="windows-wmi", adapter_dedicated_mib=7600.0)
     assert vram_headroom(facts.devices, offload.gpu_buffers_mib, [sample, None]) == 576.0
 
 
@@ -157,13 +162,75 @@ def test_layers_left_on_cpu_are_not_full_offload() -> None:
     assert offload.reasons == ["на GPU 20/33 слоёв"]
 
 
-def test_shared_memory_spill() -> None:
-    def memory(shared: float) -> Memory:
-        return Memory(vram_loaded=VramSample(source="windows-counters", process_shared_mib=shared))
+def test_spill_is_gpu_buffers_missing_from_dedicated_memory() -> None:
+    def memory(dedicated: float, shared: float = 900.0) -> Memory:
+        sample = VramSample(source="windows-wmi", process_dedicated_mib=dedicated, process_shared_mib=shared)
+        return Memory(vram_loaded=sample)
 
-    assert memory(60.0).shared_spill_mib() is None  # буферы Vulkan_Host
-    assert memory(1500.0).shared_spill_mib() == 1500.0
-    assert Memory().shared_spill_mib() is None
+    # общая память (буфер загрузки весов, буферы хоста Vulkan) — не вытеснение
+    assert memory(6200.0).spill_mib(6172.0) is None
+    assert memory(4100.0).spill_mib(6172.0) == 2072.0
+    assert Memory().spill_mib(6172.0) is None  # счётчиков нет — не судим
+    assert memory(0.0).spill_mib(0.0) is None  # на GPU ничего — это вердикт offload, не вытеснение
+
+
+WMI = {
+    "process": [
+        {
+            "Name": "pid_4242_luid_0x00000000_0x0000D1B0_phys_0",
+            "DedicatedUsage": 6442450944,
+            "SharedUsage": 943718400,
+        },
+        {"Name": "pid_4242_luid_0x00000000_0x0000C3A1_phys_0", "DedicatedUsage": 0, "SharedUsage": 1048576},
+        {"Name": "pid_77_luid_0x00000000_0x0000D1B0_phys_0", "DedicatedUsage": 524288000, "SharedUsage": 0},
+    ],
+    "adapter": [
+        {"Name": "luid_0x00000000_0x0000D1B0_phys_0", "DedicatedUsage": "7516192768", "SharedUsage": 0},
+        {"Name": "luid_0x00000000_0x0000C3A1_phys_0", "DedicatedUsage": 134217728, "SharedUsage": 0},
+    ],
+}
+
+
+def test_windows_gpu_memory_from_wmi() -> None:
+    """Процесс сервера — по его записям на одном адаптере; адаптер — тот же (не сумма с встроенным GPU)."""
+    sample = parse_windows_gpu_memory(json.dumps(WMI), 4242)
+    assert sample == VramSample(
+        source="windows-wmi",
+        adapter="0x00000000_0x0000d1b0",
+        process_dedicated_mib=6144.0,
+        process_shared_mib=900.0,
+        adapter_dedicated_mib=7168.0,
+    )
+    before = parse_windows_gpu_memory(json.dumps(WMI), None)  # до запуска: адаптер с наибольшей памятью
+    assert before is not None
+    assert before.adapter == "0x00000000_0x0000d1b0"
+    assert before.process_dedicated_mib is None
+
+
+@pytest.mark.parametrize("text", ["", "не JSON", "null", '{"process": null, "adapter": null}', "[]"])
+def test_windows_gpu_memory_unavailable(text: str) -> None:
+    assert parse_windows_gpu_memory(text, 4242) is None
+
+
+def test_recurrent_state_buffers_count_as_gpu() -> None:
+    """Qwen3.5: у слоёв с линейным вниманием — буфер состояния (RS), а не только KV."""
+    rs_line = "0.00.500.001 I llama_memory_recurrent:    Vulkan0 RS buffer size =    50.25 MiB\n"
+    log = VULKAN_FULL.replace("0.00.500.002 I sched_reserve:", rs_line + "0.00.500.002 I sched_reserve:")
+    facts = parse_server_log(log)
+    assert facts.buffers_mib["Vulkan0"]["rs"] == 50.25
+    assert offload_verdict(facts, candidate()).gpu_buffers_mib == 6222.2
+
+
+def test_busy_port_is_refused(tmp_path: Path) -> None:
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        with (
+            pytest.raises(BenchServerError, match="занят"),
+            running_server(candidate(port=port, server="no-such-server"), tmp_path / "server.log"),
+        ):
+            pass
 
 
 # --- отчёт и правило выбора
@@ -224,7 +291,7 @@ async def test_selection_rule(report: BenchReport) -> None:
     spilled = with_server(
         report,
         label="spilled",
-        vram_loaded=VramSample(source="windows-counters", process_shared_mib=2000.0),
+        vram_loaded=VramSample(source="windows-wmi", process_dedicated_mib=4172.0, process_shared_mib=2000.0),
     )
     cpu = with_server(report, label="cpu", log=CPU_LOG.read_text(encoding="utf-8"))
     verdicts = select([weaker, slow, tight, best, spilled, cpu])
@@ -232,7 +299,7 @@ async def test_selection_rule(report: BenchReport) -> None:
     reasons = {verdict.label: " ".join(verdict.reasons) for verdict in verdicts}
     assert "шаг агента 9.0 с > 6 с" in reasons["slow"]
     assert "запас VRAM 300 MiB < 800" in reasons["tight"]
-    assert "2000 MiB в общую память" in reasons["spilled"]
+    assert "драйвер вынес 2000 MiB буферов GPU в RAM" in reasons["spilled"]
     assert "offload cpu_only" in reasons["cpu"]
     comparison = render_comparison([weaker, best])
     assert "1. **best** — проходит" in comparison

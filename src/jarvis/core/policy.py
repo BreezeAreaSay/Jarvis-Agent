@@ -36,10 +36,12 @@ class PolicyZones:
     secrets: tuple[str, ...] = ()  # ~/.ssh, ~/.gnupg …: чтение — с подтверждением, запись — запрет
     secret_names: tuple[str, ...] = ()  # шаблоны имён файлов с секретами: *.kdbx, id_rsa*, *.pem
     workspaces: tuple[str, ...] = ()  # запись — с подтверждением; вне их — запрет
+    # Если заданы — чтение вне этих папок требует подтверждения; пусто — читать можно везде, кроме зон выше.
+    read_roots: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # Пустой или относительный корень совпал бы с чем угодно (или ни с чем) — это ошибка сборки.
-        for root in (*self.internal, *self.secrets, *self.workspaces):
+        for root in (*self.internal, *self.secrets, *self.workspaces, *self.read_roots):
             if not is_absolute(root, self.os_family):
                 raise ValueError(f"корень зоны должен быть абсолютным путём {self.os_family}: {root!r}")
 
@@ -56,6 +58,9 @@ class PolicyZones:
 
     def is_workspace(self, path: str) -> bool:
         return any(is_within(path, root, self.os_family) for root in self.workspaces)
+
+    def is_freely_readable(self, path: str) -> bool:
+        return not self.read_roots or any(is_within(path, root, self.os_family) for root in self.read_roots)
 
 
 def _looks_like_path(resource: str) -> bool:
@@ -109,5 +114,11 @@ class PolicyEngine:
                 PolicyOutcome.REQUIRE_APPROVAL,
                 "zone.secrets.read",
                 f"чтение секретов требует подтверждения: {resource}",
+            )
+        if path_like and not zones.is_freely_readable(resource):
+            return (
+                PolicyOutcome.REQUIRE_APPROVAL,
+                "zone.outside_read_roots",
+                f"чтение вне разрешённых папок требует подтверждения: {resource}",
             )
         return PolicyOutcome.ALLOW, "effect.read", "чтение разрешено"

@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import os
 import tempfile
 import time
 from collections.abc import Callable
@@ -52,9 +53,11 @@ async def run_dataset(
     config: JarvisConfig | None = None,
     task_timeout_s: float = TASK_TIMEOUT_S,
     real_home: Path | None = None,
+    real_config: Path | None = None,
     on_result: Callable[[TaskResult], None] | None = None,
 ) -> list[TaskResult]:
-    """`real_home` — настоящий JARVIS_HOME: его данные для инструментов закрыты и в бенчмарке."""
+    """`real_home` и `real_config` — настоящие JARVIS_HOME и файл конфига: для инструментов они закрыты и
+    в бенчмарке."""
     results: list[TaskResult] = []
     for task in dataset.tasks:
         result = await run_task(
@@ -64,6 +67,7 @@ async def run_dataset(
             config=config or JarvisConfig(),
             timeout_s=task_timeout_s,
             real_home=real_home,
+            real_config=real_config,
         )
         results.append(result)
         if on_result is not None:
@@ -71,12 +75,20 @@ async def run_dataset(
     return results
 
 
-def bench_zones(config: JarvisConfig, machine: Machine, real_home: Path | None) -> PolicyZones:
-    """Зоны временного «компьютера» задачи плюс настоящие: модель, поддавшаяся инъекции, не прочитает
-    без человека ни настоящий ~/.ssh, ни данные Jarvis на компьютере, где идёт бенчмарк."""
+def bench_zones(
+    config: JarvisConfig, machine: Machine, real_home: Path | None, real_config: Path | None = None
+) -> PolicyZones:
+    """Зоны временного «компьютера» задачи плюс настоящие, и читать без человека можно только его рабочую
+    папку: модель, поддавшаяся инъекции, не прочитает ни ~/.ssh, ни данные Jarvis, ни документы
+    компьютера, где идёт бенчмарк, — подтверждения бенчмарк отклоняет."""
     fake = host_zones(config, home=machine.home, user_home=machine.user)
-    real = host_zones(config, home=real_home, user_home=Path.home())
-    return replace(fake, internal=(*fake.internal, *real.internal), secrets=(*fake.secrets, *real.secrets))
+    real = host_zones(config, home=real_home, user_home=Path.home(), config_file=real_config)
+    return replace(
+        fake,
+        internal=(*fake.internal, *real.internal),
+        secrets=(*fake.secrets, *real.secrets),
+        read_roots=(os.path.realpath(machine.workspace),),
+    )
 
 
 async def run_task(
@@ -87,6 +99,7 @@ async def run_task(
     config: JarvisConfig,
     timeout_s: float,
     real_home: Path | None = None,
+    real_config: Path | None = None,
 ) -> TaskResult:
     storage = InMemoryStorage()
     with tempfile.TemporaryDirectory(prefix="jarvis-bench-") as temp:
@@ -96,7 +109,7 @@ async def run_task(
             models={ModelRole.EXECUTOR: backend_for(task, machine.workspace)},
             storage=storage,
             home=machine.home,
-            zones=bench_zones(config, machine, real_home),
+            zones=bench_zones(config, machine, real_home, real_config),
         )
         request = TaskRequest(text=task.input, origin=Origin.EVAL, working_directory=str(machine.workspace))
         task_id = app.tasks.submit(request)

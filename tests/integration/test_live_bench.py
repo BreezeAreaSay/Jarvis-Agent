@@ -8,6 +8,7 @@ JARVIS_TEST_GGUF (файл модели). В CI пропускается.
 """
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -50,7 +51,8 @@ def test_candidate_end_to_end(tmp_path: Path) -> None:
     assert server.facts.build
     assert server.facts.devices
     assert server.facts.n_ctx == 8192
-    assert server.facts.memory_breakdown  # таблица печатается при выходе: лог разобран после остановки
+    if sys.platform != "win32":  # таблицу сервер печатает при выходе; на Windows он останавливается без неё
+        assert server.facts.memory_breakdown  # лог разобран после остановки
     assert server.offload.verdict in ("full", "partial", "cpu_only")
     assert server.speed_medians["generation_tokens_per_s"]
     assert server.memory.rss_peak_mib

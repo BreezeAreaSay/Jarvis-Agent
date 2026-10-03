@@ -10,7 +10,7 @@ from pydantic import BaseModel, JsonValue
 
 from jarvis.evals.bench.dataset import LETTERS
 from jarvis.evals.bench.grading import Summary, TaskResult
-from jarvis.evals.bench.server import Memory, Offload, ServerFacts, Speed
+from jarvis.evals.bench.server import PROMPT_SIZES, Memory, Offload, ServerFacts, Speed
 
 # Правило выбора (07 §4): пороги, которые основная модель обязана пройти.
 MIN_VALID_AFTER_REPAIR = 0.98
@@ -222,7 +222,9 @@ def _server_section(server: ServerReport) -> list[str]:
         f"| Обработка промпта | {_num(speed.get('prompt_tokens_per_s'), ' ток/с', 1)} |",
         f"| Генерация | {_num(speed.get('generation_tokens_per_s'), ' ток/с', 1)} |",
         f"| Время до первого токена 1k / 4k / 8k | {_num(speed.get('ttft_ms_1k'), ' мс')} / "
-        f"{_num(speed.get('ttft_ms_4k'), ' мс')} / {_num(speed.get('ttft_ms_8k'), ' мс')} |",
+        f"{_num(speed.get('ttft_ms_4k'), ' мс')} / {_num(speed.get('ttft_ms_8k'), ' мс')} "
+        f"(промпт {' / '.join(str(server.speed.ttft_prompt_tokens.get(size, '—')) for size in PROMPT_SIZES)} "
+        "токенов) |",
         f"| Тёплый запрос со схемой | {_num(speed.get('warm_latency_ms'), ' мс')} |",
         "",
     ]
@@ -274,9 +276,10 @@ def select(reports: Sequence[BenchReport]) -> list[Verdict]:
         headroom = report.server.memory.vram_headroom_mib if report.server else None
         if headroom is not None and headroom < MIN_VRAM_HEADROOM_MIB:
             reasons.append(f"запас VRAM {headroom:.0f} MiB < 800")
-        spill = report.server.memory.shared_spill_mib() if report.server else None
+        server = report.server
+        spill = server.memory.spill_mib(server.offload.gpu_buffers_mib) if server else None
         if spill is not None:
-            reasons.append(f"драйвер вынес {spill:.0f} MiB в общую память GPU")
+            reasons.append(f"драйвер вынес {spill:.0f} MiB буферов GPU в RAM")
         if report.server is not None and not report.server.offload.as_expected:
             reasons.append(
                 f"offload {report.server.offload.verdict}, ожидался {report.server.offload.expected}"

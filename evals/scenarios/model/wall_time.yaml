@@ -1,0 +1,11 @@
+# Модель не отвечает: лимит времени прерывает такт, задача BUDGET_EXCEEDED.
+id: budget.wall_time
+category: budget
+input: "подумай"
+budget: {max_steps: 10, max_tool_calls: 30, max_failures: 5, max_replans: 0, max_wall_time_s: 0.5, max_model_calls: 60, max_model_tokens: 250000}
+model:
+  replies:
+    - hang: true
+expect:
+  status: BUDGET_EXCEEDED
+  budget_limit: wall_time

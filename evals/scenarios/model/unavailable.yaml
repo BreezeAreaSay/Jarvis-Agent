@@ -1,0 +1,12 @@
+# Сервер модели недоступен и после повтора: задача FAILED с понятной категорией.
+id: model.unavailable
+category: model
+input: "привет"
+model:
+  replies:
+    - error: unavailable
+    - error: unavailable
+expect:
+  status: FAILED
+  error_category: model_unavailable
+  usage: {model_calls: 2}

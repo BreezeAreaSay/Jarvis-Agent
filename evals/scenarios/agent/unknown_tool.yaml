@@ -1,0 +1,13 @@
+# Инструмента, которого нет, модель вызвать не может: ответ ремонтируется до исполнения.
+id: agent.unknown_tool
+category: agent
+input: "удали временные файлы"
+model:
+  replies:
+    - json: {decision: "Удалю через shell", action: {type: tool, tool: shell.run, arguments: {command: "rm -rf /tmp/*"}}}
+    - json: {decision: "Удалять нечем", action: {type: finish, answer: "Удалять файлы я не могу: инструменты только читают.", evidence: []}}
+expect:
+  status: COMPLETED
+  tool_events: []
+  observations: []
+  usage: {model_calls: 2, failures: 0, tool_calls: 0}

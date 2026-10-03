@@ -23,7 +23,12 @@ from jarvis.evals.scenario import load_scenarios
 pytestmark = pytest.mark.anyio
 
 SCENARIOS = Path(__file__).resolve().parents[2] / "evals" / "scenarios"
-RUNTIME_SCENARIOS = sorted(scenario.id for scenario in load_scenarios([SCENARIOS]))
+# Трасса budget.wall_time содержит замер (сколько успел проработать прерванный такт): с эталонным
+# прогоном она совпадает только до этого числа, поэтому в сравнение трасс не входит.
+MEASURED = {"budget.wall_time"}
+RUNTIME_SCENARIOS = sorted(
+    scenario.id for scenario in load_scenarios([SCENARIOS]) if scenario.id not in MEASURED
+)
 
 RUN_SCENARIO = """
 import asyncio, sys

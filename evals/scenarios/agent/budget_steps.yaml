@@ -1,0 +1,14 @@
+# Модель зациклилась на одном вызове: четвёртый шаг бюджет не даёт — модель даже не спрашивают.
+id: agent.budget_steps
+category: budget
+input: "найди всё"
+budget: {max_steps: 3, max_tool_calls: 30, max_failures: 5, max_replans: 0, max_wall_time_s: 60, max_model_calls: 60, max_model_tokens: 250000}
+model:
+  replies:
+    - json: {decision: "Смотрю", action: {type: tool, tool: system.cwd, arguments: {}}}
+    - json: {decision: "Смотрю ещё", action: {type: tool, tool: system.cwd, arguments: {}}}
+    - json: {decision: "И ещё", action: {type: tool, tool: system.cwd, arguments: {}}}
+expect:
+  status: BUDGET_EXCEEDED
+  budget_limit: steps
+  usage: {tool_calls: 3}

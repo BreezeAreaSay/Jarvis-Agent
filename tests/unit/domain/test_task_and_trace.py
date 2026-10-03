@@ -60,8 +60,9 @@ def test_terminal_task_requires_matching_outcome() -> None:
 def test_snapshot_mirrors_task() -> None:
     task = make_task()
     snapshot = TaskSnapshot.of(task)
+    # Запрос и рабочая память агента клиентам не нужны: они видят итог и трассу.
     assert snapshot.model_dump() == {
-        key: value for key, value in task.model_dump().items() if key != "request"
+        key: value for key, value in task.model_dump().items() if key not in ("request", "state")
     }
 
 

@@ -1,7 +1,7 @@
 """Задача, запрос, итог и результат стадии (02-domain.md §2–3).
 
-Поля появляются вместе с первым потребителем: план, рабочая память агента, профиль, проект и
-признак заражения добавят milestone, которые их используют.
+Поля появляются вместе с первым потребителем: план, профиль, проект и признак заражения добавят
+milestone, которые их используют.
 """
 
 from collections.abc import Mapping
@@ -11,6 +11,7 @@ from typing import Self
 
 from pydantic import BaseModel, Field, PositiveInt, model_validator
 
+from jarvis.domain.agent import AgentState
 from jarvis.domain.budget import Budget, BudgetUsage
 from jarvis.domain.errors import ErrorInfo, InvalidTransition
 from jarvis.domain.ids import TaskId
@@ -18,7 +19,8 @@ from jarvis.domain.states import TaskStatus, is_terminal
 
 
 class Origin(StrEnum):
-    EVAL = "eval"  # другие источники (CLI `jarvis run`, replay) появятся со своими командами
+    EVAL = "eval"
+    CLI = "cli"  # `jarvis run`; другие источники (replay, голос) появятся со своими командами
 
 
 class Route(StrEnum):
@@ -75,6 +77,7 @@ class Task(BaseModel, frozen=True, extra="forbid"):
     budget: Budget  # бюджет текущей фазы: routing до решения роутера, затем бюджет маршрута
     usage: BudgetUsage  # расход в пределах `budget`
     outcome: TaskOutcome | None = None
+    state: AgentState | None = None  # рабочая память агента: шаги, действия, итоги вызовов
     created_at: datetime
     updated_at: datetime
 
@@ -92,6 +95,7 @@ class TaskChanges(BaseModel, frozen=True, extra="forbid"):
 
     route: Route | None = None  # только из ROUTING: решение роутера
     answer: str | None = None  # ответ пользователю, попадает в итог
+    state: AgentState | None = None  # новая рабочая память агента
 
 
 class StageOutcome(BaseModel, frozen=True, extra="forbid"):

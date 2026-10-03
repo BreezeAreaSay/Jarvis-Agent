@@ -1,4 +1,4 @@
-"""Точка входа `jarvis`: --version, config, eval, tasks, trace, cancel, tools."""
+"""Точка входа `jarvis`: --version, config, eval, run, model, tasks, trace, cancel, tools."""
 
 import asyncio
 import io
@@ -12,6 +12,8 @@ from typing import Annotated, Any
 import typer
 
 from jarvis.cli.common import load_or_exit
+from jarvis.cli.models import model_app
+from jarvis.cli.run import run_command
 from jarvis.cli.tasks import cancel_command, tasks_command, trace_command
 from jarvis.cli.tools import tools_app
 from jarvis.domain.settings import JarvisConfig
@@ -25,6 +27,8 @@ DEFAULT_REPORTS = Path("evals/reports")
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="Jarvis — локальный Agent Runtime.")
 config_app = typer.Typer(no_args_is_help=True, help="Конфигурация: проверка и итоговые значения.")
 app.add_typer(config_app, name="config")
+app.command("run")(run_command)
+app.add_typer(model_app, name="model")
 app.command("tasks")(tasks_command)
 app.command("trace")(trace_command)
 app.command("cancel")(cancel_command)

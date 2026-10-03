@@ -15,7 +15,7 @@ import typer
 
 from jarvis.app.composition import App, build_app, open_storage
 from jarvis.cli.common import load_or_exit
-from jarvis.core.timeline import render_timeline
+from jarvis.core.timeline import render_model_call, render_timeline
 from jarvis.domain.errors import JarvisError
 from jarvis.domain.ids import TaskId
 from jarvis.domain.states import ACTIVE_STATUSES, TERMINAL_STATUSES, TaskStatus, is_terminal
@@ -90,10 +90,14 @@ def tasks_command(
 def trace_command(
     task_id: Annotated[str, typer.Argument(help="ID задачи, например task_42.")],
     as_json: Annotated[bool, typer.Option("--json", help="Полная трасса в JSON.")] = False,
+    model_io: Annotated[
+        bool, typer.Option("--model-io", help="После таймлайна — промпты и ответы модели (для отладки).")
+    ] = False,
 ) -> None:
     """Таймлайн задачи: переходы, причины, ошибки, метрики."""
     with opened_app() as app:
         inspection = app.tasks.inspect(TaskId(task_id))
+        calls = app.tasks.model_calls(TaskId(task_id)) if model_io else []
     if as_json:
         document = {
             "task": inspection.task.model_dump(mode="json"),
@@ -106,6 +110,8 @@ def trace_command(
     assert local is not None
     timeline = render_timeline(inspection.task, inspection.events, inspection.metrics, tz=local)
     typer.echo(timeline, nl=False)
+    for call in calls:
+        typer.echo(render_model_call(call))
 
 
 def cancel_command(

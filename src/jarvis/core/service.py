@@ -12,6 +12,7 @@ from jarvis.domain.approvals import ApprovalDecision, ApprovalRequest
 from jarvis.domain.budget import BudgetUsage
 from jarvis.domain.ids import TaskId
 from jarvis.domain.metrics import TaskMetrics
+from jarvis.domain.models import ModelCallRecord
 from jarvis.domain.settings import BudgetsSettings
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Task, TaskRequest, TaskSnapshot
@@ -112,6 +113,12 @@ class TaskService:
 
     def trace(self, task_id: TaskId) -> list[TraceEvent]:
         return self.inspect(task_id).events
+
+    def model_calls(self, task_id: TaskId) -> list[ModelCallRecord]:
+        """Вызовы модели задачи: промпты и ответы — для отладки (`jarvis trace --model-io`)."""
+        with self._uow() as uow:
+            uow.tasks.get(task_id)  # TaskNotFound для неизвестной задачи
+            return uow.model_calls.for_task(task_id)
 
     def inspect(self, task_id: TaskId) -> TaskInspection:
         with self._uow() as uow:

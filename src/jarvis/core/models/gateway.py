@@ -53,6 +53,7 @@ from jarvis.ports.storage import UnitOfWorkFactory
 
 RETRY_DELAY_S = 1.0  # пауза перед повтором, когда сервер недоступен (модель ещё грузится)
 TRANSPORT_RETRIES = 1
+REPAIR_ECHO_CHARS = 2000  # сколько непринятого ответа показать модели при ремонте
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,11 @@ class ModelGateway:
                 raise
             budget.add_tokens(_tokens(request, response))
             value, problems = _parse(response.text, output)
+            if value is None and response.finish_reason == "length":
+                problems = [
+                    f"ответ обрезан на лимите {request.max_tokens} токенов: отвечай короче",
+                    *problems,
+                ]
             self._record(call, request, response, "invalid" if value is None else "ok", problems=problems)
             if value is not None:
                 return Generation(value=value, call_id=call.id, attempts=attempt)
@@ -167,7 +173,8 @@ class ModelGateway:
                     problems=list[JsonValue](problems),
                 )
             repairs += 1
-            messages = [*base, ChatMessage(role="assistant", content=response.text), _repair(problems)]
+            echoed = shorten(response.text, REPAIR_ECHO_CHARS)  # испорченный ответ не раздувает промпт
+            messages = [*base, ChatMessage(role="assistant", content=echoed), _repair(problems)]
 
     def _backend(self, role: ModelRole) -> ModelBackend:
         backend = self._backends.get(role)

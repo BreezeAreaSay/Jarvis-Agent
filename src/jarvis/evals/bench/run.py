@@ -2,11 +2,13 @@
 
 import asyncio
 import hashlib
+import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
 
+import httpx
 from pydantic import JsonValue
 
 from jarvis.app.composition import model_backends
@@ -125,6 +127,7 @@ async def bench_configured(
     *,
     label: str,
     real_home: Path | None,
+    real_config: Path | None = None,
     task_timeout_s: float = TASK_TIMEOUT_S,
     on_result: OnResult | None = None,
 ) -> BenchReport:
@@ -149,6 +152,7 @@ async def bench_configured(
         config=JarvisConfig(models=config.models),
         task_timeout_s=task_timeout_s,
         real_home=real_home,
+        real_config=real_config,
         on_result=on_result,
     )
     return _report(
@@ -172,6 +176,7 @@ def bench_candidate(
     repeats: int = 3,
     fetch: bool = True,
     real_home: Path | None = None,
+    real_config: Path | None = None,
     task_timeout_s: float = TASK_TIMEOUT_S,
     on_result: OnResult | None = None,
     say: Callable[[str], None] = print,
@@ -185,7 +190,7 @@ def bench_candidate(
     started = datetime.now(UTC)
     notes: list[str] = []
     if candidate.hf is not None and fetch:
-        say(f"{candidate.id}: загрузка модели {candidate.hf} (первый запуск, время не меряется)…")
+        say(f"{candidate.id}: загрузка модели {candidate.hf}, если её нет в кэше (ход — в prefetch.log)…")
         prefetch(candidate, folder / "prefetch.log")
     vram_before = vram_sample(None)
     say(f"{candidate.id}: запуск llama-server…")
@@ -208,12 +213,19 @@ def bench_candidate(
             say(f"{candidate.id}: ВНИМАНИЕ — offload не такой, как ожидался: {'; '.join(offload.reasons)}")
         rss_loaded, private_loaded = memory_snapshot(server)
         vram_loaded = vram_sample(server.process.pid)
-        spill = Memory(vram_loaded=vram_loaded).shared_spill_mib()
+        spill = Memory(vram_loaded=vram_loaded).spill_mib(offload.gpu_buffers_mib)
         if spill is not None:
-            notes.append(f"сразу после загрузки {spill:.0f} MiB в общей памяти GPU: VRAM не хватило")
-            say(f"{candidate.id}: ВНИМАНИЕ — {spill:.0f} MiB в общей памяти GPU: драйвер вынес часть в RAM")
+            notes.append(
+                f"после загрузки {spill:.0f} MiB буферов GPU нет в выделенной памяти: VRAM не хватило"
+            )
+            say(f"{candidate.id}: ВНИМАНИЕ — {spill:.0f} MiB буферов GPU вне VRAM: драйвер вынес часть в RAM")
+        if sys.platform == "win32" and vram_loaded is None:
+            notes.append("счётчики памяти GPU Windows недоступны: VRAM и запас — по логу сервера")
         say(f"{candidate.id}: замер скорости ({repeats} повтора)…")
-        speed = measure_speed(candidate, repeats=repeats)
+        try:
+            speed = measure_speed(candidate, repeats=repeats)
+        except httpx.HTTPError as exc:  # сервер упал или перестал отвечать — кандидат не меряется
+            raise BenchServerError(f"{candidate.id}: сервер не ответил на замер скорости: {exc!r}") from None
         say(f"{candidate.id}: датасет, {len(dataset.tasks)} задач…")
         config = candidate_config(candidate)
         backend = model_backends(config)[ModelRole.EXECUTOR]
@@ -224,6 +236,7 @@ def bench_candidate(
                 config=config,
                 task_timeout_s=task_timeout_s,
                 real_home=real_home,
+                real_config=real_config,
                 on_result=on_result,
             )
         )
@@ -231,7 +244,8 @@ def bench_candidate(
         memory_snapshot(server)  # последний замер — в пик
         cold_start_s = server.cold_start_s
         peak_rss, peak_private = server.watch.peak_rss, server.watch.peak_private
-    # Лог — после остановки: таблицу памяти по устройствам сервер печатает при выходе.
+    # Лог — после остановки: таблицу памяти по устройствам сервер печатает при выходе (на Windows её нет:
+    # там llama-server останавливается без неё).
     facts = parse_server_log((folder / "server.log").read_text(encoding="utf-8", errors="replace"))
     model_file = Path(facts.model_file) if facts.model_file else None
     model_sha256 = None

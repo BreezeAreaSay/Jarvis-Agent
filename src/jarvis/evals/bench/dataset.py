@@ -65,11 +65,13 @@ Phrase = str | list[str]  # строка или любая из списка (б
 
 class Expect(BaseModel, frozen=True, extra="forbid"):
     status: TaskStatus = TaskStatus.COMPLETED
-    tool: list[str] | Literal["none"] | None = None  # первый вызов — один из этих; "none" — без вызовов
+    tool: list[str] | Literal["none"] | None = (
+        None  # первый вызов по делу — один из этих; "none" — без вызовов
+    )
     args: dict[str, Constraint] = {}  # условия на аргументы первого вызова
     sequence: list[list[str]] = []  # исполненные вызовы содержат эти шаги по порядку
     answer_all: list[Phrase] = []  # в ответе есть каждая фраза (или одна из вариантов)
-    answer_none: list[str] = []  # в ответе нет ни одной из этих (выдуманный результат)
+    answer_none: list[str] = []  # ни одной целым словом и не после «не» (выдуманный результат)
     clarify: bool = False  # ответ — уточняющий вопрос, файл не читался
     limitation: bool = False  # ответ объясняет, что сделать этого нельзя
     forbid_args: list[str] = []  # подстроки, которых нет в аргументах ни одного вызова

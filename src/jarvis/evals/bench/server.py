@@ -7,9 +7,9 @@ GPU offload, память и скорость (07-evals-and-benchmarks.md §4).
 Что доказывает работу на GPU (а не «нет ошибок — значит, работает»):
 - лог загрузки: устройство (`Vulkan0: AMD Radeon RX 7600`), `offloaded N/M layers to GPU`, буферы модели,
   KV-кэша и вычислений на GPU, таблица памяти по устройствам;
-- счётчики Windows: выделенная память GPU процесса сервера и адаптера (`\\GPU Process Memory`,
-  `\\GPU Adapter Memory`) — до загрузки, после и в пике; общая (shared) память процесса — признак, что
-  модель не поместилась и драйвер унёс часть в RAM;
+- счётчики Windows (классы WMI `GPUProcessMemory`, `GPUAdapterMemory`): выделенная и общая память GPU
+  процесса сервера и его адаптера — до загрузки, после и после прогона; буферы на GPU по логу, которых
+  нет в выделенной памяти процесса, — признак, что модель не поместилась и драйвер унёс часть в RAM;
 - скорость генерации: на CPU она в разы ниже.
 """
 
@@ -17,6 +17,7 @@ import hashlib
 import json
 import platform
 import re
+import socket
 import statistics
 import subprocess
 import sys
@@ -34,9 +35,9 @@ from pydantic import BaseModel, Field, JsonValue, model_validator
 
 HEALTH_POLL_S = 0.25
 MIB = 1024 * 1024
-# Буферы Vulkan_Host (вывод, часть вычислений) живут в общей памяти законно — десятки MiB. Сотни — уже
-# вытеснение весов или KV-кэша из VRAM.
-SHARED_SPILL_MIB = 512.0
+# Буферы на GPU по логу, которых нет в выделенной памяти процесса: больше этого — вытеснение в RAM.
+SPILL_MIB = 512.0
+PREFETCH_TIMEOUT_S = 6 * 3600.0  # загрузка модели с Hugging Face: десятки гигабайт
 
 
 class BenchServerError(Exception):
@@ -151,7 +152,7 @@ class ServerFacts(BaseModel):
     n_expert: int | None = None
     offloaded_layers: int | None = None
     total_layers: int | None = None
-    buffers_mib: dict[str, dict[str, float]] = {}  # устройство → вид (model, kv, compute, output) → MiB
+    buffers_mib: dict[str, dict[str, float]] = {}  # устройство → вид (model, kv, rs, compute, output) → MiB
     n_ctx: int | None = None
     n_batch: int | None = None
     n_ubatch: int | None = None
@@ -177,7 +178,7 @@ _PATTERNS: dict[str, re.Pattern[str]] = {
     "n_layer": re.compile(r"print_info: n_layer\s+= (\d+)"),
     "n_expert": re.compile(r"print_info: n_expert\s+= (\d+)"),
     "offloaded": re.compile(r"offloaded (\d+)/(\d+) layers to GPU"),
-    "buffer": re.compile(r"(\S+)\s+(model|KV|compute|output) buffer size =\s+([\d.]+) MiB"),
+    "buffer": re.compile(r"(\S+)\s+(model|KV|RS|compute|output) buffer size =\s+([\d.]+) MiB"),
     "n_ctx": re.compile(r"llama_context: n_ctx\s+= (\d+)"),
     "n_batch": re.compile(r"llama_context: n_batch\s+= (\d+)"),
     "n_ubatch": re.compile(r"llama_context: n_ubatch\s+= (\d+)"),
@@ -228,7 +229,7 @@ def parse_server_log(text: str) -> ServerFacts:
         if (match := _PATTERNS["breakdown"].search(line)) and not breakdown_done:
             facts.memory_breakdown.append(match.group(1).rstrip())
         elif facts.memory_breakdown and not breakdown_done:
-            breakdown_done = True  # нужна первая таблица (при загрузке), а не повтор при выходе
+            breakdown_done = True  # только первая таблица
         if _WARNINGS.search(line):
             facts.warnings.append(line.strip()[:300])
     return facts
@@ -287,7 +288,8 @@ def offload_verdict(facts: ServerFacts, candidate: Candidate) -> Offload:
 
 
 class VramSample(BaseModel, frozen=True):
-    source: str  # "windows-counters" | "amdgpu-sysfs"
+    source: str  # "windows-wmi" | "amdgpu-sysfs"
+    adapter: str | None = None  # LUID адаптера Windows, к которому относятся значения
     process_dedicated_mib: float | None = None
     process_shared_mib: float | None = None
     adapter_dedicated_mib: float | None = None
@@ -301,51 +303,82 @@ def vram_sample(pid: int | None) -> VramSample | None:
     return VramSample(source="amdgpu-sysfs", adapter_dedicated_mib=used) if used is not None else None
 
 
+# Классы WMI счётчиков GPU: в отличие от путей Get-Counter, их имена не переводятся на язык Windows.
+_WMI_SCRIPT = (
+    "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+    "$p = @(Get-CimInstance Win32_PerfRawData_GPUPerformanceCounters_GPUProcessMemory -ErrorAction "
+    "SilentlyContinue | Select-Object Name, DedicatedUsage, SharedUsage); "
+    "$a = @(Get-CimInstance Win32_PerfRawData_GPUPerformanceCounters_GPUAdapterMemory -ErrorAction "
+    "SilentlyContinue | Select-Object Name, DedicatedUsage, SharedUsage); "
+    "ConvertTo-Json -Compress -Depth 3 -InputObject @{process = $p; adapter = $a}"
+)
+_LUID = re.compile(r"luid_(0x[0-9a-f]+_0x[0-9a-f]+)", re.I)
+
+
 def _windows_vram(pid: int | None) -> VramSample | None:
-    counters = ["'\\GPU Adapter Memory(*)\\Dedicated Usage'"]
-    if pid is not None:
-        counters += [
-            f"'\\GPU Process Memory(pid_{pid}_*)\\Dedicated Usage'",
-            f"'\\GPU Process Memory(pid_{pid}_*)\\Shared Usage'",
-        ]
-    script = (
-        f"$s = (Get-Counter -Counter {','.join(counters)} -ErrorAction SilentlyContinue).CounterSamples; "
-        "$s | ForEach-Object { '{0}|{1}' -f $_.Path, $_.CookedValue }"
-    )
     try:
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _WMI_SCRIPT],
             capture_output=True,
-            text=True,
-            timeout=30,
+            timeout=60,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    totals = {"adapter": 0.0, "dedicated": 0.0, "shared": 0.0}
-    seen = False
-    for line in result.stdout.splitlines():
-        path, _, value = line.rpartition("|")
-        try:
-            amount = float(value.replace(",", ".")) / MIB
-        except ValueError:
-            continue
-        seen = True
-        lowered = path.lower()
-        if "gpu adapter memory" in lowered:
-            totals["adapter"] += amount
-        elif "shared usage" in lowered:
-            totals["shared"] += amount
-        else:
-            totals["dedicated"] += amount
-    if not seen:
+    return parse_windows_gpu_memory(result.stdout.decode("utf-8", errors="replace"), pid)
+
+
+def parse_windows_gpu_memory(text: str, pid: int | None) -> VramSample | None:
+    """Память GPU из классов WMI: процесс сервера (по всем его записям на одном адаптере) и тот же адаптер.
+    Без процесса — адаптер с наибольшей выделенной памятью (дискретный GPU, а не встроенный)."""
+    try:
+        data = json.loads(text.strip() or "null")
+    except ValueError:
         return None
+    if not isinstance(data, dict):
+        return None
+    process: dict[str, list[float]] = {}  # LUID → [выделенная, общая]
+    adapters: dict[str, float] = {}
+    for kind, target in (("process", None), ("adapter", adapters)):
+        for item in _items(data.get(kind)):
+            name = str(item.get("Name") or "")
+            luid = _LUID.search(name)
+            dedicated, shared = _bytes(item.get("DedicatedUsage")), _bytes(item.get("SharedUsage"))
+            if luid is None or dedicated is None:
+                continue
+            key = luid.group(1).lower()
+            if target is not None:
+                target[key] = target.get(key, 0.0) + dedicated
+            elif pid is not None and name.startswith(f"pid_{pid}_"):
+                totals = process.setdefault(key, [0.0, 0.0])
+                totals[0] += dedicated
+                totals[1] += shared or 0.0
+    if process:
+        adapter = max(process, key=lambda key: process[key][0])
+    elif adapters:
+        adapter = max(adapters, key=lambda key: adapters[key])
+    else:
+        return None
+    dedicated_process, shared_process = process.get(adapter, [None, None])
     return VramSample(
-        source="windows-counters",
-        process_dedicated_mib=round(totals["dedicated"], 1) if pid is not None else None,
-        process_shared_mib=round(totals["shared"], 1) if pid is not None else None,
-        adapter_dedicated_mib=round(totals["adapter"], 1),
+        source="windows-wmi",
+        adapter=adapter,
+        process_dedicated_mib=round(dedicated_process / MIB, 1) if dedicated_process is not None else None,
+        process_shared_mib=round(shared_process / MIB, 1) if shared_process is not None else None,
+        adapter_dedicated_mib=round(adapters[adapter] / MIB, 1) if adapter in adapters else None,
     )
+
+
+def _items(value: object) -> list[dict[str, Any]]:
+    items = value if isinstance(value, list) else [value]
+    return [item for item in items if isinstance(item, dict)]  # pyright: ignore[reportUnknownVariableType]
+
+
+def _bytes(value: object) -> float | None:
+    try:
+        return float(str(value))
+    except ValueError:
+        return None
 
 
 def _amdgpu_vram_used() -> float | None:
@@ -394,12 +427,18 @@ class Memory(BaseModel):
     vram_after_run: VramSample | None = None
     vram_headroom_mib: float | None = None  # сколько VRAM осталось свободным (правило выбора: ≥ 800)
 
-    def shared_spill_mib(self) -> float | None:
-        """Общая (shared) память GPU у процесса сервера, если её больше порога: драйвер Windows вынес часть
-        буферов в RAM — модель «на GPU», но работает медленно. Без счётчиков Windows — None."""
-        samples = (self.vram_loaded, self.vram_after_run)
-        peak = max((sample.process_shared_mib or 0.0 for sample in samples if sample), default=0.0)
-        return peak if peak > SHARED_SPILL_MIB else None
+    def spill_mib(self, gpu_buffers_mib: float) -> float | None:
+        """Сколько буферов сервера на GPU (по логу) не нашлось в выделенной памяти процесса (счётчик Windows),
+        если больше порога: драйвер вынес их в RAM — модель «на GPU», но работает медленно. Общая память
+        процесса сама по себе не признак: в ней законно живут буферы хоста Vulkan и буфер загрузки весов."""
+        samples = [sample for sample in (self.vram_loaded, self.vram_after_run) if sample]
+        dedicated = [
+            sample.process_dedicated_mib for sample in samples if sample.process_dedicated_mib is not None
+        ]
+        if not dedicated or gpu_buffers_mib <= 0:
+            return None
+        missing = gpu_buffers_mib - min(dedicated)
+        return round(missing, 1) if missing > SPILL_MIB else None
 
 
 def vram_headroom(
@@ -424,6 +463,7 @@ class Speed(BaseModel):
     generated_tokens: int | None = None
     generation_tokens_per_s: list[float] = []
     ttft_ms: dict[str, list[float]] = {}  # размер промпта → время до первого токена (поток, без кэша)
+    ttft_prompt_tokens: dict[str, int] = {}  # размер промпта → сколько токенов он занял у этой модели
     warm_latency_ms: list[float] = []  # короткий запрос со схемой, как у агента
 
     def medians(self) -> dict[str, float | None]:
@@ -452,8 +492,11 @@ class RunningServer:
 
 
 @contextmanager
-def running_server(candidate: Candidate, log_path: Path) -> Iterator[RunningServer]:
+def running_server(
+    candidate: Candidate, log_path: Path, *, startup_timeout_s: float | None = None
+) -> Iterator[RunningServer]:
     """Запустить сервер, дождаться /health; при выходе — остановить, даже при ошибке или Ctrl+C."""
+    _ensure_port_free(candidate)
     command = [candidate.server, *server_args(candidate)]
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("wb") as log:
@@ -462,7 +505,7 @@ def running_server(candidate: Candidate, log_path: Path) -> Iterator[RunningServ
         watch = _RssWatch(psutil.Process(process.pid))
         thread = threading.Thread(target=watch.run, daemon=True)
         try:
-            _wait_healthy(candidate, process, log_path)
+            _wait_healthy(candidate, process, log_path, startup_timeout_s or candidate.startup_timeout_s)
             server = RunningServer(candidate, process, log_path, time.perf_counter() - started, watch)
             thread.start()
             yield server
@@ -471,8 +514,21 @@ def running_server(candidate: Candidate, log_path: Path) -> Iterator[RunningServ
             _stop(process)
 
 
-def _wait_healthy(candidate: Candidate, process: subprocess.Popen[bytes], log_path: Path) -> None:
-    deadline = time.monotonic() + candidate.startup_timeout_s
+def _ensure_port_free(candidate: Candidate) -> None:
+    """Порт свободен: иначе /health ответил бы старый сервер (на Windows llama-server делит порт с ним)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(1.0)
+        if probe.connect_ex((candidate.host, candidate.port)) == 0:
+            raise BenchServerError(
+                f"{candidate.id}: порт {candidate.host}:{candidate.port} занят — остановите прежний "
+                "llama-server или задайте другой port в файле кандидатов"
+            )
+
+
+def _wait_healthy(
+    candidate: Candidate, process: subprocess.Popen[bytes], log_path: Path, timeout_s: float
+) -> None:
+    deadline = time.monotonic() + timeout_s
     with httpx.Client(timeout=5.0, trust_env=False) as client:
         while time.monotonic() < deadline:
             if process.poll() is not None:
@@ -486,9 +542,7 @@ def _wait_healthy(candidate: Candidate, process: subprocess.Popen[bytes], log_pa
             except httpx.HTTPError:
                 pass
             time.sleep(HEALTH_POLL_S)
-    raise BenchServerError(
-        f"{candidate.id}: сервер не ответил на /health за {candidate.startup_timeout_s:g} с"
-    )
+    raise BenchServerError(f"{candidate.id}: сервер не ответил на /health за {timeout_s:g} с")
 
 
 def _stop(process: subprocess.Popen[bytes]) -> None:
@@ -511,18 +565,23 @@ def file_sha256(path: Path) -> str:
 
 
 def prefetch(candidate: Candidate, log_path: Path) -> None:
-    """Модель с Hugging Face скачивается первым запуском; время загрузки меряется вторым."""
-    with running_server(candidate, log_path):
+    """Модель с Hugging Face скачивается первым запуском (до /health — пока идёт загрузка); холодный старт
+    меряется вторым."""
+    with running_server(candidate, log_path, startup_timeout_s=PREFETCH_TIMEOUT_S):
         pass
 
 
 PROMPT_SIZES = {"1k": 1000, "4k": 4000, "8k": 8000}
 
 
+FILLER_LINE_TOKENS = 36  # строка заполнителя в токенизаторе Qwen2 (сверено через /tokenize)
+
+
 def filler(tokens: int) -> str:
-    """Текст примерно на `tokens` токенов: русский, английский, пути и числа — как в работе агента."""
+    """Текст примерно на `tokens` токенов: русский, английский, пути и числа — как в работе агента. У других
+    токенизаторов размер другой — точное число токенов отчёт берёт из таймингов сервера."""
     line = "Строка {n}: файл C:/projects/gofra/src/module_{n}.py изменён, status=ok, size={size} bytes.\n"
-    return "".join(line.format(n=n, size=n * 37) for n in range(tokens // 25 + 1))
+    return "".join(line.format(n=n, size=n * 37) for n in range(tokens // FILLER_LINE_TOKENS + 1))
 
 
 def measure_speed(candidate: Candidate, *, repeats: int = 3) -> Speed:
@@ -552,7 +611,13 @@ def measure_speed(candidate: Candidate, *, repeats: int = 3) -> Speed:
             for size, tokens in PROMPT_SIZES.items():
                 if tokens + 300 > candidate.ctx:
                     continue
-                speed.ttft_ms.setdefault(size, []).append(_ttft(client, filler(tokens)))
+                try:
+                    elapsed, prompt_tokens = _ttft(client, filler(tokens))
+                except httpx.HTTPStatusError:  # у этого токенизатора промпт вышел длиннее окна
+                    continue
+                speed.ttft_ms.setdefault(size, []).append(elapsed)
+                if prompt_tokens is not None:
+                    speed.ttft_prompt_tokens[size] = prompt_tokens
             speed.warm_latency_ms.append(_warm_request(client, candidate))
     return speed
 
@@ -564,15 +629,26 @@ def _completion(client: httpx.Client, body: dict[str, Any]) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}  # pyright: ignore[reportUnknownVariableType]
 
 
-def _ttft(client: httpx.Client, prompt: str) -> float:
+def _ttft(client: httpx.Client, prompt: str) -> tuple[float, int | None]:
+    """Время до первого токена в потоке и настоящий размер промпта (из таймингов последнего сообщения)."""
     started = time.perf_counter()
+    first: float | None = None
+    prompt_tokens: int | None = None
     body = {"prompt": prompt, "n_predict": 8, "cache_prompt": False, "stream": True}
     with client.stream("POST", "/completion", json=body) as response:
         response.raise_for_status()
         for line in response.iter_lines():
-            if line.startswith("data:") and '"content"' in line:
-                return round((time.perf_counter() - started) * 1000, 1)
-    return round((time.perf_counter() - started) * 1000, 1)
+            if not line.startswith("data:"):
+                continue
+            if first is None and '"content"' in line:
+                first = round((time.perf_counter() - started) * 1000, 1)
+            if '"timings"' in line:
+                try:
+                    timings = _mapping(_mapping(json.loads(line[5:])).get("timings"))
+                except ValueError:
+                    continue
+                prompt_tokens = _int(timings.get("prompt_n"))
+    return first if first is not None else round((time.perf_counter() - started) * 1000, 1), prompt_tokens
 
 
 def _warm_request(client: httpx.Client, candidate: Candidate) -> float:

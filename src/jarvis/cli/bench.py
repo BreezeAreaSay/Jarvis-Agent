@@ -65,6 +65,7 @@ def bench_agent(
                     loaded.config,
                     label=label or "configured",
                     real_home=loaded.home,
+                    real_config=loaded.config_path,
                     task_timeout_s=timeout,
                     on_result=_progress,
                 )
@@ -104,7 +105,7 @@ def bench_run(
     """Кандидаты по очереди: сервер с явными параметрами → offload, память, скорость → датасет → отчёт."""
     candidates = _candidates(candidates_path, only, server)
     dataset = _dataset(dataset_path, tasks)
-    real_home = load_or_exit().home
+    loaded = load_or_exit()
     session = out / _stamp()
     reports: list[BenchReport] = []
     failed: list[str] = []
@@ -121,13 +122,14 @@ def bench_run(
                 folder,
                 repeats=repeats,
                 fetch=fetch,
-                real_home=real_home,
+                real_home=loaded.home,
+                real_config=loaded.config_path,
                 task_timeout_s=timeout,
                 on_result=_progress,
                 say=typer.echo,
                 allow_cpu_only=allow_cpu_only,
             )
-        except BenchServerError as exc:
+        except (BenchServerError, OSError) as exc:
             # Следующий кандидат всё равно меряется: один не поместившийся в память не обрывает сессию.
             typer.echo(str(exc), err=True)
             folder.mkdir(parents=True, exist_ok=True)

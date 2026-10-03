@@ -107,6 +107,26 @@ def test_windows_zones_ignore_case_and_separator_style() -> None:
     assert decide((EffectKind.WRITE, "c:\\work\\a.txt"), target=target, zones=zones)[0] is ASK
 
 
+def test_read_roots_send_other_reads_to_a_human() -> None:
+    """С `read_roots` (бенчмарк) читать без человека можно только внутри них; запись — по прежним правилам."""
+    zones = PolicyZones(
+        os_family="posix", read_roots=("/tmp/bench/workspace",), workspaces=("/tmp/bench/workspace",)
+    )
+    assert decide((EffectKind.READ, "/tmp/bench/workspace/README.md"), zones=zones) == (
+        ALLOW,
+        ["effect.read"],
+    )
+    assert decide((EffectKind.READ, "/home/u/Documents/tax.pdf"), zones=zones) == (
+        ASK,
+        ["zone.outside_read_roots"],
+    )
+    assert decide((EffectKind.READ, "processes"), zones=zones) == (ALLOW, ["effect.read"])
+    assert decide((EffectKind.WRITE, "/home/u/Documents/a"), zones=zones)[0] is DENY
+    assert decide((EffectKind.READ, "/home/u/docs/a.txt"))[0] is ALLOW  # без read_roots — как раньше
+    with pytest.raises(ValueError, match="абсолютным"):
+        PolicyZones(os_family="posix", read_roots=("workspace",))
+
+
 @pytest.mark.parametrize("kind", [TargetKind.WSL, TargetKind.DOCKER, TargetKind.SSH])
 def test_only_the_host_target_is_supported(kind: TargetKind) -> None:
     target = ExecutionTarget(kind=kind, os_family="posix", name="x")

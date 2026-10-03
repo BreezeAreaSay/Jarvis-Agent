@@ -28,6 +28,8 @@ class EventKind(StrEnum):
     TOOL_STARTED = "tool.started"
     TOOL_FINISHED = "tool.finished"
     TOOL_VERIFIED = "tool.verified"
+    MODEL_CALLED = "model.called"
+    ACTION_PROPOSED = "action.proposed"
 
 
 class TraceEvent(BaseModel, frozen=True, extra="forbid"):

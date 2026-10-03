@@ -463,8 +463,11 @@ class TaskRunner:
         """Переход: задача, событие перехода и объясняющие его события — одной транзакцией."""
         check_transition(task.status, target)
         changes: dict[str, Any] = {"status": target, "usage": usage}
-        if state is not None:
-            changes["state"] = state
+        memory = state if state is not None else task.state
+        if is_terminal(target) and memory is not None and memory.has_secrets():
+            memory = memory.without_secrets()  # секреты нужны модели, пока задача идёт, и не дольше
+        if memory is not None and memory is not task.state:
+            changes["state"] = memory
         if route is not None:
             changes["route"] = route
         if budget is not None:

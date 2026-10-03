@@ -28,7 +28,13 @@ from jarvis.core.tools.runtime import ToolRuntime
 from jarvis.core.trace import Tracer, shorten
 from jarvis.domain.agent import AgentState, AgentStep, FinishAction, Observation, ProposedAction, ToolAction
 from jarvis.domain.budget import BudgetLimit
-from jarvis.domain.errors import InvalidModelOutput, ToolCancelled, ToolError, VerificationFailed
+from jarvis.domain.errors import (
+    InvalidModelOutput,
+    ModelContextExceeded,
+    ToolCancelled,
+    ToolError,
+    VerificationFailed,
+)
 from jarvis.domain.models import ModelRole
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Route, StageOutcome, Task, TaskChanges
@@ -71,18 +77,20 @@ class Executor:
 
         budget.charge(BudgetLimit.STEPS)
         definitions = self._tools.definitions()
-        executed = state.executed_calls()
-        prompt = executor_prompt(
-            task, state, definitions, budget_tokens=self._gateway.prompt_budget(ModelRole.EXECUTOR)
-        )
+        output = decision_output(definitions, state.executed_calls())
+        room = self._gateway.prompt_budget(ModelRole.EXECUTOR, output)
         try:
-            generation = await self._gateway.generate(
-                ModelRole.EXECUTOR,
-                prompt,
-                decision_output(definitions, executed),
-                task_id=task.id,
-                budget=budget,
-            )
+            try:
+                prompt = executor_prompt(task, state, definitions, budget_tokens=room)
+                generation = await self._gateway.generate(
+                    ModelRole.EXECUTOR, prompt, output, task_id=task.id, budget=budget
+                )
+            except ModelContextExceeded:
+                # Оценка токенов разошлась с токенизатором сервера: ещё раз, с половиной места.
+                prompt = executor_prompt(task, state, definitions, budget_tokens=room // 2)
+                generation = await self._gateway.generate(
+                    ModelRole.EXECUTOR, prompt, output, task_id=task.id, budget=budget
+                )
         except InvalidModelOutput as exc:
             budget.record_failure()
             problems = exc.details.get("problems")
@@ -153,24 +161,29 @@ class Executor:
             case ToolOutcomeKind.EXECUTED:
                 assert outcome.result is not None
                 data, note = _clip(json.dumps(outcome.result.output, ensure_ascii=False))
+                # Прочитанное из зоны секретов (с разрешения человека) не оседает в журналах.
+                secret = any(rule.startswith("zone.secrets") for rule in outcome.decision.rules)
                 return Observation(
-                    status="executed", summary=f"{tool}: исполнен, проверка пройдена{note}", data=data
+                    status="executed",
+                    summary=f"{tool}: исполнен, проверка пройдена{note}",
+                    data=data,
+                    sensitive=secret,
                 )
             case ToolOutcomeKind.DRY_RUN:
                 would = "был бы исполнен" if outcome.would_execute else "потребовал бы подтверждения"
                 return Observation(status="dry_run", summary=f"{tool}: dry run — не исполнялся ({would})")
             case ToolOutcomeKind.DENIED:
                 budget.record_failure()
-                who = (
-                    "человеком"
-                    if any(rule.startswith("approval.") for rule in outcome.decision.rules)
-                    else "политикой"
-                )
+                rules = outcome.decision.rules
+                if "approval.expired" in rules:
+                    verdict = "срок подтверждения истёк"
+                elif "approval.denied" in rules:
+                    verdict = "отказано человеком"
+                else:
+                    verdict = "отказано политикой"
                 # Причина может содержать пути из аргументов — это данные, а не текст Jarvis.
-                reason = f"{outcome.decision.reason} [{', '.join(outcome.decision.rules)}]"
-                return Observation(
-                    status="denied", summary=f"{tool}: отказано {who}, не исполнен", data=reason
-                )
+                reason = f"{outcome.decision.reason} [{', '.join(rules)}]"
+                return Observation(status="denied", summary=f"{tool}: {verdict}, не исполнен", data=reason)
             case ToolOutcomeKind.NEEDS_APPROVAL:
                 raise AssertionError("ожидание подтверждения обрабатывает стадия")
 

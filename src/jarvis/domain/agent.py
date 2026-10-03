@@ -38,11 +38,14 @@ ObservationStatus = Literal["executed", "denied", "dry_run", "failed"]
 
 class Observation(BaseModel, frozen=True, extra="forbid"):
     """Что вернул вызов. `summary` пишет Jarvis; `data` — вывод инструмента или текст ошибки: это
-    данные извне, в промпт они попадают только блоком DATA."""
+    данные извне, в промпт они попадают только блоком DATA. `sensitive` — прочитано из зоны секретов
+    (с разрешения человека): такие данные не сохраняются в журналах и удаляются, когда задача
+    завершается."""
 
     status: ObservationStatus
     summary: str
     data: str | None = None
+    sensitive: bool = False
 
 
 class AgentStep(BaseModel, frozen=True, extra="forbid"):
@@ -81,6 +84,25 @@ class AgentState(BaseModel, frozen=True, extra="forbid"):
             and step.observation is not None
             and step.observation.status == "executed"
         ]
+
+    def has_secrets(self) -> bool:
+        return any(
+            step.observation is not None and step.observation.sensitive and step.observation.data is not None
+            for step in self.steps
+        )
+
+    def without_secrets(self) -> "AgentState":
+        """Рабочая память завершённой задачи: данные секретов удалены, остальное — как было."""
+        steps: list[AgentStep] = []
+        for step in self.steps:
+            observation = step.observation
+            if observation is not None and observation.sensitive and observation.data is not None:
+                observation = observation.model_copy(
+                    update={"data": None, "summary": f"{observation.summary}; данные секрета удалены"}
+                )
+                step = step.model_copy(update={"observation": observation})
+            steps.append(step)
+        return AgentState(steps=steps)
 
     def with_step(self, step: AgentStep) -> "AgentState":
         return AgentState(steps=[*self.steps, step])

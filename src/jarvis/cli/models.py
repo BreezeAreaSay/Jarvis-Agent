@@ -93,8 +93,8 @@ async def _check(
         status = await backend.describe()
     except ModelError as exc:
         return problems + _fail(exc.message)
-    build = f" ({status.server})" if status.server else ""
-    typer.echo(f"  ✓ сервер отвечает{build}: {', '.join(status.models) or 'моделей нет'}")
+    build = f" ({clean_line(status.server)})" if status.server else ""
+    typer.echo(f"  ✓ сервер отвечает{build}: {clean_line(', '.join(status.models)) or 'моделей нет'}")
     if status.context_window is None:
         typer.echo("  ? сервер не сообщает окно контекста: проверьте сами (у llama-server — параметр -c)")
     elif caps.context_window > status.context_window:
@@ -201,5 +201,5 @@ def _speed(response: BackendResponse) -> str:
 
 
 def _fail(message: str) -> int:
-    typer.echo(f"  ✗ {message}", err=True)
+    typer.echo(f"  ✗ {clean_line(message)}", err=True)  # в сообщении бывает текст сервера
     return 1

@@ -18,6 +18,7 @@ from jarvis.domain.tools import EffectKind, ToolDefinition
 
 TEMPLATE_ID = "executor.v1"
 OMITTED = "[данные опущены: не помещаются в окно контекста модели]"
+DROPPED = "[шаги 1–{last} опущены: не помещаются в окно контекста модели]"
 
 _READ_ONLY_RULE = (
     "3. Инструменты только читают. Изменять файлы, запускать программы и ходить в сеть ты не можешь — "
@@ -58,15 +59,22 @@ def system_rules(definitions: Sequence[ToolDefinition]) -> str:
 def executor_prompt(
     task: Task, state: AgentState, definitions: Sequence[ToolDefinition], *, budget_tokens: int
 ) -> Prompt:
-    """Промпт, который помещается в `budget_tokens` (оценка сверху), если это вообще возможно."""
+    """Промпт, который помещается в `budget_tokens` (оценка сверху), если это вообще возможно: сначала
+    опускаются данные старых вызовов, потом — старые шаги целиком (последний шаг остаётся всегда)."""
     history = _history(state)
     omitted: set[int] = set()
+    dropped = 0
     candidates = [index for index, step in enumerate(state.steps) if _has_data(step)]
     while True:
-        prompt = _prompt(task, definitions, history, omitted)
-        if _tokens(prompt) <= budget_tokens or not candidates:
+        prompt = _prompt(task, definitions, history, omitted, dropped)
+        if _tokens(prompt) <= budget_tokens:
             return prompt
-        omitted.add(candidates.pop(0))
+        if candidates:
+            omitted.add(candidates.pop(0))
+        elif dropped < len(history) - 1:
+            dropped += 1
+        else:
+            return prompt
 
 
 def _prompt(
@@ -74,13 +82,18 @@ def _prompt(
     definitions: Sequence[ToolDefinition],
     history: list[tuple[int, list[PromptSection]]],
     omitted: set[int],
+    dropped: int,
 ) -> Prompt:
     sections = [
         PromptSection(kind="system", trust=Trust.TRUSTED, content=system_rules(definitions)),
         PromptSection(kind="tools", trust=Trust.TRUSTED, title="Инструменты", content=_tools(definitions)),
         PromptSection(kind="request", trust=Trust.TRUSTED, title="Запрос", content=_request(task)),
     ]
-    for index, step_sections in history:
+    if dropped:
+        sections.append(
+            PromptSection(kind="history", trust=Trust.TRUSTED, content=DROPPED.format(last=dropped))
+        )
+    for index, step_sections in history[dropped:]:
         for section in step_sections:
             if index in omitted and section.trust is Trust.UNTRUSTED:
                 section = section.model_copy(update={"content": OMITTED})
@@ -120,14 +133,11 @@ def _history(state: AgentState) -> list[tuple[int, list[PromptSection]]]:
 def _step(number: int, step: AgentStep) -> list[PromptSection]:
     title = f"Шаг {number}"
     if step.proposal is None:
+        # Причины пишет проверка, но в них бывает текст из ответа модели: показываются как её текст.
         listed = "\n".join(f"- {problem}" for problem in step.problems)
         return [
-            PromptSection(
-                kind="history",
-                trust=Trust.TRUSTED,
-                title=title,
-                content=f"Твой ответ не принят:\n{listed}",
-            )
+            PromptSection(kind="history", trust=Trust.TRUSTED, title=title, content="Твой ответ не принят."),
+            PromptSection(kind="history", trust=Trust.DERIVED, title="Причины", content=listed),
         ]
     sections = [
         PromptSection(
@@ -150,6 +160,7 @@ def _step(number: int, step: AgentStep) -> list[PromptSection]:
                 trust=Trust.UNTRUSTED,
                 ref=step.call_id or f"step_{number}",
                 source=f"tool:{tool}",
+                sensitive=observation.sensitive,
                 content=observation.data,
             )
         )

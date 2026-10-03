@@ -181,6 +181,12 @@ class ModelRequestRejected(ModelError):
     category = "model_request_rejected"
 
 
+class ModelContextExceeded(ModelRequestRejected):
+    """Промпт не поместился в окно контекста сервера: можно повторить с более коротким."""
+
+    category = "model_context_exceeded"
+
+
 class InvalidModelOutput(JarvisError):
     """Ответ модели не прошёл схему или семантическую проверку и после всех попыток ремонта."""
 

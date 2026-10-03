@@ -13,7 +13,13 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
-from jarvis.domain.errors import JarvisError, ModelRequestRejected, ModelTimeout, ModelUnavailable
+from jarvis.domain.errors import (
+    JarvisError,
+    ModelContextExceeded,
+    ModelRequestRejected,
+    ModelTimeout,
+    ModelUnavailable,
+)
 from jarvis.domain.models import BackendRequest, BackendResponse, BackendStatus, ModelCapabilities, ModelInfo
 
 SCRIPTED_CAPABILITIES = ModelCapabilities(structured_output=True, context_window=16384)
@@ -26,7 +32,7 @@ class ModelScriptExhausted(JarvisError):
 class ModelReply(BaseModel, frozen=True, extra="forbid", populate_by_name=True):
     text: str | None = None
     json_: JsonValue = Field(default=None, alias="json")  # объект ответа; сериализуется как есть
-    error: Literal["unavailable", "timeout", "rejected"] | None = None
+    error: Literal["unavailable", "timeout", "rejected", "context"] | None = None
     hang: bool = False  # ответ не приходит: запрос прерывают отмена или лимит времени
     finish_reason: str = "stop"
 
@@ -80,6 +86,8 @@ class ScriptedModel:
                 raise ModelTimeout("scripted: сервер не ответил вовремя")
             case "rejected":
                 raise ModelRequestRejected("scripted: сервер отклонил запрос")
+            case "context":
+                raise ModelContextExceeded("scripted: промпт не помещается в окно")
             case None:
                 pass
         text = reply.body()
@@ -87,6 +95,7 @@ class ScriptedModel:
         return BackendResponse(
             text=text,
             finish_reason=reply.finish_reason,
+            truncated=reply.finish_reason == "length",
             prompt_tokens=prompt,
             completion_tokens=max(1, len(text) // 4),
             latency_ms=1,

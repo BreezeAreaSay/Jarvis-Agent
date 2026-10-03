@@ -9,6 +9,7 @@
 (прокси, сертификаты) не читаются: запрос уходит ровно на адрес из конфига.
 """
 
+import math
 import re
 import time
 from typing import Any
@@ -16,7 +17,7 @@ from typing import Any
 import httpx
 from pydantic import JsonValue
 
-from jarvis.domain.errors import ModelRequestRejected, ModelTimeout, ModelUnavailable
+from jarvis.domain.errors import ModelContextExceeded, ModelRequestRejected, ModelTimeout, ModelUnavailable
 from jarvis.domain.models import BackendRequest, BackendResponse, BackendStatus, ModelInfo
 from jarvis.domain.settings import EndpointSettings
 
@@ -54,11 +55,12 @@ class OpenAICompatibleBackend:
                 f"{self._info.endpoint}: ответ сервера не похож на chat.completion",
                 endpoint=self._info.endpoint,
             ) from None
-        usage = data.get("usage") or {}
-        timings = data.get("timings") or {}
+        usage = _mapping(data.get("usage"))
+        timings = _mapping(data.get("timings"))
         return BackendResponse(
             text=_THINKING.sub("", str(content), count=1),
             finish_reason=str(finish_reason) if finish_reason is not None else None,
+            truncated=finish_reason == "length",
             prompt_tokens=_count(usage.get("prompt_tokens")),
             completion_tokens=_count(usage.get("completion_tokens")),
             latency_ms=latency_ms,
@@ -138,13 +140,23 @@ class OpenAICompatibleBackend:
                 f"{endpoint}: сервер модели недоступен ({self._settings.base_url}): {type(exc).__name__}",
                 endpoint=endpoint,
             ) from None
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            raise ModelRequestRejected(
+                f"{endpoint}: запрос к серверу модели не удался: {type(exc).__name__}: {exc}",
+                endpoint=endpoint,
+            ) from None
         if response.status_code >= 500:
             raise ModelUnavailable(
                 f"{endpoint}: сервер модели ответил {response.status_code}: {_error_text(response)}",
                 endpoint=endpoint,
                 status=response.status_code,
             )
-        if response.status_code >= 400:
+        if response.status_code == 400 and _context_overflow(response):
+            raise ModelContextExceeded(
+                f"{endpoint}: промпт не помещается в окно контекста сервера: {_error_text(response)}",
+                endpoint=endpoint,
+            )
+        if response.status_code >= 300:  # перенаправлений не бывает у локального сервера: не следуем
             raise ModelRequestRejected(
                 f"{endpoint}: сервер отклонил запрос ({response.status_code}): {_error_text(response)}",
                 endpoint=endpoint,
@@ -189,7 +201,22 @@ def _error_text(response: httpx.Response) -> str:
     return response.text[:_ERROR_CHARS]
 
 
+def _context_overflow(response: httpx.Response) -> bool:
+    """llama-server: type exceed_context_size_error; другие серверы — по тексту ошибки."""
+    try:
+        data = response.json()
+    except ValueError:
+        return False
+    error = _mapping(data.get("error") if isinstance(data, dict) else None)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    text = f"{error.get('type', '')} {error.get('message', '')}".lower()
+    return "exceed_context" in text or "context size" in text or "context length" in text
+
+
+def _mapping(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}  # pyright: ignore[reportUnknownVariableType]
+
+
 def _count(value: object) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value < 0:
         return None
     return round(value)

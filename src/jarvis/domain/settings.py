@@ -4,6 +4,7 @@
 объект. Разделы появляются вместе с потребителем.
 """
 
+import ipaddress
 import re
 from typing import Literal, Self
 
@@ -98,8 +99,20 @@ def is_loopback_url(url: str) -> bool:
     match = _BASE_URL.fullmatch(url)
     if match is None:
         return False
+    port = match.group("port")
+    if port is not None and not 0 < int(port) <= 65535:
+        return False
     host = match.group("host").lower()
-    return host in ("localhost", "[::1]") or _LOOPBACK_V4.fullmatch(host) is not None
+    if host == "localhost":
+        return True
+    if host.startswith("["):
+        host = host[1:-1]
+    elif _LOOPBACK_V4.fullmatch(host) is None:
+        return False  # имя хоста, кроме localhost, может указывать куда угодно
+    try:
+        return ipaddress.ip_address(host).is_loopback  # 127.0.0.999 — не адрес
+    except ValueError:
+        return False
 
 
 class SamplingSettings(BaseModel, frozen=True, extra="forbid"):

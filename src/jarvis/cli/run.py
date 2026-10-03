@@ -20,7 +20,7 @@ from jarvis.cli.common import load_or_exit
 from jarvis.core.timeline import clean_block, clean_line
 from jarvis.core.trace import shorten
 from jarvis.domain.approvals import ApprovalDecision, ApprovalRequest, ApprovalStatus
-from jarvis.domain.errors import JarvisError
+from jarvis.domain.errors import ApprovalClosed, JarvisError
 from jarvis.domain.ids import TaskId
 from jarvis.domain.models import ModelRole
 from jarvis.domain.states import TaskStatus
@@ -93,7 +93,8 @@ async def _drive(app: App, task_id: TaskId) -> TaskSnapshot:
             pending = [item for item in app.tasks.approvals(task_id) if item.status is ApprovalStatus.PENDING]
             if not pending:
                 return snapshot
-            signal.signal(signal.SIGINT, previous)  # у вопроса человеку Ctrl+C — обычное прерывание
+            # У вопроса человеку Ctrl+C — KeyboardInterrupt (а не обработчик asyncio): задача отменяется.
+            signal.signal(signal.SIGINT, signal.default_int_handler)
             try:
                 approved = _ask(pending[-1])
             except (KeyboardInterrupt, typer.Abort):
@@ -102,7 +103,10 @@ async def _drive(app: App, task_id: TaskId) -> TaskSnapshot:
             finally:
                 signal.signal(signal.SIGINT, interrupt)
             decision = ApprovalDecision.APPROVE if approved else ApprovalDecision.DENY
-            app.tasks.resolve_approval(pending[-1].id, decision, via=CLI_CHANNEL)
+            try:
+                app.tasks.resolve_approval(pending[-1].id, decision, via=CLI_CHANNEL)
+            except ApprovalClosed as exc:  # например, срок вышел, пока человек думал: задача продолжится
+                typer.echo(exc.message, err=True)
     finally:
         signal.signal(signal.SIGINT, previous)
 
@@ -145,7 +149,7 @@ def progress_line(event: TraceEvent) -> str | None:
         case EventKind.ACTION_PROPOSED:
             target = payload.get("tool") if payload.get("type") == "tool" else "ответ"
             decision = shorten(str(payload.get("decision")), 160)
-            return f"· шаг {payload.get('step')}: {clean_line(target)} — {clean_line(decision)}"
+            return f"· шаг {payload.get('step')}: {clean_line(target)} — модель: «{clean_line(decision)}»"
         case EventKind.MODEL_CALLED if payload.get("status") == "invalid":
             problems = payload.get("problems")
             first = problems[0] if isinstance(problems, list) and problems else "?"

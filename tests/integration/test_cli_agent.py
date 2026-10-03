@@ -48,7 +48,7 @@ def test_run_lets_the_model_use_tools_and_answer(home: Path) -> None:
         result = CliRunner().invoke(app, ["run", "во", "сколько", "встреча?"])
         assert result.exit_code == 0, result.output
     assert "task_1" in result.output
-    assert "· шаг 1: filesystem.read_text — действую" in result.output
+    assert "· шаг 1: filesystem.read_text — модель: «действую»" in result.output
     assert "filesystem.read_text: succeeded" in result.output
     assert "\nВстреча в 15:30.\n" in result.output
     first, second = stub.requests

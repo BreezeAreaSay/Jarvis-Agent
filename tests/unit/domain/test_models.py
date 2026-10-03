@@ -96,3 +96,23 @@ def test_agent_state_tracks_pending_calls_and_answers() -> None:
     state = state.with_step(AgentStep(problems=["плохой JSON"])).with_step(AgentStep(proposal=finish))
     assert state.answer is not None
     assert state.answer.answer == "ответ"
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://127.0.0.999/v1", "http://127.256.0.1/v1", "http://localhost:99999/v1", "http://[::2]:8080/v1"],
+)
+def test_impossible_or_non_loopback_addresses_are_rejected(url: str) -> None:
+    assert not is_loopback_url(url)
+
+
+def test_denied_calls_are_not_evidence() -> None:
+    call = ProposedAction(decision="удалю", action=ToolAction(type="tool", tool="t", arguments={}))
+    state = AgentState(
+        steps=[
+            AgentStep(
+                proposal=call, call_id="task_1.call_1", observation=Observation(status="denied", summary="x")
+            )
+        ]
+    )
+    assert state.executed_calls() == []

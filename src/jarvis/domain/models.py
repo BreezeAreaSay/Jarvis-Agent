@@ -48,6 +48,7 @@ class PromptSection(BaseModel, frozen=True, extra="forbid"):
     title: str | None = None  # заголовок секции для модели
     source: str | None = None  # откуда данные: "tool:filesystem.read_text"
     ref: str | None = None  # ID для блока DATA: "task_1.call_2"
+    sensitive: bool = False  # секрет, прочитанный с разрешения: модель видит, журнал — нет
     content: str
 
 
@@ -71,7 +72,8 @@ class BackendRequest(BaseModel, frozen=True, extra="forbid"):
 
 class BackendResponse(BaseModel, frozen=True, extra="forbid"):
     text: str  # ответ без блока «размышлений»
-    finish_reason: str | None = None  # "stop", "length"
+    finish_reason: str | None = None  # как его назвал сервер — для журнала
+    truncated: bool = False  # ответ оборван лимитом длины (адаптер переводит формат сервера)
     prompt_tokens: NonNegativeInt | None = None
     completion_tokens: NonNegativeInt | None = None
     latency_ms: NonNegativeInt  # от запроса до ответа целиком

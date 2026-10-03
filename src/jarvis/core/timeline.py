@@ -15,8 +15,12 @@ from jarvis.domain.task import TaskSnapshot
 from jarvis.domain.trace import EventKind, TraceEvent
 
 _INDENT = " " * 10
-_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-_CONTROL_IN_BLOCK = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")  # перевод строки и табуляция остаются
+# Управляющие символы и знаки направления текста (bidi): ими данные могут переставить видимый текст.
+_BIDI = "\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069"
+_CONTROL = re.compile(f"[\\x00-\\x1f\\x7f-\\x9f{_BIDI}]")
+_CONTROL_IN_BLOCK = re.compile(
+    f"[\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f{_BIDI}]"
+)  # без перевода строки и табуляции
 
 
 def render_timeline(
@@ -161,12 +165,17 @@ def _quote(value: object) -> str:
 
 def _clean(value: object) -> str:
     """Текст из трассы без управляющих символов: в терминал попадает только видимое."""
-    return _CONTROL.sub(lambda match: f"\\x{ord(match.group()):02x}", str(value))
+    return _CONTROL.sub(_escaped, str(value))
 
 
 def clean_block(value: object) -> str:
     """Многострочный текст (ответ модели, промпт) без управляющих символов, кроме \\n и \\t."""
-    return _CONTROL_IN_BLOCK.sub(lambda match: f"\\x{ord(match.group()):02x}", str(value))
+    return _CONTROL_IN_BLOCK.sub(_escaped, str(value))
+
+
+def _escaped(match: re.Match[str]) -> str:
+    code = ord(match.group())
+    return f"\\x{code:02x}" if code < 0x100 else f"\\u{code:04x}"
 
 
 def clean_line(value: object) -> str:

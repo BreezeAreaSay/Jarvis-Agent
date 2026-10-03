@@ -12,7 +12,7 @@ from collections.abc import Sequence
 
 from pydantic import JsonValue, ValidationError
 
-from jarvis.core.models.gateway import StructuredOutput
+from jarvis.core.models.gateway import StructuredOutput, problem_text
 from jarvis.domain.agent import DECISION_CHARS, FinishAction, ProposedAction, ToolAction
 from jarvis.domain.tools import ToolDefinition
 
@@ -35,7 +35,12 @@ def clean_schema(schema: dict[str, JsonValue]) -> dict[str, JsonValue]:
         ref = node.get("$ref")
         if isinstance(ref, str) and ref.startswith("#/$defs/"):
             return walk(defs[ref.removeprefix("#/$defs/")], depth + 1)
-        return {key: walk(value, depth + 1) for key, value in node.items() if key not in ("title", "$defs")}
+        # «title» — подпись схемы (строка); аргумент с именем title — схема (объект), он остаётся.
+        return {
+            key: walk(value, depth + 1)
+            for key, value in node.items()
+            if key != "$defs" and not (key == "title" and isinstance(value, str))
+        }
 
     cleaned = walk(schema, 0)
     assert isinstance(cleaned, dict)
@@ -93,16 +98,12 @@ def decision_output(
         action = proposal.action
         if isinstance(action, ToolAction):
             definition = known.get(action.tool)
-            if definition is None:
-                available = ", ".join(sorted(known))
-                return [f"action.tool: инструмента {action.tool[:60]!r} нет; доступны: {available}"]
+            if definition is None:  # имя из ответа не повторяется: объяснение — текст Jarvis
+                return [f"action.tool: такого инструмента нет; доступны: {', '.join(sorted(known))}"]
             try:
                 definition.input_model.model_validate(action.arguments)
             except ValidationError as exc:
-                return [
-                    f"action.arguments.{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
-                    for error in exc.errors()[:_MAX_PROBLEMS]
-                ]
+                return [problem_text(error, "action.arguments.") for error in exc.errors()[:_MAX_PROBLEMS]]
             return []
         return _check_answer(action, executed)
 
@@ -114,5 +115,4 @@ def _check_answer(action: FinishAction, executed: Sequence[str]) -> list[str]:
     if not unknown:
         return []
     allowed = ", ".join(executed) or "исполненных вызовов нет — оставь evidence пустым"
-    named = ", ".join(item[:40] for item in unknown[:3])
-    return [f"action.evidence: {named} — не исполненные вызовы; можно: {allowed}"]
+    return [f"action.evidence: ссылок не на исполненные вызовы — {len(unknown)}; можно: {allowed}"]

@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from jarvis.adapters.models import OpenAICompatibleBackend
-from jarvis.domain.errors import ModelRequestRejected, ModelTimeout, ModelUnavailable
+from jarvis.domain.errors import ModelContextExceeded, ModelRequestRejected, ModelTimeout, ModelUnavailable
 from jarvis.domain.models import BackendRequest, ChatMessage, ModelCapabilities
 from jarvis.domain.settings import EndpointSettings
 from jarvis.evals.models import ModelReply, ScriptedModel
@@ -235,3 +235,34 @@ async def test_describe_works_without_llama_cpp_extras() -> None:
     assert status.models == ["some-model"]
     assert status.context_window is None
     assert status.server is None
+
+
+async def test_context_overflow_is_recognised() -> None:
+    server = Server(
+        {("POST", "/v1/chat/completions"): lambda _: httpx.Response(400, json=fixture("error_context.json"))}
+    )
+    with pytest.raises(ModelContextExceeded):
+        await server.backend().complete(REQUEST)
+
+
+async def test_redirects_are_not_followed() -> None:
+    def redirect(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(307, headers={"Location": "https://example.com/v1/chat/completions"})
+
+    server = Server({("POST", "/v1/chat/completions"): redirect})
+    with pytest.raises(ModelRequestRejected, match="307"):
+        await server.backend().complete(REQUEST)
+    assert len(server.requests) == 1
+
+
+@pytest.mark.parametrize("usage", ['"n/a"', '{"prompt_tokens": 1e999, "completion_tokens": -5}', "null"])
+async def test_odd_usage_fields_are_ignored(usage: str) -> None:
+    body = (
+        '{"choices": [{"message": {"content": "{}"}, "finish_reason": "length"}], '
+        f'"usage": {usage}, "timings": []}}'
+    )
+    server = Server({("POST", "/v1/chat/completions"): lambda _: httpx.Response(200, content=body.encode())})
+    response = await server.backend().complete(REQUEST)
+    assert response.prompt_tokens is None
+    assert response.completion_tokens is None
+    assert response.truncated

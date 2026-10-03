@@ -10,11 +10,13 @@ from collections.abc import Sequence
 from datetime import tzinfo
 
 from jarvis.domain.metrics import TaskMetrics
+from jarvis.domain.models import ModelCallRecord
 from jarvis.domain.task import TaskSnapshot
 from jarvis.domain.trace import EventKind, TraceEvent
 
 _INDENT = " " * 10
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_CONTROL_IN_BLOCK = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")  # перевод строки и табуляция остаются
 
 
 def render_timeline(
@@ -123,6 +125,25 @@ def _render_event(event: TraceEvent, tz: tzinfo) -> list[str]:
             return [f"{time} {event.kind}", f"{_INDENT}{_clean(json.dumps(payload, ensure_ascii=False))}"]
 
 
+def render_model_call(call: ModelCallRecord) -> str:
+    """Промпт и ответ одной попытки — данные для отладки, показанные как есть, без управляющих символов."""
+    schema = "схема на сервере" if call.json_schema else "схема в промпте"
+    lines = [
+        "",
+        f"── {call.id}  {call.role} {call.status}  попытка {call.attempt}  {call.template_id}  {schema}",
+        f"   {call.endpoint} / {call.model}  prompt_sha256={call.prompt_sha256[:16]}…",
+    ]
+    for message in call.messages:
+        lines += [f"[{message.role}]", clean_block(message.content)]
+    lines.append("[ответ]" if call.response_text is not None else "[ответа нет]")
+    if call.response_text is not None:
+        lines.append(clean_block(call.response_text))
+    lines += [f"  ! {_clean(problem)}" for problem in call.problems]
+    if call.error is not None:
+        lines.append(f"  ! {call.error.category}: {_clean(call.error.message)}")
+    return "\n".join(lines)
+
+
 def _render_metrics(metrics: TaskMetrics) -> str:
     state = "завершена" if metrics.finished else "не завершена"
     return (
@@ -141,3 +162,12 @@ def _quote(value: object) -> str:
 def _clean(value: object) -> str:
     """Текст из трассы без управляющих символов: в терминал попадает только видимое."""
     return _CONTROL.sub(lambda match: f"\\x{ord(match.group()):02x}", str(value))
+
+
+def clean_block(value: object) -> str:
+    """Многострочный текст (ответ модели, промпт) без управляющих символов, кроме \\n и \\t."""
+    return _CONTROL_IN_BLOCK.sub(lambda match: f"\\x{ord(match.group()):02x}", str(value))
+
+
+def clean_line(value: object) -> str:
+    return _clean(value)

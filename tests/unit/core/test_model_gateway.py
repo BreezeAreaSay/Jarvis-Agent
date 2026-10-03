@@ -254,3 +254,12 @@ def test_prompt_hash_ignores_the_task_id() -> None:
     assert prompt_hash(first, TaskId("task_7")) == prompt_hash(second, TaskId("task_9"))
     other = [ChatMessage(role="user", content="вызов task_70.call_1 в task_7")]
     assert prompt_hash(first, TaskId("task_7")) != prompt_hash(other, TaskId("task_7"))
+
+
+async def test_truncated_output_is_named_and_not_echoed_in_full() -> None:
+    long = '{"color": "' + "к" * 5000
+    setup = Setup(reply(text=long, finish_reason="length"), reply(json={"color": "red"}))
+    assert await setup.generate() == Color(color="red")
+    repair = setup.model.requests[1].messages
+    assert "ответ обрезан на лимите 1024 токенов" in repair[-1].content
+    assert len(repair[-2].content) <= 2000

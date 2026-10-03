@@ -1,8 +1,9 @@
-"""Формат сценария eval: механика ядра (M1) и инструменты (Session 3).
+"""Формат сценария eval: механика ядра (M1), инструменты (Session 3) и агент на модели (Session 4).
 
-Сценарий с инструментами получает свою временную рабочую папку (`files`) и временные данные Jarvis;
-в аргументах вызовов `{workspace}` и `{jarvis_home}` заменяются их путями. Поля для реестра проектов и
-моделей появятся вместе с milestone, которые их используют; неизвестное поле — ошибка.
+Сценарий ведут либо scripted-стадии (`script`), либо настоящие стадии агента со scripted-моделью
+(`model`: реплики модели по порядку). Сценарий с инструментами получает свою временную рабочую папку
+(`files`) и временные данные Jarvis; в аргументах вызовов и репликах модели `{workspace}` и
+`{jarvis_home}` заменяются их путями. Неизвестное поле — ошибка.
 """
 
 from collections.abc import Sequence
@@ -19,6 +20,7 @@ from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Route
 from jarvis.domain.tools import ToolOutcomeKind
 from jarvis.domain.trace import EventKind
+from jarvis.evals.models import ModelReply
 
 ChargeKind = Literal["steps", "tool_calls", "replans", "model_calls", "model_tokens"]
 
@@ -60,6 +62,14 @@ class ScriptStep(BaseModel, frozen=True, extra="forbid"):
         return self
 
 
+class ModelScript(BaseModel, frozen=True, extra="forbid"):
+    """Scripted-модель роли executor: реплики по порядку и объявленные возможности."""
+
+    replies: list[ModelReply] = Field(min_length=1)
+    structured_output: bool = True  # сервер применяет схему; False — схема только в промпте
+    context_window: PositiveInt = 16384
+
+
 class ClientRules(BaseModel, frozen=True, extra="forbid"):
     """Что делает авто-клиент eval, пока задача выполняется."""
 
@@ -91,6 +101,10 @@ class Expectation(BaseModel, frozen=True, extra="forbid"):
     tool_outcomes: list[ToolOutcomeKind] | None = None  # итоги вызовов, полученные стадией
     rules: list[str] | None = None  # правила последнего решения политики
     found: list[str] | None = None  # пути из результата последнего исполненного вызова (от рабочей папки)
+    observations: list[str] | None = None  # итоги вызовов агента по порядку: executed, denied, …
+    answer_contains: list[str] | None = None  # подстроки ответа задачи
+    # Строки, которые модель видела только внутри блоков DATA (недоверенные данные — не инструкции).
+    data_only: list[str] | None = None
 
     @model_validator(mode="after")
     def _known_usage(self) -> Self:
@@ -108,8 +122,15 @@ class Scenario(BaseModel, frozen=True, extra="forbid"):
     client: ClientRules = ClientRules()
     files: dict[str, str] = {}  # рабочая папка: путь → содержимое; путь с «/» на конце — папка
     dry_run: bool = False
-    script: list[ScriptStep]
+    script: list[ScriptStep] | None = None
+    model: ModelScript | None = None
     expect: Expectation
+
+    @model_validator(mode="after")
+    def _one_driver(self) -> Self:
+        if (self.script is None) == (self.model is None):
+            raise ValueError("сценарий ведёт ровно одно: script (scripted-стадии) или model (агент)")
+        return self
 
     @model_validator(mode="after")
     def _relative_files(self) -> Self:

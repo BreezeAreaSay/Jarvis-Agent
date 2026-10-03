@@ -1,0 +1,17 @@
+# Ответ так и не прошёл схему: после всех попыток ремонта шаг засчитан сбоем; сбои кончились — стоп.
+id: model.invalid_output
+category: model
+input: "привет"
+budget: {max_steps: 10, max_tool_calls: 30, max_failures: 1, max_replans: 0, max_wall_time_s: 60, max_model_calls: 60, max_model_tokens: 250000}
+model:
+  replies:
+    - text: "не JSON"
+    - text: "{\"decision\": 1}"
+    - text: "{}"
+    - text: "снова не JSON"
+    - text: "[]"
+    - text: "{\"action\": {}}"
+expect:
+  status: BUDGET_EXCEEDED
+  budget_limit: failures
+  usage: {model_calls: 6, failures: 2}

@@ -14,17 +14,22 @@ from pathlib import Path
 
 from pydantic import BaseModel, JsonValue
 
+from jarvis.adapters.memory import InMemoryStorage
 from jarvis.app.composition import App, Storage, build_app, host_zones
 from jarvis.config import with_overrides
+from jarvis.core.models.prompt import DATA_CLOSE, DATA_OPEN
+from jarvis.domain.agent import AgentState
 from jarvis.domain.approvals import ApprovalStatus
 from jarvis.domain.budget import BudgetUsage
 from jarvis.domain.ids import TaskId
+from jarvis.domain.models import BackendRequest, ModelCapabilities, ModelRole
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Origin, TaskRequest, TaskSnapshot
 from jarvis.domain.tools import ToolOutcome, ToolOutcomeKind
 from jarvis.domain.trace import EventKind, TraceEvent
-from jarvis.evals.scenario import TOOL_EVENTS, ClientRules, Expectation, Scenario, ScriptStep
+from jarvis.evals.models import ScriptedModel
+from jarvis.evals.scenario import TOOL_EVENTS, ClientRules, Expectation, ModelScript, Scenario, ScriptStep
 from jarvis.evals.scripted import ScriptedStages
 from jarvis.evals.tools import SleepTool
 
@@ -73,13 +78,16 @@ async def run_scenario(
     if scenario.budget:
         routes = ("direct", "chat", "agent")
         config = with_overrides(config, {"budgets": dict.fromkeys(routes, scenario.budget)})
+    storage = storage if storage is not None else InMemoryStorage()
     with tempfile.TemporaryDirectory(prefix="jarvis-eval-") as temp:
         machine = _Machine.create(Path(temp).resolve(), scenario.files)
         hung = asyncio.Event()  # шаг завис или инструмент eval начал ждать — клиент может отменять
-        script = ScriptedStages([machine.bind(step) for step in scenario.script], hung=hung)
+        script = ScriptedStages([machine.bind(step) for step in scenario.script or []], hung=hung)
+        model = _model(scenario.model, machine, hung) if scenario.model is not None else None
         app = build_app(
             config,
-            stages=script.handlers,
+            stages=script.handlers if model is None else None,
+            models={ModelRole.EXECUTOR: model} if model is not None else None,
             storage=storage,
             home=machine.home,
             zones=host_zones(config, home=machine.home, user_home=machine.user),
@@ -109,8 +117,14 @@ async def run_scenario(
         ]
         problems.extend(_check(scenario.expect, snapshot, transitions, events))
         problems.extend(_check_tools(scenario.expect, events, script.outcomes, machine.workspace))
+        if model is not None:
+            with storage.unit_of_work() as uow:
+                state = uow.tasks.get(task_id).state or AgentState()
+            problems.extend(_check_agent(scenario.expect, state, model.requests))
     if script.remaining:
         problems.append(f"не проиграно шагов сценария: {script.remaining}")
+    if model is not None and model.remaining:
+        problems.append(f"не проиграно реплик модели: {model.remaining}")
     return ScenarioResult(
         id=scenario.id,
         task_id=task_id,
@@ -151,17 +165,63 @@ class _Machine:
         """Подставить пути этого «компьютера» в аргументы вызова."""
         if step.tool is None:
             return step
-        arguments = {key: self._substitute(value) for key, value in step.tool.arguments.items()}
+        arguments = {key: self.substitute(value) for key, value in step.tool.arguments.items()}
         return step.model_copy(update={"tool": step.tool.model_copy(update={"arguments": arguments})})
 
-    def _substitute(self, value: JsonValue) -> JsonValue:
+    def substitute(self, value: JsonValue) -> JsonValue:
         if isinstance(value, str):
             return value.replace("{workspace}", str(self.workspace)).replace("{jarvis_home}", str(self.home))
         if isinstance(value, list):
-            return [self._substitute(item) for item in value]
+            return [self.substitute(item) for item in value]
         if isinstance(value, dict):
-            return {key: self._substitute(item) for key, item in value.items()}
+            return {key: self.substitute(item) for key, item in value.items()}
         return value
+
+
+def _model(script: ModelScript, machine: "_Machine", hung: asyncio.Event) -> ScriptedModel:
+    replies = [
+        reply.model_copy(update={"json_": machine.substitute(reply.json_)})
+        if reply.json_ is not None
+        else reply
+        for reply in script.replies
+    ]
+    capabilities = ModelCapabilities(
+        structured_output=script.structured_output, context_window=script.context_window
+    )
+    return ScriptedModel(replies, capabilities=capabilities, hung=hung)
+
+
+def _check_agent(expect: Expectation, state: AgentState, requests: list[BackendRequest]) -> list[str]:
+    problems: list[str] = []
+    if expect.observations is not None:
+        actual = [step.observation.status for step in state.steps if step.observation is not None]
+        if actual != expect.observations:
+            problems.append(f"итоги вызовов агента {_join(actual)}, ожидались {_join(expect.observations)}")
+    for text in expect.data_only or []:
+        seen = False
+        for request in requests:
+            for message in request.messages:
+                outside, inside = _split_data(message.content)
+                if text in outside:
+                    problems.append(f"«{text}» попало в промпт вне блока DATA")
+                seen = seen or text in inside
+        if not seen:
+            problems.append(f"«{text}» ни разу не попало в блок DATA")
+    return sorted(set(problems), key=problems.index)
+
+
+def _split_data(content: str) -> tuple[str, str]:
+    """Текст сообщения вне блоков DATA и внутри них."""
+    outside: list[str] = []
+    inside: list[str] = []
+    rest = content
+    while DATA_OPEN in rest:
+        before, _, block = rest.partition(DATA_OPEN)
+        outside.append(before)
+        data, _, rest = block.partition(DATA_CLOSE)
+        inside.append(data)
+    outside.append(rest)
+    return "".join(outside), "".join(inside)
 
 
 async def _drive(app: App, task_id: TaskId, client: ClientRules, hung: asyncio.Event) -> None:
@@ -251,6 +311,10 @@ def _check(
         category = error.category if error else None
         if category != expect.error_category:
             problems.append(f"категория ошибки {category}, ожидалась {expect.error_category}")
+    answer = snapshot.outcome.answer if snapshot.outcome else None
+    for part in expect.answer_contains or []:
+        if answer is None or part not in answer:
+            problems.append(f"в ответе нет «{part}»: {answer!r}")
     if expect.budget_limit is not None:
         limits = [event.payload.get("limit") for event in events if event.kind is EventKind.BUDGET_EXCEEDED]
         if limits != [expect.budget_limit.value]:

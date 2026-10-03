@@ -1,0 +1,15 @@
+# Ответ строится по прочитанному файлу; содержимое файла модель видит только блоком DATA.
+id: agent.read_and_answer
+category: agent
+input: "во сколько встреча? посмотри в notes.txt"
+files:
+  notes.txt: "Встреча с командой в 15:30, переговорная 4."
+model:
+  replies:
+    - json: {decision: "Прочитаю notes.txt", action: {type: tool, tool: filesystem.read_text, arguments: {path: notes.txt}}}
+    - json: {decision: "Время есть в заметке", action: {type: finish, answer: "Встреча в 15:30, переговорная 4.", evidence: [task_1.call_1]}}
+expect:
+  status: COMPLETED
+  observations: [executed]
+  answer_contains: ["15:30"]
+  data_only: ["переговорная 4"]

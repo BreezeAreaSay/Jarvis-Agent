@@ -1,0 +1,15 @@
+# Dry run: решение модели проходит preview и политику, но ничего не исполняется.
+id: agent.dry_run
+category: agent
+input: "какие файлы в папке?"
+dry_run: true
+files:
+  a.txt: "a"
+model:
+  replies:
+    - json: {decision: "Посмотрю папку", action: {type: tool, tool: filesystem.list, arguments: {path: "."}}}
+    - json: {decision: "В dry run данных нет", action: {type: finish, answer: "Dry run: список не получен.", evidence: []}}
+expect:
+  status: COMPLETED
+  tool_events: [tool.previewed, policy.decided]
+  observations: [dry_run]

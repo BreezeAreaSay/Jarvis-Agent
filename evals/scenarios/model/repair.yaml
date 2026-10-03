@@ -1,0 +1,12 @@
+# Ответ не по схеме ремонтируется в пределах шага: модель получает объяснение и отвечает заново.
+id: model.repair
+category: model
+input: "привет"
+model:
+  replies:
+    - text: "Привет! Чем помочь?"
+    - json: {decision: "Здороваюсь", action: {type: finish, answer: "Привет! Чем помочь?"}}
+expect:
+  status: COMPLETED
+  answer_contains: ["Привет"]
+  usage: {model_calls: 2, failures: 0, steps: 1}

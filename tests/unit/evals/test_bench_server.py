@@ -14,7 +14,6 @@ import httpx
 import pytest
 
 from jarvis.domain.models import ModelRole
-from jarvis.evals.bench import run as bench_run
 from jarvis.evals.bench.dataset import load_dataset
 from jarvis.evals.bench.report import (
     BenchReport,
@@ -33,6 +32,7 @@ from jarvis.evals.bench.server import (
     Memory,
     Speed,
     VramSample,
+    measure_speed,
     offload_verdict,
     parse_server_log,
     parse_windows_gpu_memory,
@@ -112,25 +112,85 @@ def test_candidate_config_points_the_executor_at_the_server() -> None:
     assert endpoint.extra_body == {"cache_prompt": True}
 
 
-def test_speed_probe_retries_a_transient_disconnect(monkeypatch: pytest.MonkeyPatch) -> None:
-    attempts = 0
+class FakeLlamaServer:
+    """Ответы llama-server на запросы пробы скорости; `disconnects` — сколько раз подряд закрыть
+    соединение без ответа на запрос к этому пути (RemoteProtocolError), `failures` — ответить 500."""
 
-    def flaky_speed(_candidate: Candidate, *, repeats: int) -> Speed:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise httpx.RemoteProtocolError("server disconnected without sending a response")
-        return Speed(generation_tokens_per_s=[42.0])
+    def __init__(self, *, disconnects: dict[str, int] | None = None, failures: frozenset[str] = frozenset()):
+        self.disconnects = dict(disconnects or {})
+        self.failures = failures
+        self.requests: list[str] = []
 
-    monkeypatch.setattr(bench_run, "measure_speed", flaky_speed)
-    notes: list[str] = []
-    result = bench_run._measure_speed_with_retry(
-        candidate(), repeats=3, server_alive=lambda: True, notes=notes, say=lambda _message: None
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        body = json.loads(request.content or b"{}")
+        key = f"{path}:stream" if body.get("stream") else path
+        self.requests.append(key)
+        if self.disconnects.get(key, 0) > 0:
+            self.disconnects[key] -= 1
+            raise httpx.RemoteProtocolError(
+                "Server disconnected without sending a response.", request=request
+            )
+        if key in self.failures:
+            return httpx.Response(500, json={"error": {"message": "boom"}})
+        timings = {
+            "prompt_n": 2000,
+            "prompt_per_second": 900.0,
+            "predicted_n": 256,
+            "predicted_per_second": 48.5,
+        }
+        if key == "/completion:stream":
+            stream = 'data: {"content": "1"}\n\ndata: {"content": "", "timings": {"prompt_n": 1000}}\n\n'
+            return httpx.Response(200, text=stream, headers={"content-type": "text/event-stream"})
+        if path == "/completion":
+            return httpx.Response(200, json={"content": "1, 2", "timings": timings})
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"answer": "синий"}'}}]})
+
+
+def measure(server: FakeLlamaServer, *, alive: bool | None = True) -> Speed:
+    return measure_speed(
+        candidate(ctx=4096),
+        repeats=1,
+        server_alive=None if alive is None else (lambda: alive),
+        transport=httpx.MockTransport(server),
     )
 
-    assert attempts == 2
-    assert result.generation_tokens_per_s == [42.0]
-    assert "повтор выполнен" in notes[0]
+
+def test_speed_probe_measures_everything_without_retries() -> None:
+    speed = measure(FakeLlamaServer())
+    assert speed.generation_tokens_per_s == [48.5]
+    assert speed.ttft_ms.keys() == {"1k"}
+    assert speed.retried_requests == 0
+
+
+def test_a_request_dropped_by_a_live_server_is_retried_once() -> None:
+    server = FakeLlamaServer(disconnects={"/completion": 1})
+    speed = measure(server)
+    assert speed.retried_requests == 1
+    assert speed.prompt_tokens_per_s == [900.0]  # замер не выброшен и не начат заново
+    assert server.requests.count("/completion") == 3  # промпт (разрыв + повтор) и генерация
+
+
+def test_a_dead_server_is_not_retried() -> None:
+    with pytest.raises(httpx.RemoteProtocolError):
+        measure(FakeLlamaServer(disconnects={"/completion": 1}), alive=False)
+
+
+def test_without_a_liveness_check_nothing_is_retried() -> None:
+    with pytest.raises(httpx.RemoteProtocolError):
+        measure(FakeLlamaServer(disconnects={"/completion": 1}), alive=None)
+
+
+def test_a_second_disconnect_of_the_same_request_is_a_real_failure() -> None:
+    with pytest.raises(httpx.RemoteProtocolError):
+        measure(FakeLlamaServer(disconnects={"/v1/chat/completions": 2}))
+
+
+def test_server_errors_are_never_retried() -> None:
+    server = FakeLlamaServer(failures=frozenset({"/v1/chat/completions"}))
+    with pytest.raises(httpx.HTTPStatusError):
+        measure(server)
+    assert server.requests.count("/v1/chat/completions") == 1
 
 
 # --- лог сервера и offload

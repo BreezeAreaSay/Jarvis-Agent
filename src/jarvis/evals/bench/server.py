@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -465,6 +465,7 @@ class Speed(BaseModel):
     ttft_ms: dict[str, list[float]] = {}  # размер промпта → время до первого токена (поток, без кэша)
     ttft_prompt_tokens: dict[str, int] = {}  # размер промпта → сколько токенов он занял у этой модели
     warm_latency_ms: list[float] = []  # короткий запрос со схемой, как у агента
+    retried_requests: int = 0  # запросы пробы, повторённые после разрыва соединения при живом сервере
 
     def medians(self) -> dict[str, float | None]:
         def median(values: Sequence[float]) -> float | None:
@@ -584,25 +585,45 @@ def filler(tokens: int) -> str:
     return "".join(line.format(n=n, size=n * 37) for n in range(tokens // FILLER_LINE_TOKENS + 1))
 
 
-def measure_speed(candidate: Candidate, *, repeats: int = 3) -> Speed:
-    """Скорость сервера llama.cpp: обработка промпта, генерация, время до первого токена — без кэша."""
+def measure_speed(
+    candidate: Candidate,
+    *,
+    repeats: int = 3,
+    server_alive: Callable[[], bool] | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> Speed:
+    """Скорость сервера llama.cpp: обработка промпта, генерация, время до первого токена — без кэша.
+
+    `server_alive` разрешает один повтор запроса, на который сервер закрыл соединение, ничего не
+    ответив (`RemoteProtocolError`), — если процесс сервера жив (см. `_retry_disconnect`). Без него
+    повторов нет."""
     speed = Speed()
-    with httpx.Client(base_url=candidate.base_url, timeout=600.0, trust_env=False) as client:
+
+    def probe[T](call: Callable[[], T]) -> T:
+        return _retry_disconnect(call, server_alive, speed)
+
+    with httpx.Client(
+        base_url=candidate.base_url, timeout=600.0, trust_env=False, transport=transport
+    ) as client:
         for _ in range(repeats):
-            prompt = _completion(client, {"prompt": filler(2000), "n_predict": 1, "cache_prompt": False})
+            prompt = probe(
+                lambda: _completion(client, {"prompt": filler(2000), "n_predict": 1, "cache_prompt": False})
+            )
             timings = _mapping(prompt.get("timings"))
             speed.prompt_tokens = _int(timings.get("prompt_n"))
             if (value := _float(timings.get("prompt_per_second"))) is not None:
                 speed.prompt_tokens_per_s.append(round(value, 1))
-            generated = _completion(
-                client,
-                {
-                    "prompt": "Перечисли числа от 1 до 300 через запятую:",
-                    "n_predict": 256,
-                    "ignore_eos": True,
-                    "cache_prompt": False,
-                    "temperature": 0,
-                },
+            generated = probe(
+                lambda: _completion(
+                    client,
+                    {
+                        "prompt": "Перечисли числа от 1 до 300 через запятую:",
+                        "n_predict": 256,
+                        "ignore_eos": True,
+                        "cache_prompt": False,
+                        "temperature": 0,
+                    },
+                )
             )
             timings = _mapping(generated.get("timings"))
             speed.generated_tokens = _int(timings.get("predicted_n"))
@@ -611,15 +632,30 @@ def measure_speed(candidate: Candidate, *, repeats: int = 3) -> Speed:
             for size, tokens in PROMPT_SIZES.items():
                 if tokens + 300 > candidate.ctx:
                     continue
+                text = filler(tokens)
                 try:
-                    elapsed, prompt_tokens = _ttft(client, filler(tokens))
+                    elapsed, prompt_tokens = probe(lambda text=text: _ttft(client, text))
                 except httpx.HTTPStatusError:  # у этого токенизатора промпт вышел длиннее окна
                     continue
                 speed.ttft_ms.setdefault(size, []).append(elapsed)
                 if prompt_tokens is not None:
                     speed.ttft_prompt_tokens[size] = prompt_tokens
-            speed.warm_latency_ms.append(_warm_request(client, candidate))
+            speed.warm_latency_ms.append(probe(lambda: _warm_request(client, candidate)))
     return speed
+
+
+def _retry_disconnect[T](call: Callable[[], T], server_alive: Callable[[], bool] | None, speed: Speed) -> T:
+    """Один повтор одного запроса пробы — только если сервер закрыл соединение, ничего не ответив
+    (`RemoteProtocolError`: так выглядит закрытое сервером keep-alive соединение), а процесс сервера жив.
+    Запросы пробы идемпотентны. Любая другая ошибка, повторный разрыв или умерший процесс — исходная
+    ошибка: настоящее падение llama-server не маскируется."""
+    try:
+        return call()
+    except httpx.RemoteProtocolError:
+        if server_alive is None or not server_alive():
+            raise
+    speed.retried_requests += 1
+    return call()
 
 
 def _completion(client: httpx.Client, body: dict[str, Any]) -> dict[str, Any]:

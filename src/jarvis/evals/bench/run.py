@@ -24,7 +24,6 @@ from jarvis.evals.bench.server import (
     BenchServerError,
     Candidate,
     Memory,
-    Speed,
     describe_host,
     dump,
     file_sha256,
@@ -223,13 +222,17 @@ def bench_candidate(
         if sys.platform == "win32" and vram_loaded is None:
             notes.append("счётчики памяти GPU Windows недоступны: VRAM и запас — по логу сервера")
         say(f"{candidate.id}: замер скорости ({repeats} повтора)…")
-        speed = _measure_speed_with_retry(
-            candidate,
-            repeats=repeats,
-            server_alive=lambda: server.process.poll() is None,
-            notes=notes,
-            say=say,
-        )
+        try:
+            speed = measure_speed(
+                candidate, repeats=repeats, server_alive=lambda: server.process.poll() is None
+            )
+        except httpx.HTTPError as exc:  # сервер упал или перестал отвечать — кандидат не меряется
+            raise BenchServerError(f"{candidate.id}: сервер не ответил на замер скорости: {exc!r}") from None
+        if speed.retried_requests:
+            notes.append(
+                f"замер скорости: {speed.retried_requests} запрос(а) повторены после разрыва соединения "
+                "сервером (процесс был жив)"
+            )
         say(f"{candidate.id}: датасет, {len(dataset.tasks)} задач…")
         config = candidate_config(candidate)
         backend = model_backends(config)[ModelRole.EXECUTOR]
@@ -287,35 +290,3 @@ def bench_candidate(
         context_window=candidate.ctx,
         notes=notes,
     )
-
-
-def _measure_speed_with_retry(
-    candidate: Candidate,
-    *,
-    repeats: int,
-    server_alive: Callable[[], bool],
-    notes: list[str],
-    say: Callable[[str], None],
-) -> Speed:
-    """Повторить весь speed probe после transient HTTP disconnect.
-
-    На Windows llama-server иногда закрывает длинный HTTP response без данных, хотя процесс и
-    `/health` остаются живы. Повторяем только в этом безопасном случае: если процесс завершился,
-    сохраняем исходную ошибку запуска/падения вместо того, чтобы маскировать неисправность.
-    """
-    try:
-        return measure_speed(candidate, repeats=repeats)
-    except httpx.HTTPError as first_error:
-        if not server_alive():
-            raise BenchServerError(
-                f"{candidate.id}: сервер не ответил на замер скорости: {first_error!r}"
-            ) from None
-        notes.append("первый speed probe завершился HTTP-разрывом; повтор выполнен при живом llama-server")
-        say(f"{candidate.id}: HTTP-разрыв на speed probe; сервер жив, повторяю замер…")
-        try:
-            return measure_speed(candidate, repeats=repeats)
-        except httpx.HTTPError as second_error:
-            raise BenchServerError(
-                f"{candidate.id}: сервер не ответил на замер скорости после повтора: "
-                f"первая ошибка {first_error!r}, вторая {second_error!r}"
-            ) from None

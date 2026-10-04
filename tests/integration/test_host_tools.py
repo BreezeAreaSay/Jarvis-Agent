@@ -4,6 +4,7 @@
 import asyncio
 import dataclasses
 import os
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,7 +84,8 @@ def machine(tmp_path: Path) -> Machine:
     work, home, ssh = root / "work", root / "jarvis-home", root / "user" / ".ssh"
     for folder in (work / "docs" / "deep", home / "data", ssh):
         folder.mkdir(parents=True)
-    (work / "docs" / "a.txt").write_text("первый файл\n", encoding="utf-8")
+    # Байты, а не текст: на Windows write_text превратил бы \n в \r\n, и размеры зависели бы от ОС.
+    (work / "docs" / "a.txt").write_bytes("первый файл\n".encode())
     (work / "docs" / "Report.PDF").write_bytes(b"%PDF-1.4")
     (work / "docs" / "deep" / "b.pdf").write_bytes(b"%PDF-1.4")
     (work / "notes.md").write_text("# заметки", encoding="utf-8")
@@ -140,7 +142,7 @@ async def test_list_is_sorted_typed_and_sized(machine: Machine) -> None:
     assert output.path == str(machine.work / "docs")
     assert [(e.name, e.kind, e.size) for e in output.entries] == [
         ("a", "dir", None),
-        ("a.txt", "file", len(("первый файл" + os.linesep).encode())),
+        ("a.txt", "file", len("первый файл\n".encode())),
         ("b", "dir", None),
         ("B.txt", "file", 5),
         ("c.bin", "file", 5),
@@ -447,14 +449,15 @@ async def test_slow_path_resolution_does_not_block_the_tool_timeout(
     assert clock.perf_counter() - started < 1.0
 
 
-@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="каналы только на POSIX")
+@pytest.mark.skipif(sys.platform == "win32", reason="каналы только на POSIX")
 async def test_a_pipe_swapped_in_after_the_check_does_not_hang_read_text(
     machine: Machine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    assert sys.platform != "win32"  # сужает платформу и для pyright: os.mkfifo есть только на POSIX
     import jarvis.adapters.tools.filesystem as filesystem
 
     pipe = machine.work / "pipe"
-    os.mkfifo(pipe)  # pyright: ignore[reportAttributeAccessIssue]  # POSIX-only test
+    os.mkfifo(pipe)
     # Подмена случилась уже после проверки «путь не изменился».
     monkeypatch.setattr(filesystem, "unchanged", lambda path, expect="any": Path(path))
     with pytest.raises(ToolExecutionFailed, match="не обычный файл"):

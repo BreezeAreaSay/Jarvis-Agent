@@ -5,13 +5,14 @@ from typing import Any
 
 from jarvis.adapters.clock import ManualClock
 from jarvis.adapters.memory import InMemoryStorage
-from jarvis.app.composition import App, Stages, StagesFactory, build_app
+from jarvis.app.composition import SECRET_NAMES, App, Stages, StagesFactory, build_app
+from jarvis.core.policy import PolicyZones
 from jarvis.domain.errors import ErrorInfo
 from jarvis.domain.ids import TaskId
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Origin, TaskRequest, TaskSnapshot
-from jarvis.domain.tools import EffectKind
+from jarvis.domain.tools import EffectKind, ExecutionTarget, TargetKind
 from jarvis.domain.trace import EventKind
 from jarvis.evals.scenario import ScriptStep
 from jarvis.evals.scripted import ScriptedStages
@@ -19,6 +20,12 @@ from jarvis.ports.tools import Tool
 from tests.fakes import FakeTool
 
 S = TaskStatus
+
+# Цель и зоны тестов с фейковыми инструментами: POSIX на любой ОС хоста. Пути фейков («/keys/a.pem») и
+# решения политики по ним не зависят от того, где идут тесты; настоящие пути проверяют интеграционные тесты.
+TEST_TARGET = ExecutionTarget(kind=TargetKind.HOST, os_family="posix", name="test")
+TEST_ZONES = PolicyZones(os_family="posix", secret_names=SECRET_NAMES)
+FAKE_HOST = {"target": TEST_TARGET, "zones": TEST_ZONES}
 
 # Инструмент, чей вызов всегда требует подтверждения: читает файл с именем секрета.
 APPROVAL_TOOL = "test.secret"
@@ -63,6 +70,8 @@ def make_app(
         storage=storage if storage is not None else InMemoryStorage(),
         clock=clock if clock is not None else ManualClock(),
         tools=tools if tools is not None else [approval_tool()],
+        target=TEST_TARGET,
+        zones=TEST_ZONES,
     )
 
 

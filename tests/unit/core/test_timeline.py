@@ -11,7 +11,7 @@ from jarvis.domain.models import ModelRole
 from jarvis.domain.settings import JarvisConfig
 from jarvis.evals.models import ModelReply, ScriptedModel
 from tests.fakes import FakeTool
-from tests.helpers import S, approval_step, budget_config, request, scripted, step
+from tests.helpers import FAKE_HOST, S, approval_step, budget_config, request, scripted, step
 
 pytestmark = pytest.mark.anyio
 
@@ -121,6 +121,7 @@ async def test_agent_steps_in_the_timeline() -> None:
         storage=InMemoryStorage(),
         clock=ManualClock(),
         tools=[FakeTool("fake.read")],
+        **FAKE_HOST,
     )
     task_id = app.tasks.submit(request("что в файле?"))
     await app.tasks.run_until_blocked(task_id)

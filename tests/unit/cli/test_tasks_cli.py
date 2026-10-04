@@ -15,7 +15,7 @@ from jarvis.cli.main import app as cli
 from jarvis.domain.settings import JarvisConfig
 from jarvis.evals.scenario import ScriptStep
 from jarvis.evals.scripted import ScriptedStages
-from tests.helpers import S, approval_step, approval_tool, request, step
+from tests.helpers import FAKE_HOST, S, approval_step, approval_tool, request, step
 
 
 @pytest.fixture
@@ -36,6 +36,7 @@ def seed(
             owner=owner,
             clock=clock,
             tools=[approval_tool()],
+            **FAKE_HOST,
         )
         task_id = app.tasks.submit(request("сценарий"))
         asyncio.run(app.tasks.run_until_blocked(task_id))

@@ -32,6 +32,7 @@ from jarvis.core.trace import Tracer
 from jarvis.domain.models import ModelRole
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
+from jarvis.domain.tools import ExecutionTarget
 from jarvis.ports.clock import Clock
 from jarvis.ports.models import ModelBackend
 from jarvis.ports.tools import Tool
@@ -134,12 +135,14 @@ def build_app(
     tools: Sequence[Tool] | None = None,
     extra_tools: Sequence[Tool] = (),
     zones: PolicyZones | None = None,
+    target: ExecutionTarget | None = None,
     home: Path | None = None,
     config_file: Path | None = None,
 ) -> App:
     """`stages` не задан — задачу ведёт агент, модели — `models` или из конфига (ConfigError, если
     модель не подходит роли). `home` — JARVIS_HOME: его данные недоступны инструментам. `tools` по
-    умолчанию — встроенные; `extra_tools` добавляются к ним (инструменты eval)."""
+    умолчанию — встроенные; `extra_tools` добавляются к ним (инструменты eval). `target` и `zones` по
+    умолчанию — этот компьютер; тесты с фейковыми инструментами задают их явно, чтобы не зависеть от ОС."""
     storage = storage if storage is not None else InMemoryStorage()
     clock = clock if clock is not None else SystemClock()
     owner = owner if owner is not None else process_owner()
@@ -152,7 +155,7 @@ def build_app(
         uow=storage.unit_of_work,
         tracer=tracer,
         clock=clock,
-        target=HOST,
+        target=target if target is not None else HOST,
         approval_ttl_s=config.policy.approval_ttl_s,
         leases=leases,
         protected_roots=(*zones.internal, *zones.secrets),

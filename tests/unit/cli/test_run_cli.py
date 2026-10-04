@@ -27,7 +27,7 @@ from jarvis.domain.tools import (
 )
 from jarvis.domain.trace import EventKind, TraceEvent
 from jarvis.evals.models import ModelReply, ScriptedModel
-from tests.helpers import approval_tool
+from tests.helpers import FAKE_HOST, approval_tool
 
 HOST = ExecutionTarget(kind=TargetKind.HOST, os_family="posix", name="local")
 READ_KEY = ModelReply.model_validate(
@@ -50,6 +50,7 @@ def agent_app(clock: ManualClock, *replies: ModelReply) -> tuple[App, TaskId]:
         storage=InMemoryStorage(),
         clock=clock,
         tools=[approval_tool()],
+        **FAKE_HOST,
     )
     return app, app.tasks.submit(TaskRequest(text="покажи ключ", origin=Origin.CLI))
 

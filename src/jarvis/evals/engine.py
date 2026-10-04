@@ -158,7 +158,7 @@ class Machine:
                 path.mkdir(parents=True, exist_ok=True)
                 continue
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            path.write_text(content, encoding="utf-8", newline="\n")  # одинаковые байты на любой ОС
         return machine
 
     def bind(self, step: ScriptStep) -> ScriptStep:

@@ -27,7 +27,7 @@ from jarvis.domain.trace import EventKind
 from jarvis.evals.models import ModelReply, ScriptedModel
 from jarvis.ports.tools import Tool
 from tests.fakes import FakeTool
-from tests.helpers import approval_tool, error_of, transitions
+from tests.helpers import FAKE_HOST, approval_tool, error_of, transitions
 
 pytestmark = pytest.mark.anyio
 
@@ -72,6 +72,7 @@ class Agent:
             storage=self.storage,
             clock=self.clock,
             tools=tools if tools is not None else [self.reader, approval_tool()],
+            **FAKE_HOST,
         )
 
     def submit(self, text: str = "что в файле?", *, dry_run: bool = False) -> TaskId:

@@ -26,7 +26,17 @@ from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import StageOutcome, Task
 from jarvis.domain.trace import EventKind
 from jarvis.evals.scripted import ScriptedStages
-from tests.helpers import S, agent_prefix, approval_step, approval_tool, error_of, request, step, transitions
+from tests.helpers import (
+    FAKE_HOST,
+    S,
+    agent_prefix,
+    approval_step,
+    approval_tool,
+    error_of,
+    request,
+    step,
+    transitions,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -62,7 +72,13 @@ def spawn(backend: str, shared: InMemoryStorage, tmp_path: Path, clock: ManualCl
         config = JarvisConfig(runtime=RuntimeSettings(lease_ttl_s=ttl_s))
         stages = stages if stages is not None else {}
         return build_app(
-            config, stages=stages, storage=storage, clock=clock, owner=owner, tools=[approval_tool()]
+            config,
+            stages=stages,
+            storage=storage,
+            clock=clock,
+            owner=owner,
+            tools=[approval_tool()],
+            **FAKE_HOST,
         )
 
     yield make

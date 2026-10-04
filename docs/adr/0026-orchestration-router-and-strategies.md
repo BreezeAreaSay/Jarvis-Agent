@@ -1,6 +1,6 @@
 # ADR 0026. Router ядра решает стратегию исполнения: DIRECT, RECIPE, AGENT, DELEGATE, CLARIFY
 
-- **Статус:** Предложено (Architecture V2)
+- **Статус:** Принято (Architecture V2, решение владельца 2026-10-04)
 - **Дата:** 2026-10-04
 - **Уточняет:** [ADR 0007](0007-skills-vs-recipes.md) (рецепты — раньше), [ADR 0008](0008-model-gateway.md)
   (роли модели), [ADR 0009](0009-structured-model-output.md) (действия исполнителя),

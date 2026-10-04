@@ -9,7 +9,7 @@ Gateway ведёт состояние и fallback), отказ следоват�
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import httpx
@@ -176,6 +176,34 @@ async def test_rate_limit_carries_retry_after() -> None:
     with pytest.raises(ModelRateLimited) as caught:
         await model.complete(REQUEST)
     assert caught.value.details["retry_after_s"] == 120
+
+
+@pytest.mark.parametrize("value", ["inf", "1e999", "nan", "-5", "soon"])
+async def test_a_strange_retry_after_is_ignored(value: str) -> None:
+    model, _ = backend(error(429, "slow down", **{"Retry-After": value}))
+    with pytest.raises(ModelRateLimited) as caught:
+        await model.complete(REQUEST)
+    assert caught.value.details["retry_after_s"] is None
+
+
+@pytest.mark.parametrize("status", [200, 500])
+async def test_deeply_nested_json_is_a_provider_failure(status: int) -> None:
+    model, _ = backend(lambda _: httpx.Response(status, content=b'{"error":' + b"[" * 200_000))
+    with pytest.raises(ModelUnavailable):
+        await model.complete(REQUEST)
+
+
+async def test_a_provider_that_trickles_bytes_hits_the_overall_deadline() -> None:
+    async def trickle() -> AsyncIterator[bytes]:
+        for _ in range(100):
+            await asyncio.sleep(0.05)  # каждый кусок — в пределах таймаута чтения, весь ответ — нет
+            yield b" "
+
+    model, _ = backend(lambda _: httpx.Response(200, content=trickle()), request_timeout_s=0.3)
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(ModelTimeout):
+        await model.complete(REQUEST)
+    assert asyncio.get_running_loop().time() - started < 2
 
 
 async def test_provider_specific_quota_markers_come_from_config() -> None:

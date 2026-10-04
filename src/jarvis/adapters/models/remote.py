@@ -16,7 +16,9 @@
 Промпт сюда попадает только после решения границы приватности (Model Gateway, ADR 0028).
 """
 
+import asyncio
 import json
+import math
 import time
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -93,8 +95,9 @@ class RemoteOpenAICompatibleBackend:
     async def complete(self, request: BackendRequest) -> BackendResponse:
         body = self._body(request)
         started = time.perf_counter()
-        async with self._client(self._settings.request_timeout_s) as client:
-            data = await self._exchange(client, "POST", "chat/completions", body)
+        timeout_s = self._settings.request_timeout_s
+        async with self._client(timeout_s) as client:
+            data = await self._exchange(client, "POST", "chat/completions", body, timeout_s)
         latency_ms = round((time.perf_counter() - started) * 1000)
         try:
             choice = data["choices"][0]
@@ -122,7 +125,7 @@ class RemoteOpenAICompatibleBackend:
 
     async def describe(self) -> BackendStatus:
         async with self._client(DESCRIBE_TIMEOUT_S) as client:
-            listed = await self._exchange(client, "GET", "models", None)
+            listed = await self._exchange(client, "GET", "models", None, DESCRIBE_TIMEOUT_S)
         models = [
             str(item["id"])  # pyright: ignore[reportUnknownArgumentType]
             for item in listed.get("data") or []
@@ -169,8 +172,15 @@ class RemoteOpenAICompatibleBackend:
         )
 
     async def _exchange(
-        self, client: httpx.AsyncClient, method: str, path: str, body: dict[str, JsonValue] | None
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        path: str,
+        body: dict[str, JsonValue] | None,
+        deadline_s: float,
     ) -> dict[str, Any]:
+        """Один обмен с общим сроком: таймауты httpx — на каждое чтение, и провайдер, отдающий ответ по
+        байту, иначе не кончился бы никогда."""
         endpoint = self._info.endpoint
         if self._key is None:
             raise ModelMisconfigured(
@@ -179,13 +189,16 @@ class RemoteOpenAICompatibleBackend:
             )
         headers = {"Authorization": f"Bearer {self._key}", "Accept": "application/json"}
         try:
-            async with client.stream(method, path, json=body, headers=headers) as response:
+            async with (
+                asyncio.timeout(deadline_s),
+                client.stream(method, path, json=body, headers=headers) as response,
+            ):
                 status = response.status_code
                 raw = await self._read(response)
                 retry_after = response.headers.get("retry-after")
-        except httpx.TimeoutException:
+        except (httpx.TimeoutException, TimeoutError):
             raise ModelTimeout(
-                f"{endpoint}: провайдер не ответил за {self._settings.request_timeout_s:g} с",
+                f"{endpoint}: провайдер не ответил за {deadline_s:g} с",
                 endpoint=endpoint,
             ) from None
         except httpx.TransportError as exc:
@@ -217,7 +230,7 @@ class RemoteOpenAICompatibleBackend:
     def _decode(self, raw: bytes) -> dict[str, Any]:
         try:
             data = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (ValueError, RecursionError):  # не UTF-8, не JSON, вложенность без дна
             raise ModelUnavailable(
                 f"{self._info.endpoint}: провайдер ответил не JSON (ответ оборван или искажён)",
                 endpoint=self._info.endpoint,
@@ -268,7 +281,7 @@ class RemoteOpenAICompatibleBackend:
         text = raw.decode("utf-8", errors="replace")
         try:
             data = json.loads(text)
-        except ValueError:
+        except (ValueError, RecursionError):
             data = None
         error = mapping(data).get("error") if isinstance(data, dict) else None
         if isinstance(error, dict):
@@ -292,6 +305,6 @@ def _seconds(value: str | None) -> int | None:
         except (TypeError, ValueError, IndexError):
             return None
         seconds = moment.timestamp() - time.time()
-    if seconds != seconds or seconds < 0:  # NaN или прошлое
+    if not math.isfinite(seconds) or seconds < 0:  # inf, NaN или прошлое
         return None
     return min(round(seconds), RETRY_AFTER_MAX_S)

@@ -96,6 +96,7 @@ _BASE_URL = re.compile(
 )
 _LOOPBACK_V4 = re.compile(r"127(?:\.[0-9]{1,3}){3}")
 _ENDPOINT_ID = re.compile(r"[a-z0-9][a-z0-9_-]*")
+_ABSOLUTE_ROOT = re.compile(r"~(?:[/\\]|$)|/|\\\\|[A-Za-z]:[/\\]")  # корень облака: путь не от папки запуска
 
 
 def is_loopback_url(url: str) -> bool:
@@ -296,6 +297,17 @@ class CloudSettings(BaseModel, frozen=True, extra="forbid"):
     private_roots: list[str] = []  # всё отсюда и задачи, начатые здесь, не уходят никогда
     personal_roots: list[str] = []  # личные папки сверх известных (Документы, Рабочий стол, Загрузки …)
     max_prompt_tokens: int = Field(default=32_000, ge=1024)
+
+    @field_validator("private_roots", "personal_roots")
+    @classmethod
+    def _absolute(cls, roots: list[str]) -> list[str]:
+        for root in roots:
+            if _ABSOLUTE_ROOT.match(root) is None:
+                raise ValueError(
+                    f"{root!r}: нужен абсолютный путь (/…, ~/…, C:\\…) — относительный зависел бы от папки "
+                    "запуска"
+                )
+        return roots
 
 
 class ModelsSettings(BaseModel, frozen=True, extra="forbid"):

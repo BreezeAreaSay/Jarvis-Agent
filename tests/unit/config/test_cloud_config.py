@@ -167,3 +167,17 @@ def test_config_show_never_contains_the_secret(tmp_path: Path) -> None:
     assert "env:JARVIS_SMART_API_KEY" in dumped
     endpoints = model_endpoints(config, env={"JARVIS_SMART_API_KEY": REAL_LOOKING_KEY})
     assert REAL_LOOKING_KEY not in repr(endpoints)
+
+
+@pytest.mark.parametrize("root", ["private", "./secret-projects", "data/личное"])
+def test_cloud_roots_must_be_absolute(root: str) -> None:
+    # Относительный корень зависел бы от папки, из которой запущен Jarvis: защищалось бы не то.
+    with pytest.raises(ValueError, match="абсолютн"):
+        JarvisConfig.model_validate({"cloud": {"private_roots": [root]}})
+    with pytest.raises(ValueError, match="абсолютн"):
+        JarvisConfig.model_validate({"cloud": {"personal_roots": [root]}})
+
+
+@pytest.mark.parametrize("root", ["/srv/private", "~/Private", "C:\\Users\\u\\Private", "D:/Личное"])
+def test_absolute_or_home_relative_cloud_roots_are_accepted(root: str) -> None:
+    assert JarvisConfig.model_validate({"cloud": {"private_roots": [root]}}).cloud.private_roots == [root]

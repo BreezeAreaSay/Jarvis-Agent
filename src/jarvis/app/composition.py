@@ -218,8 +218,13 @@ def build_app(
     if tools is None:
         tools = host_tools(inventory, launcher if launcher is not None else system_launcher)
     private_roots = tuple(_canonical(Path(root).expanduser()) for root in config.cloud.private_roots)
+    # Канонические, как пути чтения в preview: «Документы» по ссылке — всё равно личные.
     personal_roots = (
-        *(path for folder in PERSONAL_FOLDERS if (path := inventory.known_folder(folder)) is not None),
+        *(
+            _canonical(Path(path))
+            for folder in PERSONAL_FOLDERS
+            if (path := inventory.known_folder(folder)) is not None
+        ),
         *(_canonical(Path(root).expanduser()) for root in config.cloud.personal_roots),
     )
     runtime = ToolRuntime(

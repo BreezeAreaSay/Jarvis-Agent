@@ -138,6 +138,7 @@ cases:
   - {text: "show python processes", expect: direct, intent: process.list, entity: python, tags: [en, process]}
   - {text: "list processes named node", expect: direct, intent: process.list, entity: node, tags: [en, process]}
   - {text: "what processes are running?", expect: direct, intent: process.list, tags: [en, process]}
+  - {text: "Какие Python процессы работают?", expect: direct, intent: process.list, entity: python, tags: [mixed, process]}
 
   # --- прямые команды, которых Router пока не понимает (полнота): их выполнит агент ------------
   - {text: "врубай телегу", expect: direct, intent: app.launch, entity: telegram, tags: [ru, launch, colloquial, missed], note: "глагола нет в словаре"}
@@ -151,6 +152,7 @@ cases:
   - {text: "Почему браузер постоянно падает?", expect: agent, tags: [ru, hard_negative, question]}
   - {text: "Как VS Code запускает Python?", expect: agent, tags: [ru, hard_negative, question]}
   - {text: "Почему процесс Python использует 100% CPU?", expect: agent, tags: [ru, hard_negative, question]}
+  - {text: "Почему Python процесс ест память?", expect: agent, tags: [mixed, hard_negative, question]}
   - {text: "Расскажи про папку Downloads в Windows", expect: agent, tags: [ru, hard_negative]}
   - {text: "как открыть папку загрузки?", expect: agent, tags: [ru, hard_negative, question]}
   - {text: "как запустить телеграм без интернета", expect: agent, tags: [ru, hard_negative, question]}

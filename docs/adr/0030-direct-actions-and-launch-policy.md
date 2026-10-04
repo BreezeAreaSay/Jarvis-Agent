@@ -60,3 +60,21 @@
 - Аудит различает исполнителей вызова; политика остаётся чистой функцией.
 - Нужны: эффект в домене, поле исполнителя в `ToolCall`, инструменты `app.launch`, `url.open`,
   `folder.open`, порт и адаптеры инвентаря, тесты свойств по исполнителю.
+
+## Реализация (V2.1, 2026-10-04)
+
+- `EffectKind.LAUNCH`, `ToolCall.invoker` (`direct`, `model`; `recipe` и `router` — вместе с Recipe
+  Engine и делегированием); инструменты `app.launch`, `url.open`, `folder.open` (`adapters/tools/launch.py`).
+- Правила: `launch.{app,url,folder}.direct` — ALLOW, `launch.*.model` — REQUIRE_APPROVAL,
+  `launch.url.scheme`, `launch.unknown`, `path.unsupported_form`, `zone.internal` — DENY. Строже таблицы
+  выше: папка в зоне секретов (`~/.ssh` и т. п.) открывается только с подтверждением, даже по прямой команде
+  (`zone.secrets.launch`).
+- Property-тест переформулирован: побочный эффект с исполнителем `model` никогда не ALLOW; прямой
+  команде без человека разрешён только `LAUNCH`.
+- Инвентарь: Windows — ярлыки меню «Пуск» пользователя и общего (.lnk, .appref-ms), App Paths, браузер
+  по умолчанию (UserChoice), известные папки через `SHGetKnownFolderPath`; приложения Store без ярлыка
+  — ещё нет. Linux — desktop-файлы, `xdg-settings`, `user-dirs.dirs`. Алиасы («хром», «телеграм») —
+  данные адаптера. Запуск: Windows — `os.startfile` (ShellExecute) цели из инвентаря, адреса или
+  папки; Linux — `gtk-launch`/`gio`/`xdg-open` со списком аргументов; shell не используется нигде.
+- Тесты и eval не трогают приложения компьютера: статический инвентарь и записывающий запуск.
+

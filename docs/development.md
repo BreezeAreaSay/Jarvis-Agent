@@ -31,7 +31,7 @@ uv run jarvis --version
 | Форматирование | `uv run ruff format` (в CI — `--check`) |
 | Типы (strict для `domain`, `ports`, `core`) | `uv run pyright` |
 | Правило зависимостей | `uv run lint-imports` |
-| Eval (scripted-сценарии) | `uv run jarvis eval` |
+| Eval (scripted-сценарии и набор фраз Router) | `uv run jarvis eval` |
 
 Тесты разложены так: `tests/unit` — без ввода-вывода; `tests/contract` — общий набор для каждой реализации
 порта; `tests/architecture` — правило зависимостей (import-linter и AST-проверки: ядро не импортирует
@@ -44,8 +44,9 @@ uv run jarvis --version
 | `jarvis --version` | версия |
 | `jarvis config check` | проверить конфиг: синтаксис TOML, схема, неизвестные ключи |
 | `jarvis config show [--sources]` | итоговые значения и слой, откуда пришло каждое |
-| `jarvis eval [пути] [-s ID] [--report-dir папка]` | прогнать сценарии из `evals/scenarios`, записать отчёт `.json` и `.md` |
-| `jarvis run "<запрос>" [--dry-run]` | выполнить запрос: модель выбирает действия, Jarvis исполняет их через Tool Runtime; подтверждения спрашивает в терминале, Ctrl+C отменяет задачу |
+| `jarvis eval [пути] [-s ID] [--report-dir папка]` | прогнать сценарии из `evals/scenarios` и наборы фраз Router из `evals/routing`, записать отчёт `.json` и `.md` |
+| `jarvis run "<запрос>" [--dry-run]` | выполнить запрос: прямая команда — без модели, остальное — модель выбирает действия; исполняет всегда Tool Runtime; подтверждения спрашивает в терминале, Ctrl+C отменяет задачу |
+| `jarvis route "<запрос>" [--json] [--cwd папка]` | решение Router без исполнения: стратегия, уровень, намерение, сущности, правила, инструмент прямой команды, сколько вызовов модели потребуется, время решения |
 | `jarvis model check [--no-probe]` | сверить модели ролей с сервером: требования, доступность, окно контекста, structured output, схема решения исполнителя |
 | `jarvis tasks [-s running\|waiting\|finished\|<статус>] [-n N]` | последние задачи: статус, маршрут, время, причина завершения |
 | `jarvis trace <task_id> [--json] [--model-io]` | таймлайн задачи и метрики; `--json` — полная трасса; `--model-io` — промпты и ответы модели |
@@ -57,7 +58,30 @@ uv run jarvis --version
 | `jarvis bench compare <отчёты или папки>` | сравнить отчёты и применить правило выбора модели |
 
 Исполнить инструмент из CLI напрямую нельзя: вызов возможен только из стадии задачи через Tool Runtime
-(`jarvis run` принимает только текст запроса — инструменты выбирает модель, исполняет runtime).
+(`jarvis run` принимает только текст запроса — инструмент выбирает Router или модель, исполняет runtime).
+
+### Прямые команды (V2.1)
+
+Частые команды Router ([ADR 0026](adr/0026-orchestration-router-and-strategies.md)) распознаёт без модели и
+исполняет через Tool Runtime за миллисекунды — модель для них не нужна вовсе, даже не настроенная:
+
+| Что | Примеры | Инструмент |
+| --- | --- | --- |
+| запустить приложение из инвентаря | «открой телеграм», «запусти браузер», «open VS Code» | `app.launch` |
+| открыть веб-адрес (только http/https) | «открой github.com», «перейди на ya.ru» | `url.open` |
+| открыть папку | «открой загрузки», «открой папку src», «открой папку ~/projects» | `folder.open` |
+| текущая папка | «где я», «pwd» | `system.cwd` |
+| содержимое папки | «покажи файлы», «что в загрузках?», «покажи файлы в папке docs» | `filesystem.list` |
+| найти файл | «найди README», «найди все pdf», «где лежит config.toml» | `filesystem.search` |
+| процессы | «покажи процессы», «покажи процессы python» | `process.list` |
+
+Правило — точность важнее полноты: если команда не распознана целиком (вопрос, составная задача,
+опечатка, неизвестное приложение), задачу ведёт агент на модели. Вопрос («открыть браузер?») ничего не
+запускает. Приложения — только из инвентаря компьютера (Windows: ярлыки меню «Пуск» и App Paths;
+Linux: desktop-файлы), без произвольных путей и командной строки. Запуск по прямой команде проходит
+без подтверждения; тот же запуск, предложенный моделью, — только с подтверждением человека
+([ADR 0030](adr/0030-direct-actions-and-launch-policy.md)). Как Router понял запрос — `jarvis route
+"<запрос>"`; в ходе `jarvis run` — строка `· маршрут: …`, в `jarvis trace` — событие `route` с ID правил.
 
 Данные Jarvis лежат в `JARVIS_HOME` (по умолчанию `AppData\Local\Jarvis` в профиле пользователя
 на Windows, `~/.local/share/jarvis` на Linux); конфиг — `JARVIS_HOME/config/config.toml` или путь из `JARVIS_CONFIG`.
@@ -118,6 +142,9 @@ llama.cpp `llama-server` ([ADR 0023](adr/0023-model-gateway-v1.md)); серве�
    [models.endpoints.main.capabilities]
    structured_output = true         # сервер применяет JSON Schema (у llama-server — да)
    context_window = 16384           # не больше, чем -c сервера
+   # max_output_tokens = 4096        # лимит вывода эндпоинта за ответ, если он есть (ADR 0027)
+   # reasoning_behavior = "shares_output"  # рассуждения тратят тот же лимит вывода (по умолчанию none)
+   # reasoning_budget = 2048         # сколько из лимита отдать рассуждениям, если это известно
 
    [models.endpoints.main.sampling]
    temperature = 0.2
@@ -142,6 +169,7 @@ llama.cpp `llama-server` ([ADR 0023](adr/0023-model-gateway-v1.md)); серве�
 | `exceeds the available context size` | увеличить `-c` сервера или уменьшить `context_window` |
 | `объявлен structured_output, но ответ не по схеме` | сервер не применяет JSON Schema: `structured_output = false` (схема пойдёт в промпт) |
 | `окно контекста N токенов, нужно не меньше 8192` | запустить сервер с `-c 8192` или больше |
+| `max_output_tokens … меньше ответа роли` или `… не помещаются в max_output_tokens` | лимит вывода эндпоинта меньше ответа исполнителя (1024) с бюджетом рассуждений: увеличить лимит, уменьшить `reasoning_budget` или отключить рассуждения |
 
 Живой тест (в CI пропускается): `JARVIS_TEST_LLM_URL=http://127.0.0.1:8080/v1 uv run pytest tests/integration/test_live_model.py`.
 Другие OpenAI-совместимые серверы (LM Studio, Ollama) должны работать через тот же адаптер, но не
@@ -184,15 +212,17 @@ llama.cpp `llama-server` ([ADR 0023](adr/0023-model-gateway-v1.md)); серве�
 переходом в WAITING_CONFIRMATION; `TaskService.resolve_approval` записывает решение, `run_until_blocked`
 продолжает задачу, и стадия доводит тот же вызов (`ToolRuntime.resume`).
 
-Инструменты — `jarvis/adapters/tools` (только чтение). Новый инструмент: модели аргументов и результата
+Инструменты — `jarvis/adapters/tools`: чтение (`builtin_tools()`) и запуск с эффектом `LAUNCH`
+(`launch_tools()`; набор по умолчанию — `host_tools()`). Новый инструмент: модели аргументов и результата
 с `extra="forbid"`, `preview` без побочных эффектов и с каноническими путями, `verify` с проверяемыми
-постусловиями, регистрация в `builtin_tools()`, пример в `tests/contract/test_tool_contract.py`.
+постусловиями, регистрация в `adapters/tools/__init__.py`, пример в `tests/contract/test_tool_contract.py`.
 В unit-тестах — `tests/fakes.FakeTool`, в интеграционных — временные папки.
 Решения — [ADR 0022](adr/0022-tool-runtime-v1.md).
 
 ## Как устроен агент (Session 4)
 
-`jarvis run` создаёт задачу; ROUTING и PLANNING пока передают её агенту без модели. Такт EXECUTING
+`jarvis run` создаёт задачу; ROUTING решает Router (ниже), PLANNING передаёт задачу агенту без модели.
+Такт EXECUTING
 (`core.agent.stages.Executor`): шаг бюджета → промпт `executor.v1` (`core.agent.context`: правила,
 инструменты, запрос, история; результаты вызовов — только блоками DATA) → `ModelGateway.generate`
 (`core.models.gateway`: схема решения из реестра инструментов, разбор, проверка, ремонт, бюджет, запись
@@ -206,6 +236,30 @@ llama.cpp `llama-server` ([ADR 0023](adr/0023-model-gateway-v1.md)); серве�
 `observations`, `answer_contains`, `data_only`. Адаптер проверяется на записанных ответах llama-server
 (`tests/fixtures/llama_server`), CLI — на заглушке сервера по настоящему HTTP
 (`tests/integration/llm_stub.py`). Решения — [ADR 0023](adr/0023-model-gateway-v1.md).
+
+## Как устроены Router и прямые команды (V2.1)
+
+Стадия ROUTING — `core.routing.router.RoutingStage`: `Router.decide(текст, рабочая папка)` возвращает
+`RouteDecision` (стратегия, уровень, намерение, сущности, ID правил, причина), стадия пишет его в задачу
+(`tasks.routing_json`, миграция 004) и событие `route.decided` с временем решения. Router — чистая
+функция над текстом и портом `Inventory`: модели, инструментов и политики он не видит (архитектурные
+тесты), словарь команд — `core/routing/lexicon.py`, названий программ в ядре нет — их знает инвентарь
+(`adapters/inventory`: Windows, XDG, статический для тестов и eval). У бюджета `routing` вызовов модели
+нет вовсе.
+
+DIRECT ведёт `core.direct.stage.DirectStage`: аргументы вызова — только из сущностей решения
+(`core.direct.commands.direct_call`), вызов — `ToolRuntime.call(..., invoker=Invoker.DIRECT)`, ответ —
+шаблон по результату инструмента. Model Gateway этой стадии не передаётся, а бюджет `direct` не
+допускает вызовов модели. Подтверждение, отказ и dry run — тот же путь, что у агента; отказ политики
+завершает задачу (модели, которая искала бы обход, здесь нет). CLARIFY завершает задачу вопросом.
+
+Точность проверяет набор фраз `evals/routing/dataset.yaml` (`kind: routing_dataset`): ложных DIRECT и
+DIRECT не того действия должно быть 0, полнота и p95 решения — с порогами набора; он же — параметры
+`tests/unit/core/test_router.py`. Новая прямая команда: шаблон в `router.py` и слова в `lexicon.py`,
+вызов и ответ в `core/direct/commands.py`, фразы — положительные и трудные отрицательные — в набор,
+сценарий `evals/scenarios/direct/*.yaml` (инвентарь сценария — поле `inventory`, запуск в eval только
+записывается: ожидание `launched`). Решения — [ADR 0026](adr/0026-orchestration-router-and-strategies.md),
+[ADR 0030](adr/0030-direct-actions-and-launch-policy.md).
 
 ## Бенчмарк модели (Session 4.5)
 

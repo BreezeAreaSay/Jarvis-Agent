@@ -1,5 +1,8 @@
 # 05. AI-Dev-System и интеграция через MCP
 
+> **Architecture V2:** coding-цикл внутри Jarvis заменяется внешними агентами-специалистами
+> (ADR 0029); AI-Dev-System остаётся источником навыков через `SkillProvider` по MCP — позже.
+
 Раздел опирается на фактическое устройство [AI-Dev-System](https://github.com/BreezeAreaSay/ai-dev-system)
 (коммит `8b480aa`), а не на предположения.
 

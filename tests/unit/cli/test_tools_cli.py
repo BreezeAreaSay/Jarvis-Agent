@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from jarvis.cli.main import LAZY_COMMANDS
 from jarvis.cli.main import app as cli
+from jarvis.cli.route import route_command
+from jarvis.cli.run import run_command
 
 
 @pytest.fixture(autouse=True)
@@ -60,9 +63,10 @@ def test_unknown_tool() -> None:
 def test_there_is_no_way_to_execute_a_tool_from_the_cli() -> None:
     code, _ = run("tools", "run", "filesystem.list")
     assert code != 0
-    commands = {command.name for command in cli.registered_commands}
+    commands = {command.name for command in cli.registered_commands} | set(LAZY_COMMANDS)
     assert not {"exec", "execute", "tool"} & commands
-    # `jarvis run` принимает только текст запроса: задачу ведёт агент, инструменты — через Tool Runtime.
-    (run_command,) = [command for command in cli.registered_commands if command.name == "run"]
-    assert run_command.callback is not None
-    assert set(inspect.signature(run_command.callback).parameters) == {"text", "dry_run"}
+    # `jarvis run` принимает только текст запроса: задачу ведёт агент или прямая команда, инструменты —
+    # через Tool Runtime; `jarvis route` только показывает решение.
+    assert LAZY_COMMANDS["run"] == ("jarvis.cli.run", "run_command")
+    assert set(inspect.signature(run_command).parameters) == {"text", "dry_run"}
+    assert set(inspect.signature(route_command).parameters) == {"text", "cwd", "as_json"}

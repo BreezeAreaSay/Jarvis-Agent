@@ -1,40 +1,65 @@
-"""Точка входа `jarvis`: --version, config, eval, bench, run, model, tasks, trace, cancel, tools."""
+"""Точка входа `jarvis`: --version, config, eval, bench, run, route, model, tasks, trace, cancel, tools.
 
-import asyncio
+Команды загружаются лениво (`LazyGroup`): модуль команды импортируется, только когда её вызвали. Так
+`jarvis --version` не грузит ничего, кроме Typer, а `jarvis run` и `jarvis route` — бенчмарк и eval.
+"""
+
+import importlib
 import io
 import json
 import sys
 from collections.abc import Iterator, Mapping
 from importlib.metadata import version as package_version
-from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from typer import _click as click  # Typer строит команды на своей копии click
+from typer.core import TyperGroup
 
-from jarvis.cli.bench import bench_app
 from jarvis.cli.common import load_or_exit
-from jarvis.cli.models import model_app
-from jarvis.cli.run import run_command
-from jarvis.cli.tasks import cancel_command, tasks_command, trace_command
-from jarvis.cli.tools import tools_app
-from jarvis.domain.settings import JarvisConfig
-from jarvis.evals.engine import run_scenarios
-from jarvis.evals.report import write_report
-from jarvis.evals.scenario import ScenarioError, load_scenarios
 
-DEFAULT_SCENARIOS = Path("evals/scenarios")
-DEFAULT_REPORTS = Path("evals/reports")
+# Имя команды → (модуль, объект): функция команды или Typer группы команд.
+LAZY_COMMANDS: dict[str, tuple[str, str]] = {
+    "run": ("jarvis.cli.run", "run_command"),
+    "route": ("jarvis.cli.route", "route_command"),
+    "eval": ("jarvis.cli.evals", "eval_command"),
+    "tasks": ("jarvis.cli.tasks", "tasks_command"),
+    "trace": ("jarvis.cli.tasks", "trace_command"),
+    "cancel": ("jarvis.cli.tasks", "cancel_command"),
+    "model": ("jarvis.cli.models", "model_app"),
+    "tools": ("jarvis.cli.tools", "tools_app"),
+    "bench": ("jarvis.cli.bench", "bench_app"),
+}
 
-app = typer.Typer(add_completion=False, no_args_is_help=True, help="Jarvis — локальный Agent Runtime.")
+
+class LazyGroup(TyperGroup):
+    """Группа, которая импортирует модуль команды при первом обращении к ней."""
+
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        return sorted({*super().list_commands(ctx), *LAZY_COMMANDS})
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        found = super().get_command(ctx, cmd_name)
+        if found is not None or cmd_name not in LAZY_COMMANDS:
+            return found
+        module, attribute = LAZY_COMMANDS[cmd_name]
+        target = getattr(importlib.import_module(module), attribute)
+        if isinstance(target, typer.Typer):  # группа команд: группой и остаётся, даже из одной команды
+            command: click.Command = typer.main.get_group(target)
+        else:  # одиночная команда — функция
+            single = typer.Typer()
+            single.command(cmd_name)(target)
+            command = typer.main.get_command(single)
+        command.name = cmd_name
+        self.commands[cmd_name] = command
+        return command
+
+
+app = typer.Typer(
+    cls=LazyGroup, add_completion=False, no_args_is_help=True, help="Jarvis — локальный Agent Runtime."
+)
 config_app = typer.Typer(no_args_is_help=True, help="Конфигурация: проверка и итоговые значения.")
 app.add_typer(config_app, name="config")
-app.command("run")(run_command)
-app.add_typer(model_app, name="model")
-app.command("tasks")(tasks_command)
-app.command("trace")(trace_command)
-app.command("cancel")(cancel_command)
-app.add_typer(tools_app, name="tools")
-app.add_typer(bench_app, name="bench")
 
 
 def _print_version(value: bool) -> None:
@@ -79,49 +104,6 @@ def config_show(
         if sources:
             line += f"  [{loaded.sources.get(key, 'default')}]"
         typer.echo(line)
-
-
-@app.command("eval")
-def eval_command(
-    paths: Annotated[
-        list[Path] | None, typer.Argument(help="Файлы или папки сценариев (по умолчанию evals/scenarios).")
-    ] = None,
-    scenario: Annotated[
-        list[str] | None, typer.Option("--scenario", "-s", help="Запустить только сценарии с этими ID.")
-    ] = None,
-    report_dir: Annotated[
-        Path, typer.Option("--report-dir", help="Куда записать отчёт (JSON и Markdown).")
-    ] = DEFAULT_REPORTS,
-) -> None:
-    """Прогнать сценарии eval в scripted-режиме."""
-    try:
-        scenarios = load_scenarios(paths or [DEFAULT_SCENARIOS])
-    except ScenarioError as exc:
-        typer.echo(exc.message, err=True)
-        raise typer.Exit(2) from None
-    if scenario:
-        unknown = set(scenario) - {item.id for item in scenarios}
-        if unknown:
-            typer.echo(f"нет сценариев: {', '.join(sorted(unknown))}", err=True)
-            raise typer.Exit(2)
-        scenarios = [item for item in scenarios if item.id in scenario]
-    if not scenarios:
-        typer.echo("сценарии не найдены", err=True)
-        raise typer.Exit(2)
-
-    # Eval не зависит от конфига пользователя: только умолчания и параметры сценария.
-    result = asyncio.run(run_scenarios(scenarios, JarvisConfig()))
-    for item in result.results:
-        mark = "✓" if item.passed else "✗"
-        typer.echo(f"{mark} {item.id:<28} {item.status:<16} {item.duration_ms} мс")
-        for problem in item.problems:
-            typer.echo(f"    {problem}")
-    passed = sum(item.passed for item in result.results)
-    typer.echo(f"Итого: {passed} из {len(result.results)} сценариев прошли.")
-    json_path, markdown_path = write_report(result, report_dir)
-    typer.echo(f"Отчёт: {json_path}, {markdown_path}")
-    if not result.passed:
-        raise typer.Exit(1)
 
 
 def _leaves(data: Mapping[str, Any], prefix: str = "") -> Iterator[tuple[str, Any]]:

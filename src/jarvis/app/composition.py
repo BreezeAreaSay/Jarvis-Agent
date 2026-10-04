@@ -17,7 +17,6 @@ from pathlib import Path
 from jarvis.adapters.clock import SystemClock
 from jarvis.adapters.inventory import system_inventory
 from jarvis.adapters.memory import InMemoryStorage
-from jarvis.adapters.models import OpenAICompatibleBackend
 from jarvis.adapters.sqlite import SqliteStorage
 from jarvis.adapters.tools import HOST, OS_FAMILY, builtin_tools, host_tools, system_launcher
 from jarvis.core.agent.stages import agent_stages
@@ -84,10 +83,18 @@ class App:
 
 def model_backends(config: JarvisConfig) -> dict[ModelRole, ModelBackend]:
     """Бэкенды ролей по конфигу: у каждой роли — свой эндпоинт."""
+    # HTTP-клиент грузится, только когда модели нужны: `jarvis route`, `tools`, `tasks` обходятся без него.
+    from jarvis.adapters.models import OpenAICompatibleBackend
+
     endpoints = config.models.endpoints
     return {
         role: OpenAICompatibleBackend(name, endpoints[name]) for role, name in config.models.roles.items()
     }
+
+
+def build_router(*, inventory: Inventory | None = None, direct_commands: bool = True) -> Router:
+    """Router без остального приложения — для `jarvis route`: решение без хранилища, моделей и исполнения."""
+    return Router(inventory if inventory is not None else system_inventory(), direct=direct_commands)
 
 
 def read_only_tools() -> list[Tool]:

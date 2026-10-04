@@ -259,3 +259,21 @@ def test_listing_names_is_metadata() -> None:
         "/work", data=frozenset({DataClass.LOCAL_METADATA}), output={"entries": [{"path": "/work/a"}]}
     )
     assert found == {DataClass.LOCAL_METADATA}
+
+
+def test_a_large_result_is_classified_from_the_head_too() -> None:
+    # Начало результата — то, что видит модель; классы не теряются за пределом числа строк.
+    entries = [{"name": "passport.pdf", "path": "/home/u/Documents/passport.pdf", "kind": "file"}]
+    entries += [{"name": f"f{i}", "path": f"/work/f{i}", "kind": "file"} for i in range(5000)]
+    entries.append({"name": "plan.md", "path": "/work/private/plan.md", "kind": "file"})
+    found = classify("/work", data=frozenset({DataClass.LOCAL_METADATA}), output={"entries": entries})
+    assert {DataClass.PERSONAL_DATA, DataClass.PRIVATE} <= found
+
+
+def test_paths_inside_longer_strings_and_keys_are_classified() -> None:
+    output = {
+        "processes": [{"pid": 1, "command": "python3 /work/private/job.py --fast"}],
+        "/home/u/.ssh/id_ed25519": "ключ как имя поля",
+    }
+    found = classify("/work", data=frozenset({DataClass.LOCAL_METADATA}), output=output)
+    assert {DataClass.PRIVATE, DataClass.SECRETS} <= found

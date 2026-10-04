@@ -8,8 +8,13 @@
 - зона секретов или имя файла секрета (`.env`, `*.pem` …) → `secrets`;
 - содержимое файла кода (по расширению или имени) → ещё и `source_code`;
 - путь в личной папке (Документы, Рабочий стол, Загрузки …) → `personal_data`.
+
+Проверяется весь результат по порядку — строки и ключи, без предела: модель видит начало результата, и
+класс не может потеряться из-за длины. В коротких строках (командная строка процесса, текст ошибки) пути
+ищутся и внутри.
 """
 
+import re
 from collections.abc import Iterator, Sequence
 
 from pydantic import JsonValue
@@ -19,7 +24,11 @@ from jarvis.domain.paths import is_absolute, is_within, name_of
 from jarvis.domain.privacy import CODE_EXTENSIONS, CODE_FILE_NAMES, DataClass
 from jarvis.domain.tools import EffectKind, ToolDefinition, ToolPreview, ToolResult
 
-MAX_OUTPUT_PATHS = 2000  # сколько строк результата проверить как пути
+EMBEDDED_SCAN_CHARS = 2048  # в строках не длиннее пути ищутся и внутри; длинное — содержимое файла
+_EMBEDDED = {
+    "posix": re.compile(r"(?<![\w.~:/-])/[^\s\"'<>|,;]+"),
+    "windows": re.compile(r"(?<![\w])[A-Za-z]:[\\/][^\s\"'<>|,;]*"),
+}
 
 
 class DataClassifier:
@@ -44,10 +53,17 @@ class DataClassifier:
             if content and self._is_code(path):
                 found.add(DataClass.SOURCE_CODE)
         if result is not None:
-            for path in _strings(result.output):
-                if self._is_path(path):
+            for text in _strings(result.output):
+                for path in self._paths(text):
                     found |= self._path_classes(path)
         return frozenset(found)
+
+    def _paths(self, text: str) -> Iterator[str]:
+        if self._is_path(text):
+            yield text
+        elif len(text) <= EMBEDDED_SCAN_CHARS and ("/" in text or "\\" in text):
+            for match in _EMBEDDED[self._zones.os_family].finditer(text):
+                yield match.group(0)
 
     def _path_classes(self, path: str) -> set[DataClass]:
         found: set[DataClass] = set()
@@ -70,15 +86,14 @@ class DataClassifier:
 
 
 def _strings(value: JsonValue) -> Iterator[str]:
-    """Строки результата (пути в списке файлов, поиске, процессах) — не больше MAX_OUTPUT_PATHS."""
+    """Все строки результата и ключи объектов — в порядке документа (как их видит модель)."""
     stack: list[JsonValue] = [value]
-    seen = 0
-    while stack and seen < MAX_OUTPUT_PATHS:
+    while stack:
         item = stack.pop()
         if isinstance(item, str):
-            seen += 1
             yield item
         elif isinstance(item, list):
-            stack.extend(item)
+            stack.extend(reversed(item))
         elif isinstance(item, dict):
-            stack.extend(item.values())
+            for key, inner in reversed(list(item.items())):
+                stack.extend((inner, key))

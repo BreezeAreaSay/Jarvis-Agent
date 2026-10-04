@@ -101,7 +101,7 @@ async def test_a_direct_command_runs_without_a_model(tmp_path: Path) -> None:
 
 async def test_a_direct_folder_with_secrets_waits_for_a_human(tmp_path: Path) -> None:
     direct = Direct(tmp_path)
-    snapshot = await direct.run(f"открой папку {direct.secrets}")
+    snapshot = await direct.run(f'открой папку "{direct.secrets}"')
     assert snapshot.status is S.WAITING_CONFIRMATION
     assert direct.launched == []
     (approval,) = direct.app.tasks.approvals(direct.task_id)
@@ -114,7 +114,7 @@ async def test_a_direct_folder_with_secrets_waits_for_a_human(tmp_path: Path) ->
 
 async def test_a_denied_direct_command_ends_the_task_without_a_model(tmp_path: Path) -> None:
     direct = Direct(tmp_path)
-    await direct.run(f"открой папку {direct.secrets}")
+    await direct.run(f'открой папку "{direct.secrets}"')
     (approval,) = direct.app.tasks.approvals(direct.task_id)
     direct.app.tasks.resolve_approval(approval.id, ApprovalDecision.DENY, via="test")
     snapshot = await direct.app.tasks.run_until_blocked(direct.task_id)

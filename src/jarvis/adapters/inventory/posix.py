@@ -101,9 +101,9 @@ class PosixInventory:
             return {}
         found: dict[str, Path] = {}
         for match in re.finditer(r'^(XDG_[A-Z]+_DIR)="([^"]*)"', text, re.MULTILINE):
-            value = match.group(2).replace("$HOME", str(self._home))
-            if value.startswith("/"):
-                found[match.group(1)] = Path(value)
+            value = Path(match.group(2).replace("$HOME", str(self._home)))
+            if value.is_absolute():
+                found[match.group(1)] = value
         return found
 
 

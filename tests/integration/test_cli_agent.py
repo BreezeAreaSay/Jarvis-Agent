@@ -194,9 +194,12 @@ def test_without_a_key_the_cloud_provider_is_skipped_and_the_local_model_answers
     assert "Локально, без облака." in result.output
 
 
-def test_secrets_cannot_be_allowed_from_the_command_line(home: Path) -> None:
-    result = CliRunner().invoke(app, ["run", "--allow-cloud", "secrets", "что-нибудь"])
-    assert result.exit_code != 0
+@pytest.mark.parametrize("data", ["secrets", "private"])
+def test_secrets_cannot_be_allowed_from_the_command_line(home: Path, data: str) -> None:
+    result = CliRunner().invoke(app, ["run", "--allow-cloud", data, "что-нибудь"])
+    assert result.exit_code == 2
+    assert isinstance(result.exception, SystemExit)  # понятное сообщение, а не трассировка pydantic
+    assert f"--allow-cloud {data}" in result.output
 
 
 def test_model_check_lists_cloud_providers_without_their_keys(

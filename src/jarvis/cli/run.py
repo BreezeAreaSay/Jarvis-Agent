@@ -24,7 +24,7 @@ from jarvis.core.trace import shorten
 from jarvis.domain.approvals import ApprovalDecision, ApprovalRequest, ApprovalStatus
 from jarvis.domain.errors import ApprovalClosed, JarvisError
 from jarvis.domain.ids import TaskId
-from jarvis.domain.privacy import DataClass
+from jarvis.domain.privacy import NEVER, DataClass
 from jarvis.domain.routing import CloudMode
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Origin, TaskRequest, TaskSnapshot
@@ -54,6 +54,14 @@ def run_command(
     ] = None,
 ) -> None:
     """Выполнить запрос: прямая команда — без модели, иначе агент; исполняет всегда Tool Runtime."""
+    never = [item.value for item in allow_cloud or [] if item in NEVER]
+    if never:
+        typer.echo(
+            f"--allow-cloud {', '.join(never)}: секреты и данные из private_roots не уходят с компьютера — "
+            "это не разрешается ни флагом, ни настройкой, ни согласием",
+            err=True,
+        )
+        raise typer.Exit(2)
     loaded = load_or_exit()
     if local_only:
         mode = CloudMode.LOCAL_ONLY

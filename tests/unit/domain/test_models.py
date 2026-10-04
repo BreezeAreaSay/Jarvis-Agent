@@ -12,7 +12,7 @@ from jarvis.domain.agent import (
     ProposedAction,
     ToolAction,
 )
-from jarvis.domain.models import ModelRole
+from jarvis.domain.models import ModelCapabilities, ModelRole
 from jarvis.domain.settings import JarvisConfig, ModelsSettings, is_loopback_url
 
 ENDPOINT = {"base_url": "http://127.0.0.1:8080/v1", "capabilities": {"context_window": 16384}}
@@ -116,3 +116,27 @@ def test_denied_calls_are_not_evidence() -> None:
         ]
     )
     assert state.executed_calls() == []
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"max_output_tokens": 16384}, "меньше окна контекста"),
+        ({"reasoning_budget": 1000}, "только при reasoning_behavior = shares_output"),
+        ({"reasoning_behavior": "shares_output"}, "задайте max_output_tokens или reasoning_budget"),
+        (
+            {"reasoning_behavior": "shares_output", "max_output_tokens": 2000, "reasoning_budget": 2000},
+            "reasoning_budget должен быть меньше max_output_tokens",
+        ),
+    ],
+)
+def test_output_and_reasoning_capabilities_are_consistent(fields: dict[str, object], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        ModelCapabilities.model_validate({"context_window": 16384, **fields})
+
+
+def test_reasoning_budget_alone_is_enough_for_a_reasoning_model() -> None:
+    caps = ModelCapabilities.model_validate(
+        {"context_window": 16384, "reasoning_behavior": "shares_output", "reasoning_budget": 2048}
+    )
+    assert caps.max_output_tokens is None

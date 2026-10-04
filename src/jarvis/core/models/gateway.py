@@ -47,6 +47,7 @@ from jarvis.domain.models import (
     ModelInfo,
     ModelRole,
     Prompt,
+    ReasoningBehavior,
 )
 from jarvis.domain.trace import EventKind
 from jarvis.ports.clock import Clock
@@ -73,9 +74,18 @@ ROLE_REQUIREMENTS: Mapping[ModelRole, RoleRequirements] = {
 }
 
 
-def reply_tokens(role: ModelRole, info: ModelInfo) -> int:
-    """Лимит ответа роли с необязательным переопределением для конкретного эндпоинта."""
-    return info.capabilities.max_output_tokens or ROLE_REQUIREMENTS[role].reply_tokens
+def output_tokens(role: ModelRole, info: ModelInfo) -> int:
+    """max_tokens запроса: ответ роли, а у модели, чьи рассуждения расходуют тот же лимит вывода, —
+    ещё и место под них (бюджет рассуждений или весь лимит эндпоинта); не больше max_output_tokens."""
+    caps = info.capabilities
+    wanted = ROLE_REQUIREMENTS[role].reply_tokens
+    if caps.reasoning_behavior is ReasoningBehavior.SHARES_OUTPUT:
+        if caps.reasoning_budget is not None:
+            wanted += caps.reasoning_budget
+        else:
+            assert caps.max_output_tokens is not None  # проверено в ModelCapabilities
+            wanted = caps.max_output_tokens
+    return min(wanted, caps.max_output_tokens) if caps.max_output_tokens is not None else wanted
 
 
 @dataclass(frozen=True)
@@ -153,7 +163,7 @@ class ModelGateway:
             request = BackendRequest(
                 messages=messages,
                 json_schema=output.schema if constrained else None,
-                max_tokens=reply_tokens(role, backend.info),
+                max_tokens=output_tokens(role, backend.info),
             )
             call = _Attempt(
                 self._tracer.next_id(task_id, "mc"),
@@ -209,8 +219,8 @@ class ModelGateway:
             logged = [*journal, hidden if secret else echoed, repair] if fits else [*journal, repair]
 
     def _window(self, role: ModelRole) -> int:
-        """Токенов на весь промпт: окно модели минус ответ роли."""
-        return self.capabilities(role).context_window - reply_tokens(role, self._backend(role).info)
+        """Токенов на весь промпт: окно модели минус вывод (ответ роли и, если есть, рассуждения)."""
+        return self.capabilities(role).context_window - output_tokens(role, self._backend(role).info)
 
     def _backend(self, role: ModelRole) -> ModelBackend:
         backend = self._backends.get(role)
@@ -302,11 +312,35 @@ class _Attempt:
 def check_requirements(role: ModelRole, info: ModelInfo) -> None:
     """Модель, не подходящая роли, — ошибка конфигурации при старте, а не сбой посреди задачи."""
     required = ROLE_REQUIREMENTS[role]
-    window = info.capabilities.context_window
+    caps = info.capabilities
+    window = caps.context_window
     if window < required.min_context_window:
         raise ConfigError(
             f"эндпоинт {info.endpoint} не подходит роли {role}: окно контекста {window} токенов, "
             f"нужно не меньше {required.min_context_window} (запустите сервер с большим -c)"
+        )
+    if caps.max_output_tokens is not None and caps.max_output_tokens < required.reply_tokens:
+        raise ConfigError(
+            f"эндпоинт {info.endpoint} не подходит роли {role}: max_output_tokens {caps.max_output_tokens} "
+            f"меньше ответа роли ({required.reply_tokens} токенов)"
+        )
+    if (
+        caps.reasoning_budget is not None
+        and caps.max_output_tokens is not None
+        and required.reply_tokens + caps.reasoning_budget > caps.max_output_tokens
+    ):
+        raise ConfigError(
+            f"эндпоинт {info.endpoint}: ответ роли {role} ({required.reply_tokens}) и reasoning_budget "
+            f"({caps.reasoning_budget}) не помещаются в max_output_tokens ({caps.max_output_tokens})"
+        )
+    # Промпту должно остаться не меньше места, чем у минимального подходящего эндпоинта.
+    prompt_room = window - output_tokens(role, info)
+    needed = required.min_context_window - required.reply_tokens
+    if prompt_room < needed:
+        raise ConfigError(
+            f"эндпоинт {info.endpoint} не подходит роли {role}: окно {window} минус вывод "
+            f"{output_tokens(role, info)} оставляет промпту {prompt_room} токенов, нужно не меньше {needed} "
+            "(уменьшите max_output_tokens или reasoning_budget, или увеличьте окно)"
         )
 
 

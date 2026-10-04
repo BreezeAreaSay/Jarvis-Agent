@@ -7,9 +7,9 @@ ADR 0009, ADR 0023).
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, Field, JsonValue, NonNegativeInt, PositiveInt
+from pydantic import BaseModel, Field, JsonValue, NonNegativeInt, PositiveInt, model_validator
 
 from jarvis.domain.errors import ErrorInfo
 from jarvis.domain.ids import TaskId
@@ -21,16 +21,52 @@ class ModelRole(StrEnum):
     EXECUTOR = "executor"  # выбирает следующее действие агента и формулирует ответ
 
 
+class ReasoningBehavior(StrEnum):
+    """Как скрытые рассуждения модели соотносятся с лимитом вывода. Не каждый API сообщает число токенов
+    рассуждений или даёт задать их бюджет, поэтому ядро знает только то, что влияет на расчёт бюджетов."""
+
+    NONE = "none"  # ответ — это и есть ответ: рассуждений нет, они выключены или не расходуют лимит вывода
+    SHARES_OUTPUT = "shares_output"  # рассуждения расходуют тот же лимит вывода, что и ответ
+
+
 class ModelCapabilities(BaseModel, frozen=True, extra="forbid"):
-    """Что умеет модель на этом эндпоинте. Ядро решает по возможностям, а не по имени модели."""
+    """Что умеет модель на этом эндпоинте. Ядро решает по возможностям, а не по имени модели;
+    бюджеты промпта и ответа считает Model Gateway (ADR 0027)."""
 
     # Сервер ограничивает ответ JSON-схемой (грамматикой): схема уходит в запрос. Без этого схема
     # только описывается в промпте, а ответ проверяется и ремонтируется.
     structured_output: bool = False
     context_window: PositiveInt  # токенов на запрос и ответ вместе (n_ctx сервера)
-    # Необязательный лимит ответа конкретного эндпоинта. Нужен моделям, которые тратят часть
-    # ответа на внутреннее reasoning; если не задан, ядро использует бюджет роли.
+    # Максимальный вывод эндпоинта за один ответ (лимит сервера или модели). Не задан — ограничивает
+    # только окно контекста.
     max_output_tokens: PositiveInt | None = None
+    reasoning_behavior: ReasoningBehavior = ReasoningBehavior.NONE
+    # Сколько из лимита вывода уходит на рассуждения, если это известно или задаётся (необязательно):
+    # без него при SHARES_OUTPUT ответу отдаётся весь max_output_tokens.
+    reasoning_budget: PositiveInt | None = None
+
+    @model_validator(mode="after")
+    def _consistent_output(self) -> Self:
+        if self.max_output_tokens is not None and self.max_output_tokens >= self.context_window:
+            raise ValueError(
+                f"max_output_tokens ({self.max_output_tokens}) должен быть меньше окна контекста "
+                f"({self.context_window}): промпту нужно место"
+            )
+        shares = self.reasoning_behavior is ReasoningBehavior.SHARES_OUTPUT
+        if self.reasoning_budget is not None and not shares:
+            raise ValueError("reasoning_budget имеет смысл только при reasoning_behavior = shares_output")
+        if shares and self.max_output_tokens is None and self.reasoning_budget is None:
+            raise ValueError(
+                "при reasoning_behavior = shares_output задайте max_output_tokens или reasoning_budget: "
+                "иначе неизвестно, сколько вывода оставить на рассуждения"
+            )
+        if (
+            self.reasoning_budget is not None
+            and self.max_output_tokens is not None
+            and self.reasoning_budget >= self.max_output_tokens
+        ):
+            raise ValueError("reasoning_budget должен быть меньше max_output_tokens: ответу нужно место")
+        return self
 
 
 class ModelInfo(BaseModel, frozen=True, extra="forbid"):

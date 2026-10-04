@@ -15,7 +15,7 @@ from pydantic import JsonValue, ValidationError
 from jarvis.app.composition import build_app, model_backends
 from jarvis.cli.common import load_or_exit
 from jarvis.core.agent.actions import decision_output
-from jarvis.core.models.gateway import ROLE_REQUIREMENTS, check_requirements, extract_json, reply_tokens
+from jarvis.core.models.gateway import ROLE_REQUIREMENTS, check_requirements, extract_json, output_tokens
 from jarvis.core.timeline import clean_line
 from jarvis.domain.errors import ConfigError, ModelError
 from jarvis.domain.models import BackendRequest, BackendResponse, ChatMessage, ModelRole
@@ -82,6 +82,9 @@ async def _check(
     typer.echo(f"{role}: эндпоинт {info.endpoint} — {endpoint.base_url}, модель «{info.model}»")
     typer.echo(
         f"  объявлено: structured_output={caps.structured_output}, context_window={caps.context_window}"
+        + (f", max_output_tokens={caps.max_output_tokens}" if caps.max_output_tokens is not None else "")
+        + (f", reasoning_behavior={caps.reasoning_behavior}" if caps.reasoning_behavior != "none" else "")
+        + (f", reasoning_budget={caps.reasoning_budget}" if caps.reasoning_budget is not None else "")
     )
     problems = 0
     try:
@@ -160,7 +163,7 @@ async def _probe_decision(backend: ModelBackend, definitions: list[ToolDefinitio
             ChatMessage(role="user", content="Проверка связи: закончи сразу."),
         ],
         json_schema=output.schema,
-        max_tokens=reply_tokens(ModelRole.EXECUTOR, backend.info),
+        max_tokens=output_tokens(ModelRole.EXECUTOR, backend.info),
     )
     try:
         response = await backend.complete(request)

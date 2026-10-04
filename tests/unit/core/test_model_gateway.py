@@ -23,7 +23,15 @@ from jarvis.domain.errors import (
     ModelUnavailable,
 )
 from jarvis.domain.ids import TaskId
-from jarvis.domain.models import ChatMessage, ModelCapabilities, ModelRole, Prompt, PromptSection, Trust
+from jarvis.domain.models import (
+    ChatMessage,
+    ModelCapabilities,
+    ModelRole,
+    Prompt,
+    PromptSection,
+    ReasoningBehavior,
+    Trust,
+)
 from jarvis.domain.settings import BudgetsSettings
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Origin, Task, TaskRequest
@@ -64,7 +72,10 @@ class Setup:
         structured: bool = True,
         repair_attempts: int = 2,
         model_calls: int = 10,
+        context_window: int = 16384,
         max_output_tokens: int | None = None,
+        reasoning: ReasoningBehavior = ReasoningBehavior.NONE,
+        reasoning_budget: int | None = None,
     ) -> None:
         self.storage = InMemoryStorage()
         self.task_id = self.storage.ids.next_task_id()
@@ -83,7 +94,11 @@ class Setup:
             )
             uow.commit()
         caps = ModelCapabilities(
-            structured_output=structured, context_window=16384, max_output_tokens=max_output_tokens
+            structured_output=structured,
+            context_window=context_window,
+            max_output_tokens=max_output_tokens,
+            reasoning_behavior=reasoning,
+            reasoning_budget=reasoning_budget,
         )
         self.model = ScriptedModel(replies, capabilities=caps)
         clock = ManualClock()
@@ -166,12 +181,65 @@ async def test_constrained_backend_gets_the_schema_in_the_request() -> None:
     assert setup.meter.usage.model_tokens > 0
 
 
-async def test_endpoint_can_override_the_role_reply_budget() -> None:
+async def test_endpoint_output_limit_caps_but_does_not_inflate_the_reply() -> None:
     setup = Setup(reply(json={"color": "red"}), max_output_tokens=2048)
     assert await setup.generate() == Color(color="red")
     (request,) = setup.model.requests
-    assert request.max_tokens == 2048
-    assert setup.gateway.prompt_budget(EXECUTOR) == 16384 - 2048 - 400
+    assert request.max_tokens == 1024  # ответ роли: лимит эндпоинта больше, но модель не рассуждает
+    assert setup.gateway.prompt_budget(EXECUTOR) == 16384 - 1024 - 400
+
+
+async def test_reasoning_that_shares_the_output_limit_gets_the_whole_limit() -> None:
+    setup = Setup(
+        reply(json={"color": "red"}), max_output_tokens=8192, reasoning=ReasoningBehavior.SHARES_OUTPUT
+    )
+    assert await setup.generate() == Color(color="red")
+    (request,) = setup.model.requests
+    assert request.max_tokens == 8192
+    assert setup.gateway.prompt_budget(EXECUTOR) == 16384 - 8192 - 400
+
+
+async def test_known_reasoning_budget_is_reserved_on_top_of_the_reply() -> None:
+    setup = Setup(
+        reply(json={"color": "red"}),
+        max_output_tokens=8192,
+        reasoning=ReasoningBehavior.SHARES_OUTPUT,
+        reasoning_budget=2048,
+    )
+    assert await setup.generate() == Color(color="red")
+    (request,) = setup.model.requests
+    assert request.max_tokens == 1024 + 2048
+    assert setup.gateway.prompt_budget(EXECUTOR) == 16384 - 3072 - 400
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"max_output_tokens": 512}, "max_output_tokens 512 меньше ответа роли"),
+        (
+            {"max_output_tokens": 4096, "reasoning_behavior": "shares_output", "reasoning_budget": 3500},
+            "не помещаются в max_output_tokens",
+        ),
+        (
+            {"context_window": 9000, "max_output_tokens": 4096, "reasoning_behavior": "shares_output"},
+            "оставляет промпту 4904 токенов, нужно не меньше 7168",
+        ),
+    ],
+)
+def test_output_budget_is_validated_against_the_role_and_the_window(
+    fields: dict[str, object], message: str
+) -> None:
+    caps = ModelCapabilities.model_validate({"context_window": 16384, **fields})
+    model = ScriptedModel([], capabilities=caps)
+    storage = InMemoryStorage()
+    with pytest.raises(ConfigError, match=message):
+        ModelGateway(
+            backends={EXECUTOR: model},
+            uow=storage.unit_of_work,
+            tracer=Tracer(storage.ids, ManualClock()),
+            clock=ManualClock(),
+            repair_attempts=2,
+        )
 
 
 async def test_unconstrained_backend_sees_the_schema_in_the_prompt() -> None:

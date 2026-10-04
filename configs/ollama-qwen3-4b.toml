@@ -8,10 +8,12 @@ model = "qwen3:4b-jarvis"
 request_timeout_s = 180
 
 [models.endpoints.ollama4b.capabilities]
-# qwen3:4b в Ollama 0.33.3 расходует ответ на reasoning; Jarvis применяет repair-путь.
+# qwen3:4b в Ollama 0.33.3 расходует вывод на reasoning: ответу отдаётся весь лимит вывода эндпоинта,
+# промпту остаётся 16384 − 8192 токенов. Схему сервер не применяет — Jarvis описывает её в промпте и чинит ответ.
 structured_output = false
 context_window = 16384
 max_output_tokens = 8192
+reasoning_behavior = "shares_output"
 
 [models.endpoints.ollama4b.sampling]
 temperature = 0.0

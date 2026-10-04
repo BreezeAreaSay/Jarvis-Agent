@@ -9,13 +9,14 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Self
 
-from pydantic import BaseModel, Field, PositiveInt, model_validator
+from pydantic import BaseModel, Field, PositiveInt, field_validator, model_validator
 
 from jarvis.domain.agent import AgentState
 from jarvis.domain.budget import Budget, BudgetUsage
 from jarvis.domain.errors import ErrorInfo, InvalidTransition
 from jarvis.domain.ids import TaskId
-from jarvis.domain.routing import Route, RouteDecision
+from jarvis.domain.privacy import NEVER, DataClass
+from jarvis.domain.routing import CloudMode, Route, RouteDecision
 from jarvis.domain.states import TaskStatus, is_terminal
 
 
@@ -48,6 +49,18 @@ class TaskRequest(BaseModel, frozen=True, extra="forbid"):
     origin: Origin
     working_directory: str | None = None  # папка клиента; от неё инструменты считают относительные пути
     dry_run: bool = False  # всё, кроме исполнения инструментов
+    mode: CloudMode | None = None  # режим запуска; None — models.routing.mode из конфига
+    # Классы данных, которые человек разрешил отправить в облако при запуске (`--allow-cloud`): до конца
+    # задачи, любому провайдеру её уровня. Секреты и private_roots так не разрешаются.
+    allow_cloud: list[DataClass] = []
+
+    @field_validator("allow_cloud")
+    @classmethod
+    def _consentable(cls, value: list[DataClass]) -> list[DataClass]:
+        never = sorted(item.value for item in value if item in NEVER)
+        if never:
+            raise ValueError(f"не разрешается ни настройкой, ни согласием: {', '.join(never)}")
+        return value
 
 
 class TaskOutcome(BaseModel, frozen=True, extra="forbid"):

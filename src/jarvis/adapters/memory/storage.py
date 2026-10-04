@@ -17,6 +17,7 @@ from jarvis.domain.errors import ApprovalNotFound, ConcurrentModification, Stora
 from jarvis.domain.ids import ChildKind, TaskId, child_id, child_number, task_id, task_number
 from jarvis.domain.lease import Lease
 from jarvis.domain.models import ModelCallRecord
+from jarvis.domain.providers import ProviderStatus
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Task
 from jarvis.domain.trace import TraceEvent
@@ -31,6 +32,7 @@ class _State:
     approvals: dict[str, str] = field(default_factory=dict[str, str])
     audit: list[str] = field(default_factory=list[str])
     model_calls: dict[str, str] = field(default_factory=dict[str, str])
+    provider_states: dict[str, str] = field(default_factory=dict[str, str])
     last_task: int = 0
     last_child: dict[tuple[TaskId, ChildKind], int] = field(
         default_factory=dict[tuple[TaskId, ChildKind], int]
@@ -48,6 +50,7 @@ class _Snapshot:
     approvals: dict[str, str]
     audit_count: int
     model_calls: dict[str, str]
+    provider_states: dict[str, str]
 
 
 class InMemoryStorage:
@@ -88,6 +91,7 @@ class InMemoryUnitOfWork:
         self._approvals = _Approvals(self)
         self._audit = _Audit(self)
         self._model_calls = _ModelCalls(self)
+        self._provider_states = _ProviderStates(self)
         self._done = False
 
     @property
@@ -114,6 +118,10 @@ class InMemoryUnitOfWork:
     def model_calls(self) -> "_ModelCalls":
         return self._model_calls
 
+    @property
+    def provider_states(self) -> "_ProviderStates":
+        return self._provider_states
+
     def stored_audit(self) -> list[str]:
         return self._state.audit[: self.snapshot().audit_count]
 
@@ -127,6 +135,7 @@ class InMemoryUnitOfWork:
                 approvals=dict(state.approvals),
                 audit_count=len(state.audit),
                 model_calls=dict(state.model_calls),
+                provider_states=dict(state.provider_states),
             )
         return self._snapshot
 
@@ -212,6 +221,9 @@ class InMemoryUnitOfWork:
         state.audit.extend(record.model_dump_json() for record in self._audit.appended)
         state.model_calls.update(
             {key: call.model_dump_json() for key, call in self._model_calls.added.items()}
+        )
+        state.provider_states.update(
+            {key: status.model_dump_json() for key, status in self._provider_states.put_states.items()}
         )
 
 
@@ -380,3 +392,25 @@ class _ModelCalls:
         ]
         found = [call for call in [*stored, *self.added.values()] if call.task_id == task_id]
         return sorted(found, key=lambda call: child_number(call.id))
+
+
+class _ProviderStates:
+    def __init__(self, uow: InMemoryUnitOfWork) -> None:
+        self._uow = uow
+        self.put_states: dict[str, ProviderStatus] = {}
+
+    def get(self, provider: str) -> ProviderStatus | None:
+        if provider in self.put_states:
+            return self.put_states[provider]
+        raw = self._uow.snapshot().provider_states.get(provider)
+        return None if raw is None else ProviderStatus.model_validate_json(raw)
+
+    def put(self, status: ProviderStatus) -> None:
+        self.put_states[status.provider] = status
+
+    def list(self) -> list[ProviderStatus]:
+        stored = {
+            key: ProviderStatus.model_validate_json(raw)
+            for key, raw in self._uow.snapshot().provider_states.items()
+        }
+        return sorted({**stored, **self.put_states}.values(), key=lambda status: status.provider)

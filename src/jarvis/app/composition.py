@@ -19,18 +19,25 @@ from jarvis.adapters.inventory import system_inventory
 from jarvis.adapters.memory import InMemoryStorage
 from jarvis.adapters.sqlite import SqliteStorage
 from jarvis.adapters.tools import HOST, OS_FAMILY, builtin_tools, host_tools, system_launcher
+from jarvis.adapters.tools.consent import CloudShareTool
+from jarvis.config import resolve_secret
 from jarvis.core.agent.stages import agent_stages
 from jarvis.core.approvals import Approvals
 from jarvis.core.leases import Leases
+from jarvis.core.models.availability import ProviderAvailability
 from jarvis.core.models.gateway import ModelGateway
+from jarvis.core.models.privacy import CloudPrivacyPolicy
 from jarvis.core.policy import PolicyEngine, PolicyZones
 from jarvis.core.routing.router import Router
 from jarvis.core.runner import StageHandler, TaskRunner
 from jarvis.core.service import TaskService
+from jarvis.core.tools.provenance import DataClassifier
 from jarvis.core.tools.registry import ToolRegistry
 from jarvis.core.tools.runtime import ToolRuntime
 from jarvis.core.trace import Tracer
+from jarvis.domain.inventory import KnownFolder
 from jarvis.domain.models import ModelRole
+from jarvis.domain.routing import CloudMode
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.tools import ExecutionTarget
@@ -41,6 +48,15 @@ from jarvis.ports.models import ModelBackend
 from jarvis.ports.tools import Tool
 
 Storage = InMemoryStorage | SqliteStorage
+# Личные папки пользователя: файлы оттуда — personal_data, в облако без разрешения не уходят (ADR 0028).
+PERSONAL_FOLDERS = (
+    KnownFolder.DOCUMENTS,
+    KnownFolder.DESKTOP,
+    KnownFolder.DOWNLOADS,
+    KnownFolder.PICTURES,
+    KnownFolder.MUSIC,
+    KnownFolder.VIDEOS,
+)
 Stages = Mapping[TaskStatus, StageHandler]
 StagesFactory = Callable[[ToolRuntime], Stages]
 
@@ -92,9 +108,34 @@ def model_backends(config: JarvisConfig) -> dict[ModelRole, ModelBackend]:
     }
 
 
-def build_router(*, inventory: Inventory | None = None, direct_commands: bool = True) -> Router:
+def cloud_allowed(config: JarvisConfig) -> bool:
+    """Облако включено и режим не local_only: только тогда создаются удалённые адаптеры (ADR 0027)."""
+    return config.cloud.enabled and config.models.routing.mode is not CloudMode.LOCAL_ONLY
+
+
+def model_endpoints(config: JarvisConfig, *, env: Mapping[str, str] | None = None) -> dict[str, ModelBackend]:
+    """Эндпоинты цепочек уровней по ID: локальные и — если облако разрешено — удалённые. Ключ удалённого
+    провайдера читается из окружения по ссылке `env:ИМЯ` только здесь; нет переменной — адаптер отвечает
+    MISCONFIGURED без обращения к сети."""
+    from jarvis.adapters.models import OpenAICompatibleBackend, RemoteOpenAICompatibleBackend
+
+    found: dict[str, ModelBackend] = {
+        name: OpenAICompatibleBackend(name, settings) for name, settings in config.models.endpoints.items()
+    }
+    if cloud_allowed(config):
+        for name, settings in config.models.remote.items():
+            key = resolve_secret(settings.api_key, env=env)
+            found[name] = RemoteOpenAICompatibleBackend(name, settings, key)
+    return found
+
+
+def build_router(
+    *, inventory: Inventory | None = None, direct_commands: bool = True, mode: CloudMode = CloudMode.AUTO
+) -> Router:
     """Router без остального приложения — для `jarvis route`: решение без хранилища, моделей и исполнения."""
-    return Router(inventory if inventory is not None else system_inventory(), direct=direct_commands)
+    return Router(
+        inventory if inventory is not None else system_inventory(), direct=direct_commands, mode=mode
+    )
 
 
 def read_only_tools() -> list[Tool]:
@@ -148,6 +189,7 @@ def build_app(
     storage: Storage | None = None,
     clock: Clock | None = None,
     owner: str | None = None,
+    remote_models: Mapping[str, ModelBackend] | None = None,
     tools: Sequence[Tool] | None = None,
     extra_tools: Sequence[Tool] = (),
     zones: PolicyZones | None = None,
@@ -163,7 +205,9 @@ def build_app(
     умолчанию — встроенные; `extra_tools` добавляются к ним (инструменты eval). `target` и `zones` по
     умолчанию — этот компьютер; тесты с фейковыми инструментами задают их явно, чтобы не зависеть от ОС.
     `inventory` и `launcher` — приложения и папки для прямых команд и способ их открыть (по умолчанию —
-    этого компьютера); `direct_commands=False` — Router отдаёт всё агенту (бенчмарк модели)."""
+    этого компьютера); `direct_commands=False` — Router отдаёт всё агенту (бенчмарк модели).
+    `remote_models` — эндпоинты цепочек уровней по ID вместо созданных по конфигу (тесты и eval с
+    поддельными провайдерами); облако при этом всё равно решает конфиг (`cloud`, `models.routing`)."""
     storage = storage if storage is not None else InMemoryStorage()
     clock = clock if clock is not None else SystemClock()
     owner = owner if owner is not None else process_owner()
@@ -173,8 +217,14 @@ def build_app(
     inventory = inventory if inventory is not None else system_inventory()
     if tools is None:
         tools = host_tools(inventory, launcher if launcher is not None else system_launcher)
+    private_roots = tuple(_canonical(Path(root).expanduser()) for root in config.cloud.private_roots)
+    personal_roots = (
+        *(path for folder in PERSONAL_FOLDERS if (path := inventory.known_folder(folder)) is not None),
+        *(_canonical(Path(root).expanduser()) for root in config.cloud.personal_roots),
+    )
     runtime = ToolRuntime(
-        registry=ToolRegistry([*tools, *extra_tools]),
+        # Служебный инструмент согласия на облако — всегда: модель его не видит (ADR 0028).
+        registry=ToolRegistry([*tools, *extra_tools, CloudShareTool()]),
         policy=PolicyEngine(zones),
         uow=storage.unit_of_work,
         tracer=tracer,
@@ -183,11 +233,16 @@ def build_app(
         approval_ttl_s=config.policy.approval_ttl_s,
         leases=leases,
         protected_roots=(*zones.internal, *zones.secrets),
+        classifier=DataClassifier(zones, private_roots=private_roots, personal_roots=personal_roots),
     )
     gateway: ModelGateway | None = None
     if stages is None:
         gateway = ModelGateway(
             backends=models if models is not None else model_backends(config),
+            endpoints=remote_models if remote_models is not None else model_endpoints(config),
+            routing=config.models.routing,
+            privacy=CloudPrivacyPolicy(config.cloud, os_family=zones.os_family, private_roots=private_roots),
+            availability=ProviderAvailability(uow=storage.unit_of_work, clock=clock),
             uow=storage.unit_of_work,
             tracer=tracer,
             clock=clock,
@@ -196,7 +251,7 @@ def build_app(
         stages = agent_stages(
             gateway=gateway,
             tools=runtime,
-            router=Router(inventory, direct=direct_commands),
+            router=Router(inventory, direct=direct_commands, mode=config.models.routing.mode),
             uow=storage.unit_of_work,
             tracer=tracer,
         )

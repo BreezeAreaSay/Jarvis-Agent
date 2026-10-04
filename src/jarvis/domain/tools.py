@@ -14,6 +14,7 @@ from typing import Literal, NewType, Self
 from pydantic import BaseModel, Field, JsonValue, NonNegativeInt, PositiveFloat, model_validator
 
 from jarvis.domain.ids import TaskId
+from jarvis.domain.privacy import DataClass
 
 ToolId = NewType("ToolId", str)  # "filesystem.list"
 ToolCallId = NewType("ToolCallId", str)  # "task_42.call_3"
@@ -48,6 +49,8 @@ class EffectKind(StrEnum):
     # Открыть что-то в интерфейсе, не меняя данных: приложение из инвентаря, http(s)-адрес, папку
     # (ADR 0030). Запуск произвольного файла или команды — не LAUNCH.
     LAUNCH = "launch"
+    # Отправить классы данных этой задачи провайдеру вне компьютера (ADR 0028): только с согласием.
+    CLOUD_SHARE = "cloud_share"
 
 
 class Invoker(StrEnum):
@@ -55,6 +58,7 @@ class Invoker(StrEnum):
 
     DIRECT = "direct"  # прямая команда пользователя, распознанная Router без модели
     MODEL = "model"  # агентный цикл: действие предложила модель
+    ROUTER = "router"  # сам Jarvis по решению маршрута: согласие на облако (ADR 0028), позже делегирование
 
 
 class ToolEffect(BaseModel, frozen=True, extra="forbid"):
@@ -79,6 +83,11 @@ class ToolDefinition:
     timeout_s: float
     # Результат — содержимое извне (имена, текст, процессы): данные, а не инструкции.
     untrusted_output: bool = True
+    # Классы данных результата (ADR 0028); пути из preview и зоны уточняют их для вызова. Не объявлено —
+    # содержимое файла: в облако без разрешения не уходит.
+    output_data: frozenset[DataClass] = frozenset({DataClass.FILE_CONTENT})
+    # Видит ли инструмент модель: служебные (согласие на облако) вызывает только сам Jarvis.
+    model_visible: bool = True
 
     @property
     def input_schema(self) -> dict[str, JsonValue]:
@@ -167,6 +176,8 @@ class ToolOutcome(BaseModel, frozen=True, extra="forbid"):
     approval_id: str | None = None
     would_execute: bool | None = None  # только для DRY_RUN: исполнился бы вызов в обычном режиме
     duration_ms: NonNegativeInt | None = None
+    # Классы данных результата — по происхождению: объявленный вид, пути из preview, зоны (ADR 0028).
+    data_classes: frozenset[DataClass] = frozenset()
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:

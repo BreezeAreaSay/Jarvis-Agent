@@ -120,6 +120,7 @@ async def test_model_drives_a_tool_call_to_a_verified_answer() -> None:
         kind for kind in agent.kinds() if kind not in (EventKind.TASK_TRANSITION, EventKind.TASK_CREATED)
     ] == [
         EventKind.ROUTE_DECIDED,
+        EventKind.MODEL_ROUTED,
         EventKind.MODEL_CALLED,
         EventKind.ACTION_PROPOSED,
         EventKind.TOOL_PREVIEWED,
@@ -127,6 +128,7 @@ async def test_model_drives_a_tool_call_to_a_verified_answer() -> None:
         EventKind.TOOL_STARTED,
         EventKind.TOOL_FINISHED,
         EventKind.TOOL_VERIFIED,
+        EventKind.MODEL_ROUTED,
         EventKind.MODEL_CALLED,
         EventKind.ACTION_PROPOSED,
         EventKind.TASK_FINISHED,

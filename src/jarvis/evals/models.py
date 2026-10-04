@@ -15,12 +15,17 @@ from pydantic import BaseModel, Field, JsonValue, model_validator
 
 from jarvis.domain.errors import (
     JarvisError,
+    ModelAuthRequired,
     ModelContextExceeded,
+    ModelLimitExceeded,
+    ModelMisconfigured,
+    ModelRateLimited,
     ModelRequestRejected,
     ModelTimeout,
     ModelUnavailable,
 )
 from jarvis.domain.models import BackendRequest, BackendResponse, BackendStatus, ModelCapabilities, ModelInfo
+from jarvis.domain.providers import ProviderKind
 
 SCRIPTED_CAPABILITIES = ModelCapabilities(structured_output=True, context_window=16384)
 
@@ -32,7 +37,14 @@ class ModelScriptExhausted(JarvisError):
 class ModelReply(BaseModel, frozen=True, extra="forbid", populate_by_name=True):
     text: str | None = None
     json_: JsonValue = Field(default=None, alias="json")  # объект ответа; сериализуется как есть
-    error: Literal["unavailable", "timeout", "rejected", "context"] | None = None
+    error: (
+        Literal[
+            "unavailable", "timeout", "rejected", "context", "auth", "rate_limited", "limit_exceeded",
+            "misconfigured",
+        ]
+        | None
+    ) = None  # fmt: skip
+    retry_after_s: int | None = None  # для rate_limited: что сказал провайдер
     hang: bool = False  # ответ не приходит: запрос прерывают отмена или лимит времени
     finish_reason: str = "stop"
 
@@ -57,9 +69,10 @@ class ScriptedModel:
         capabilities: ModelCapabilities = SCRIPTED_CAPABILITIES,
         endpoint: str = "scripted",
         hung: asyncio.Event | None = None,
+        kind: ProviderKind = ProviderKind.LOCAL_MODEL,
     ) -> None:
         self._replies = deque(replies)
-        self._info = ModelInfo(endpoint=endpoint, model="scripted", capabilities=capabilities)
+        self._info = ModelInfo(endpoint=endpoint, model="scripted", capabilities=capabilities, kind=kind)
         self._hung = hung if hung is not None else asyncio.Event()
         self.requests: list[BackendRequest] = []
 
@@ -88,6 +101,16 @@ class ScriptedModel:
                 raise ModelRequestRejected("scripted: сервер отклонил запрос")
             case "context":
                 raise ModelContextExceeded("scripted: промпт не помещается в окно")
+            case "auth":
+                raise ModelAuthRequired(f"{self._info.endpoint}: провайдер не принял ключ (401)")
+            case "rate_limited":
+                raise ModelRateLimited(
+                    f"{self._info.endpoint}: слишком много запросов (429)", retry_after_s=reply.retry_after_s
+                )
+            case "limit_exceeded":
+                raise ModelLimitExceeded(f"{self._info.endpoint}: квота исчерпана")
+            case "misconfigured":
+                raise ModelMisconfigured(f"{self._info.endpoint}: неизвестная модель (404)")
             case None:
                 pass
         text = reply.body()

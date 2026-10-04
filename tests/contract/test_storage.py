@@ -24,6 +24,7 @@ from jarvis.domain.ids import TaskId, child_number
 from jarvis.domain.intents import EntityKind, ResolvedEntity
 from jarvis.domain.lease import Lease
 from jarvis.domain.models import ChatMessage, ModelCallRecord, ModelRole
+from jarvis.domain.providers import ProviderState, ProviderStatus
 from jarvis.domain.routing import RouteDecision, RoutingLevel
 from jarvis.domain.settings import BudgetsSettings
 from jarvis.domain.states import TaskStatus
@@ -574,3 +575,30 @@ def test_model_calls_of_an_unknown_task_are_rejected(storage: Storage) -> None:
         uow.model_calls.add(model_call(storage, ghost))
         with pytest.raises(StorageError):
             uow.commit()
+
+
+def test_provider_state_is_one_record_per_provider_and_the_last_write_wins(storage: Storage) -> None:
+    first = ProviderStatus(
+        provider="cloud_a",
+        state=ProviderState.RATE_LIMITED,
+        reason="model_rate_limited",
+        valid_until=NOW + timedelta(seconds=60),
+        updated_at=NOW,
+    )
+    with storage.unit_of_work() as uow:
+        assert uow.provider_states.get("cloud_a") is None
+        uow.provider_states.put(first)
+        assert uow.provider_states.get("cloud_a") == first  # своя запись видна до commit
+        uow.commit()
+    second = first.model_copy(update={"state": ProviderState.READY, "valid_until": None, "reason": "ok"})
+    with storage.unit_of_work() as uow:
+        uow.provider_states.put(second)
+        uow.commit()
+    with storage.unit_of_work() as uow:
+        assert uow.provider_states.get("cloud_a") == second
+        assert uow.provider_states.list() == [second]
+    with storage.unit_of_work() as uow:
+        uow.provider_states.put(first.model_copy(update={"provider": "cloud_b"}))
+        # без commit — не записано
+    with storage.unit_of_work() as uow:
+        assert [status.provider for status in uow.provider_states.list()] == ["cloud_a"]

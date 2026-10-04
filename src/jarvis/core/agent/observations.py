@@ -9,6 +9,7 @@ import json
 
 from jarvis.domain.agent import Observation
 from jarvis.domain.errors import ToolError
+from jarvis.domain.privacy import DataClass
 from jarvis.domain.tools import ToolOutcome, ToolOutcomeKind
 
 OBSERVATION_BYTES = 6000  # результат вызова в рабочей памяти и промпте; больше — обрезается
@@ -22,11 +23,13 @@ def observation_of(outcome: ToolOutcome) -> Observation:
             data, note = clip(json.dumps(outcome.result.output, ensure_ascii=False))
             # Прочитанное из зоны секретов (с разрешения человека) не оседает в журналах.
             secret = any(rule.startswith("zone.secrets") for rule in outcome.decision.rules)
+            classes = outcome.data_classes | ({DataClass.SECRETS} if secret else set[DataClass]())
             return Observation(
                 status="executed",
                 summary=f"{tool}: исполнен, проверка пройдена{note}",
                 data=data,
                 sensitive=secret,
+                data_classes=frozenset(classes),
             )
         case ToolOutcomeKind.DRY_RUN:
             would = "был бы исполнен" if outcome.would_execute else "потребовал бы подтверждения"

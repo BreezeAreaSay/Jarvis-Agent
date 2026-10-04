@@ -23,7 +23,7 @@ from jarvis.domain.settings import EndpointSettings
 
 CONNECT_TIMEOUT_S = 5.0
 DESCRIBE_TIMEOUT_S = 10.0
-_THINKING = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL)
+THINKING = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL)
 _ERROR_CHARS = 500
 
 
@@ -55,16 +55,16 @@ class OpenAICompatibleBackend:
                 f"{self._info.endpoint}: ответ сервера не похож на chat.completion",
                 endpoint=self._info.endpoint,
             ) from None
-        usage = _mapping(data.get("usage"))
-        timings = _mapping(data.get("timings"))
+        usage = mapping(data.get("usage"))
+        timings = mapping(data.get("timings"))
         return BackendResponse(
-            text=_THINKING.sub("", str(content), count=1),
+            text=THINKING.sub("", str(content), count=1),
             finish_reason=str(finish_reason) if finish_reason is not None else None,
             truncated=finish_reason == "length",
-            prompt_tokens=_count(usage.get("prompt_tokens")),
-            completion_tokens=_count(usage.get("completion_tokens")),
+            prompt_tokens=count(usage.get("prompt_tokens")),
+            completion_tokens=count(usage.get("completion_tokens")),
             latency_ms=latency_ms,
-            prompt_ms=_count(timings.get("prompt_ms")),
+            prompt_ms=count(timings.get("prompt_ms")),
         )
 
     async def describe(self) -> BackendStatus:
@@ -79,10 +79,10 @@ class OpenAICompatibleBackend:
             models.append(str(item["id"]))  # pyright: ignore[reportUnknownArgumentType]
             meta = item.get("meta")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
             if window is None and isinstance(meta, dict):
-                window = _count(meta.get("n_ctx"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+                window = count(meta.get("n_ctx"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
         settings = props.get("default_generation_settings")
         if isinstance(settings, dict):  # окно одного слота: столько получит один запрос
-            window = _count(settings.get("n_ctx")) or window  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+            window = count(settings.get("n_ctx")) or window  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
         build = props.get("build_info")
         return BackendStatus(
             models=models, context_window=window or None, server=str(build) if build is not None else None
@@ -207,16 +207,16 @@ def _context_overflow(response: httpx.Response) -> bool:
         data = response.json()
     except ValueError:
         return False
-    error = _mapping(data.get("error") if isinstance(data, dict) else None)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    error = mapping(data.get("error") if isinstance(data, dict) else None)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
     text = f"{error.get('type', '')} {error.get('message', '')}".lower()
     return "exceed_context" in text or "context size" in text or "context length" in text
 
 
-def _mapping(value: object) -> dict[str, Any]:
+def mapping(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}  # pyright: ignore[reportUnknownVariableType]
 
 
-def _count(value: object) -> int | None:
+def count(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value < 0:
         return None
     return round(value)

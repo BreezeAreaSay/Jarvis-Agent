@@ -181,6 +181,43 @@ class ModelRequestRejected(ModelError):
     category = "model_request_rejected"
 
 
+class ModelAuthRequired(ModelError):
+    """Провайдер не принял ключ (401/403): ключ неверен, отозван или не дает доступа к модели."""
+
+    category = "model_auth_required"
+
+
+class ModelRateLimited(ModelError):
+    """Провайдер ограничил частоту запросов (429 без признака квоты): можно позже."""
+
+    category = "model_rate_limited"
+
+
+class ModelLimitExceeded(ModelError):
+    """Исчерпана квота, баланс или лимит тарифа (402, 429 с признаком квоты)."""
+
+    category = "model_limit_exceeded"
+
+
+class ModelMisconfigured(ModelError):
+    """Эндпоинт настроен неверно: нет ключа в окружении, неизвестная модель или адрес, перенаправление."""
+
+    category = "model_misconfigured"
+
+
+class NoProviderAvailable(ModelError):
+    """Для уровня не осталось провайдера: все исключены планом или не ответили."""
+
+    category = "no_provider_available"
+
+
+class CloudPrivacyViolation(JarvisError):
+    """Попытка вызвать провайдера вне компьютера без разрешения политики приватности — ошибка программы,
+    а не вызов (ADR 0028)."""
+
+    category = "privacy_violation"
+
+
 class ModelContextExceeded(ModelRequestRejected):
     """Промпт не поместился в окно контекста сервера: можно повторить с более коротким."""
 

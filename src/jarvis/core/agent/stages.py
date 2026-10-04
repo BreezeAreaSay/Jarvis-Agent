@@ -22,12 +22,20 @@ from jarvis.core.agent.context import executor_prompt
 from jarvis.core.agent.observations import failed_observation, observation_of
 from jarvis.core.budget import BudgetMeter
 from jarvis.core.direct.stage import DirectStage
-from jarvis.core.models.gateway import ModelGateway
+from jarvis.core.models.gateway import ModelGateway, ModelRoute
 from jarvis.core.routing.router import Router, RoutingStage
 from jarvis.core.runner import StageHandler
 from jarvis.core.tools.runtime import ToolRuntime
 from jarvis.core.trace import Tracer, shorten
-from jarvis.domain.agent import AgentState, AgentStep, FinishAction, Observation, ProposedAction, ToolAction
+from jarvis.domain.agent import (
+    AgentState,
+    AgentStep,
+    ConsentRequest,
+    FinishAction,
+    Observation,
+    ProposedAction,
+    ToolAction,
+)
 from jarvis.domain.budget import BudgetLimit
 from jarvis.domain.errors import (
     InvalidModelOutput,
@@ -38,10 +46,11 @@ from jarvis.domain.errors import (
     VerificationFailed,
 )
 from jarvis.domain.models import ModelRole
-from jarvis.domain.routing import Route
+from jarvis.domain.privacy import ANY_PROVIDER, CLOUD_SHARE_TOOL, CloudGrant
+from jarvis.domain.routing import CloudMode, Route, RoutingLevel
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import StageOutcome, Task, TaskChanges
-from jarvis.domain.tools import ToolOutcome, ToolOutcomeKind
+from jarvis.domain.tools import Invoker, ToolOutcome, ToolOutcomeKind
 from jarvis.domain.trace import EventKind
 from jarvis.ports.storage import UnitOfWorkFactory
 
@@ -68,21 +77,29 @@ class Executor:
         if state.pending is not None:
             return await self._resume(task, budget, state)
 
-        budget.charge(BudgetLimit.STEPS)
-        definitions = self._tools.definitions()
+        # Служебные инструменты (согласие на облако) модель не видит.
+        definitions = [definition for definition in self._tools.definitions() if definition.model_visible]
         output = decision_output(definitions, state.executed_calls())
-        room = self._gateway.prompt_budget(ModelRole.EXECUTOR, output)
+        route = model_route(task, state)
+        room = self._gateway.prompt_budget(ModelRole.EXECUTOR, output, route)
+        prompt = executor_prompt(task, state, definitions, budget_tokens=room)
+        # Облачному провайдеру уровня мешает только неразрешённый класс данных: спросить человека один
+        # раз на задачу (ADR 0028). Отказ — задача продолжается на локальной модели.
+        consent = self._gateway.consent_request(ModelRole.EXECUTOR, prompt, output, route)
+        if consent is not None and not state.asked(consent):
+            return await self._ask_consent(task, budget, state, consent)
+
+        budget.charge(BudgetLimit.STEPS)
         try:
             try:
-                prompt = executor_prompt(task, state, definitions, budget_tokens=room)
                 generation = await self._gateway.generate(
-                    ModelRole.EXECUTOR, prompt, output, task_id=task.id, budget=budget
+                    ModelRole.EXECUTOR, prompt, output, task_id=task.id, budget=budget, route=route
                 )
             except ModelContextExceeded:
                 # Оценка токенов разошлась с токенизатором сервера: ещё раз, с половиной места.
                 prompt = executor_prompt(task, state, definitions, budget_tokens=room // 2)
                 generation = await self._gateway.generate(
-                    ModelRole.EXECUTOR, prompt, output, task_id=task.id, budget=budget
+                    ModelRole.EXECUTOR, prompt, output, task_id=task.id, budget=budget, route=route
                 )
         except InvalidModelOutput as exc:
             budget.record_failure()
@@ -126,8 +143,61 @@ class Executor:
             state.with_step(step.model_copy(update={"observation": observation})), observation.summary
         )
 
+    async def _ask_consent(
+        self, task: Task, budget: BudgetMeter, state: AgentState, consent: ConsentRequest
+    ) -> StageOutcome:
+        """Спросить человека через Tool Runtime и подтверждения — второго механизма согласия нет."""
+        arguments: dict[str, JsonValue] = {
+            "provider": consent.provider,
+            "data_classes": [item.value for item in consent.data_classes],
+        }
+        try:
+            outcome = await self._tools.call(
+                task, budget, CLOUD_SHARE_TOOL, arguments, invoker=Invoker.ROUTER
+            )
+        except ToolCancelled:
+            raise
+        except ToolError as exc:  # спросить нечем — продолжаем локально, без облака
+            return _stay(
+                state.with_consent(consent, granted=False), f"согласие на облако не запрошено: {exc.category}"
+            )
+        if outcome.kind is ToolOutcomeKind.NEEDS_APPROVAL:
+            classes = ", ".join(item.value for item in consent.data_classes)
+            return StageOutcome(
+                next_status=TaskStatus.WAITING_CONFIRMATION,
+                reason=f"облако: нужно согласие человека отправить {classes} провайдеру {consent.provider}",
+                changes=TaskChanges(
+                    state=state.with_step(AgentStep(consent=consent, call_id=outcome.call.id))
+                ),
+            )
+        granted = outcome.kind is ToolOutcomeKind.EXECUTED
+        return _stay(state.with_consent(consent, granted=granted), _consent_reason(consent, granted))
+
+    async def _resume_consent(
+        self, task: Task, budget: BudgetMeter, state: AgentState, consent: ConsentRequest
+    ) -> StageOutcome:
+        try:
+            outcome = await self._tools.resume(task, budget)
+        except ToolCancelled:
+            raise
+        except ToolError:
+            outcome = None
+        if outcome is not None and outcome.kind is ToolOutcomeKind.NEEDS_APPROVAL:
+            return StageOutcome(
+                next_status=TaskStatus.WAITING_CONFIRMATION,
+                reason="облако: нужно новое согласие человека",
+                changes=TaskChanges(state=state),
+            )
+        granted = outcome is not None and outcome.kind is ToolOutcomeKind.EXECUTED
+        reason = _consent_reason(consent, granted)
+        observation = Observation(status="executed" if granted else "denied", summary=reason)
+        return _stay(state.with_observation(observation).with_consent(consent, granted=granted), reason)
+
     async def _resume(self, task: Task, budget: BudgetMeter, state: AgentState) -> StageOutcome:
         """Человек решил по вызову: довести его и записать итог."""
+        pending = state.pending
+        if pending is not None and pending.consent is not None:
+            return await self._resume_consent(task, budget, state, pending.consent)
         try:
             outcome = await self._tools.resume(task, budget)
         except ToolCancelled:
@@ -225,6 +295,30 @@ def agent_stages(
         ),
         TaskStatus.VERIFYING: AnswerVerifier(),
     }
+
+
+def model_route(task: Task, state: AgentState) -> ModelRoute:
+    """Маршрут вызова модели: уровень и режим — из решения Router, разрешения человека на облако — из
+    задачи (до конца её). В режиме local_only уровень всегда local."""
+    decision = task.routing
+    mode = decision.mode if decision is not None else (task.request.mode or CloudMode.AUTO)
+    level = decision.level if decision is not None and decision.level is not None else RoutingLevel.LOCAL
+    if mode is CloudMode.LOCAL_ONLY:
+        level = RoutingLevel.LOCAL
+    launch = {CloudGrant(provider=ANY_PROVIDER, data_class=item) for item in task.request.allow_cloud}
+    return ModelRoute(
+        level=level,
+        mode=mode,
+        grants=frozenset({*state.grants, *launch}),
+        working_directory=task.request.working_directory,
+    )
+
+
+def _consent_reason(consent: ConsentRequest, granted: bool) -> str:
+    classes = ", ".join(item.value for item in consent.data_classes)
+    if granted:
+        return f"человек разрешил отправить {classes} провайдеру {consent.provider} до конца задачи"
+    return f"облако без согласия на {classes}: задача продолжается на локальной модели"
 
 
 def _stay(state: AgentState, reason: str) -> StageOutcome:

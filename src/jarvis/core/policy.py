@@ -12,6 +12,7 @@ import fnmatch
 from dataclasses import dataclass
 
 from jarvis.domain.paths import OsFamily, is_absolute, is_within, name_of, unsupported_form
+from jarvis.domain.privacy import NEVER
 from jarvis.domain.tools import (
     EffectKind,
     Invoker,
@@ -35,6 +36,7 @@ _RANK = {PolicyOutcome.ALLOW: 0, PolicyOutcome.REQUIRE_APPROVAL: 1, PolicyOutcom
 # Ресурсы эффекта LAUNCH (ADR 0030): приложение из инвентаря, веб-адрес; папка — канонический путь.
 APP_RESOURCE = "app:"
 URL_RESOURCE = "url:"
+CLOUD_RESOURCE = "cloud:"  # cloud:<провайдер>:<класс>,<класс> — эффект CLOUD_SHARE (ADR 0028)
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,24 @@ class PolicyZones:
         return not self.read_roots or any(is_within(path, root, self.os_family) for root in self.read_roots)
 
 
+def _cloud_share(resource: str, invoker: Invoker) -> tuple[PolicyOutcome, str, str]:
+    """Отправка классов данных задачи провайдеру вне компьютера (ADR 0028): спрашивает только сам Jarvis,
+    решает только человек; секреты и private_roots не уходят ни с каким согласием."""
+    _, _, classes = resource.partition(CLOUD_RESOURCE)[2].rpartition(":")
+    found = {item for item in classes.split(",") if item}
+    if not resource.startswith(CLOUD_RESOURCE) or not found:
+        return PolicyOutcome.DENY, "cloud.share.malformed", f"не понятно, что и кому отправить: {resource}"
+    if found & {item.value for item in NEVER}:
+        return PolicyOutcome.DENY, "cloud.share.never", "секреты и private_roots не уходят из компьютера"
+    if invoker is not Invoker.ROUTER:
+        return PolicyOutcome.DENY, "cloud.share.not_router", "согласие на облако запрашивает только Jarvis"
+    return (
+        PolicyOutcome.REQUIRE_APPROVAL,
+        "cloud.share.consent",
+        "отправка данных провайдеру вне компьютера — только с согласием человека",
+    )
+
+
 def _looks_like_path(resource: str) -> bool:
     return "/" in resource or "\\" in resource
 
@@ -96,6 +116,8 @@ class PolicyEngine:
     def _effect(self, effect: ToolEffect, invoker: Invoker) -> tuple[PolicyOutcome, str, str]:
         if effect.kind is EffectKind.LAUNCH:
             return self._launch(effect.resource, invoker)
+        if effect.kind is EffectKind.CLOUD_SHARE:
+            return _cloud_share(effect.resource, invoker)
         zones, resource = self._zones, effect.resource
         path_like = _looks_like_path(resource)
         if path_like and (

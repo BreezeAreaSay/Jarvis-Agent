@@ -29,7 +29,8 @@ def tools_list(context: typer.Context) -> None:
         return
     for definition in _definitions():
         effects = ",".join(sorted(kind.value for kind in definition.effects)) or "нет"
-        typer.echo(f"{definition.id:<22} {effects:<8} {definition.summary}")
+        hidden = "" if definition.model_visible else " [служебный: вызывает только Jarvis]"
+        typer.echo(f"{definition.id:<22} {effects:<8} {definition.summary}{hidden}")
 
 
 @tools_app.command("show")

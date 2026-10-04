@@ -79,3 +79,21 @@ RULES = {
 @pytest.mark.parametrize("source", sorted(RULES))
 def test_model_side_cannot_reach_the_computer(source: str) -> None:
     assert offenders(source, *RULES[source]) == {}
+
+
+def test_only_the_gateway_calls_a_model_backend() -> None:
+    """Провайдера вызывает только Model Gateway — значит, каждый вызов проходит план, границу
+    приватности и запись в журнал (ADR 0027, ADR 0028)."""
+    callers = set()
+    for file in python_files():
+        if "jarvis/core" not in file.as_posix() and "jarvis/app" not in file.as_posix():
+            continue
+        tree = ast.parse(file.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "complete"
+            ):
+                callers.add(file.relative_to(SRC).as_posix())
+    assert callers == {"core/models/gateway.py"}

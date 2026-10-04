@@ -26,6 +26,7 @@ from jarvis.domain.errors import ApprovalNotFound, ConcurrentModification, Stora
 from jarvis.domain.ids import ChildKind, TaskId, child_id, child_number, task_id, task_number
 from jarvis.domain.lease import Lease
 from jarvis.domain.models import ModelCallRecord
+from jarvis.domain.providers import ProviderStatus
 from jarvis.domain.routing import Route, RouteDecision
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Task, TaskOutcome, TaskRequest
@@ -190,6 +191,7 @@ class SqliteUnitOfWork:
         self._approvals = _Approvals(self)
         self._audit = _Audit(self)
         self._model_calls = _ModelCalls(self)
+        self._provider_states = _ProviderStates(self)
 
     @property
     def tasks(self) -> "_Tasks":
@@ -214,6 +216,10 @@ class SqliteUnitOfWork:
     @property
     def model_calls(self) -> "_ModelCalls":
         return self._model_calls
+
+    @property
+    def provider_states(self) -> "_ProviderStates":
+        return self._provider_states
 
     def __enter__(self) -> Self:
         return self
@@ -251,6 +257,7 @@ class SqliteUnitOfWork:
                 self._approvals.saved,
                 self._audit.appended,
                 self._model_calls.added,
+                self._provider_states.put_states,
             )
             if any(staged):
                 with self._storage.guard():
@@ -366,6 +373,13 @@ class SqliteUnitOfWork:
                 if "foreign key" in str(exc).lower():
                     raise StorageError(f"вызов модели {call.id}: задачи {call.task_id} нет") from None
                 raise StorageError(f"вызов модели {call.id} уже записан", model_call_id=call.id) from None
+        for status in self._provider_states.put_states.values():
+            conn.execute(
+                "INSERT INTO provider_states (provider, status_json, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT (provider) DO UPDATE SET status_json = excluded.status_json, "
+                "updated_at = excluded.updated_at",
+                (status.provider, status.model_dump_json(), status.updated_at.isoformat()),
+            )
 
     def _open(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -651,3 +665,26 @@ class _ModelCalls:
         stored = [ModelCallRecord.model_validate_json(str(row[0])) for row in rows]
         pending = [call for call in self.added.values() if call.task_id == task_id]
         return sorted([*stored, *pending], key=lambda call: child_number(call.id))
+
+
+class _ProviderStates:
+    def __init__(self, uow: SqliteUnitOfWork) -> None:
+        self._uow = uow
+        self.put_states: dict[str, ProviderStatus] = {}
+
+    def get(self, provider: str) -> ProviderStatus | None:
+        if provider in self.put_states:
+            return self.put_states[provider]
+        rows = self._uow.query("SELECT status_json FROM provider_states WHERE provider = ?", (provider,))
+        return ProviderStatus.model_validate_json(str(rows[0][0])) if rows else None
+
+    def put(self, status: ProviderStatus) -> None:
+        self.put_states[status.provider] = status
+
+    def list(self) -> list[ProviderStatus]:
+        rows = self._uow.query("SELECT status_json FROM provider_states")
+        stored = {
+            status.provider: status
+            for status in (ProviderStatus.model_validate_json(str(row[0])) for row in rows)
+        }
+        return sorted({**stored, **self.put_states}.values(), key=lambda status: status.provider)

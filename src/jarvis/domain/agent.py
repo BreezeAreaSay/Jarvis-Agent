@@ -9,6 +9,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, JsonValue
 
+from jarvis.domain.privacy import CloudGrant, DataClass
+
 DECISION_CHARS = 280  # зачем это действие — коротко, не рассуждения (ADR 0015)
 ANSWER_CHARS = 4000
 
@@ -46,19 +48,45 @@ class Observation(BaseModel, frozen=True, extra="forbid"):
     summary: str
     data: str | None = None
     sensitive: bool = False
+    data_classes: frozenset[DataClass] = frozenset()  # что несут данные: граница облака (ADR 0028)
+
+
+class ConsentRequest(BaseModel, frozen=True, extra="forbid"):
+    """Вопрос человеку, который задал сам Jarvis: отправить классы данных провайдеру (ADR 0028)."""
+
+    provider: str
+    data_classes: list[DataClass] = Field(min_length=1)
+
+    def grants(self) -> list[CloudGrant]:
+        return [CloudGrant(provider=self.provider, data_class=item) for item in self.data_classes]
 
 
 class AgentStep(BaseModel, frozen=True, extra="forbid"):
     """Шаг агента: принятое действие и его итог или отвергнутый ответ модели."""
 
-    proposal: ProposedAction | None = None  # None — ответ модели не прошёл проверку
+    proposal: ProposedAction | None = None  # None — ответ модели не прошёл проверку или шаг Jarvis
     problems: list[str] = []  # почему не прошёл: модель увидит это на следующем шаге
     call_id: str | None = None  # вызов инструмента этого шага
     observation: Observation | None = None  # None у вызова, который ждёт решения человека
+    consent: ConsentRequest | None = None  # шаг Jarvis: вопрос о согласии на облако; модель его не видит
 
 
 class AgentState(BaseModel, frozen=True, extra="forbid"):
     steps: list[AgentStep] = []
+    grants: list[CloudGrant] = []  # что человек разрешил отправить в облако — до конца этой задачи
+    refusals: list[CloudGrant] = []  # о чём уже спрашивали и получили отказ: не спрашивать снова
+
+    def data_classes(self) -> frozenset[DataClass]:
+        """Классы всех данных, которые задача уже видела: решения модели могли их пересказать."""
+        found: set[DataClass] = set()
+        for step in self.steps:
+            if step.observation is not None:
+                found |= step.observation.data_classes
+        return frozenset(found)
+
+    def asked(self, request: ConsentRequest) -> bool:
+        decided = {*self.grants, *self.refusals}
+        return all(grant in decided for grant in request.grants())
 
     @property
     def pending(self) -> AgentStep | None:
@@ -81,6 +109,7 @@ class AgentState(BaseModel, frozen=True, extra="forbid"):
             step.call_id
             for step in self.steps
             if step.call_id is not None
+            and step.consent is None  # согласие на облако — не результат, на который опирается ответ
             and step.observation is not None
             and step.observation.status == "executed"
         ]
@@ -102,14 +131,20 @@ class AgentState(BaseModel, frozen=True, extra="forbid"):
                 )
                 step = step.model_copy(update={"observation": observation})
             steps.append(step)
-        return AgentState(steps=steps)
+        return self.model_copy(update={"steps": steps})
 
     def with_step(self, step: AgentStep) -> "AgentState":
-        return AgentState(steps=[*self.steps, step])
+        return self.model_copy(update={"steps": [*self.steps, step]})
 
     def with_observation(self, observation: Observation) -> "AgentState":
         """Итог вызова, ждавшего человека."""
         pending = self.pending
         if pending is None:
             raise ValueError("нет вызова, который ждёт итога")
-        return AgentState(steps=[*self.steps[:-1], pending.model_copy(update={"observation": observation})])
+        steps = [*self.steps[:-1], pending.model_copy(update={"observation": observation})]
+        return self.model_copy(update={"steps": steps})
+
+    def with_consent(self, request: ConsentRequest, *, granted: bool) -> "AgentState":
+        if granted:
+            return self.model_copy(update={"grants": [*self.grants, *request.grants()]})
+        return self.model_copy(update={"refusals": [*self.refusals, *request.grants()]})

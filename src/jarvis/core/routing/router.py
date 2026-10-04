@@ -25,7 +25,7 @@ from jarvis.core.trace import Tracer, shorten
 from jarvis.domain.intents import EntityKind, IntentId, ResolvedEntity
 from jarvis.domain.inventory import AppEntry, name_key
 from jarvis.domain.paths import unsupported_form
-from jarvis.domain.routing import Route, RouteDecision, RoutingLevel
+from jarvis.domain.routing import CloudMode, Route, RouteDecision, RoutingLevel
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import StageOutcome, Task, TaskChanges
 from jarvis.domain.trace import EventKind
@@ -227,9 +227,12 @@ def _first(patterns: Sequence[re.Pattern[str]], command: Command) -> _Match | No
 class Router:
     """Чистое решение: текст запроса → `RouteDecision`. Ввод-вывод — только через порт инвентаря."""
 
-    def __init__(self, inventory: Inventory, *, direct: bool = True) -> None:
+    def __init__(
+        self, inventory: Inventory, *, direct: bool = True, mode: CloudMode = CloudMode.AUTO
+    ) -> None:
         self._inventory = inventory
         self._direct = direct  # False — только AGENT (бенчмарк модели, где нужна именно модель)
+        self._mode = mode  # режим по умолчанию: models.routing.mode
 
     def warm_up(self) -> None:
         """Прочитать инвентарь заранее: первое решение тогда не включает чтение меню «Пуск» и реестра."""
@@ -237,12 +240,17 @@ class Router:
             self._inventory.apps()
             self._inventory.default_browser()
 
-    def decide(self, text: str, working_directory: str | None = None) -> RouteDecision:
+    def decide(
+        self, text: str, working_directory: str | None = None, mode: CloudMode | None = None
+    ) -> RouteDecision:
+        """`mode` — режим запуска задачи; None — режим по умолчанию. Router выбирает стратегию и уровень
+        модели, но не провайдера: провайдера внутри уровня выбирает Model Gateway (ADR 0027)."""
         command = prepare(text)
+        mode = mode or self._mode
         if not self._direct:
-            return _agent(["agent.default", "direct.disabled"])
+            return _agent(command, ["agent.default", "direct.disabled"], mode)
         if not command.text:
-            return _agent(["agent.default"])
+            return _agent(command, ["agent.default"], mode)
         misses: list[str] = []
         for matcher in (
             self._current,
@@ -261,6 +269,7 @@ class Router:
             if isinstance(result, _Hit):
                 return RouteDecision(
                     strategy=Route.DIRECT,
+                    mode=mode,
                     intent=result.intent,
                     entities=result.entities,
                     rules=result.rules,
@@ -269,6 +278,7 @@ class Router:
             if isinstance(result, _Clarify):
                 return RouteDecision(
                     strategy=Route.CLARIFY,
+                    mode=mode,
                     entities=result.candidates,
                     rules=result.rules,
                     reason="несколько равных кандидатов: нужен выбор человека",
@@ -276,7 +286,7 @@ class Router:
                 )
             if isinstance(result, _Miss):
                 misses.extend(rule for rule in result.rules if rule not in misses)
-        return _agent(["agent.default", *misses])
+        return _agent(command, ["agent.default", *misses], mode)
 
     # --- чтение -----------------------------------------------------------------------------------
 
@@ -491,7 +501,7 @@ class RoutingStage:
         started = time.perf_counter()
         # В потоке: первое решение о запуске читает инвентарь (меню «Пуск»), цикл событий не ждёт.
         decision = await asyncio.to_thread(
-            self._router.decide, task.request.text, task.request.working_directory
+            self._router.decide, task.request.text, task.request.working_directory, task.request.mode
         )
         elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
         event = self._tracer.event(task.id, EventKind.ROUTE_DECIDED, decision_payload(decision, elapsed_ms))
@@ -523,6 +533,7 @@ def decision_payload(decision: RouteDecision, elapsed_ms: float | None = None) -
     payload: dict[str, JsonValue] = {
         "strategy": decision.strategy.value,
         "level": decision.level.value if decision.level else None,
+        "mode": decision.mode.value,
         "intent": decision.intent.value if decision.intent else None,
         "entities": [
             {
@@ -543,13 +554,45 @@ def decision_payload(decision: RouteDecision, elapsed_ms: float | None = None) -
     return payload
 
 
-def _agent(rules: list[str]) -> RouteDecision:
+_LEVEL_REASONS = {
+    RoutingLevel.FAST: "прямой команды нет: короткая задача агента на локальной модели",
+    RoutingLevel.LOCAL: "прямой команды нет: задачу ведёт агент на локальной модели",
+    RoutingLevel.SMART: "прямой команды нет: задачу ведёт агент уровня smart (облако — по политике)",
+    RoutingLevel.CODING: "прямой команды нет: задачу ведёт агент уровня coding (облако — по политике)",
+}
+
+
+def _agent(command: Command, rules: list[str], mode: CloudMode) -> RouteDecision:
+    level, rule = _level(command, mode)
     return RouteDecision(
         strategy=Route.AGENT,
-        level=RoutingLevel.LOCAL,
-        rules=rules,
-        reason="прямой команды нет: задачу ведёт агент на локальной модели",
+        level=level,
+        mode=mode,
+        rules=[*rules, rule],
+        reason=_LEVEL_REASONS[level],
     )
+
+
+def _level(command: Command, mode: CloudMode) -> tuple[RoutingLevel, str]:
+    """Уровень модели: режим запуска, а в режиме auto — сильные признаки запроса; сомнение — local."""
+    match mode:
+        case CloudMode.LOCAL_ONLY:
+            return RoutingLevel.LOCAL, "level.mode.local_only"
+        case CloudMode.SMART:
+            return RoutingLevel.SMART, "level.mode.smart"
+        case CloudMode.CODING:
+            return RoutingLevel.CODING, "level.mode.coding"
+        case CloudMode.AUTO:
+            if _starts_with(command.key, lx.CODING_SIGNALS):
+                return RoutingLevel.CODING, "level.signal.coding"
+            if _starts_with(command.key, lx.SMART_SIGNALS):
+                return RoutingLevel.SMART, "level.signal.smart"
+            return RoutingLevel.LOCAL, "level.default"
+
+
+def _starts_with(text: str, phrases: Sequence[str]) -> bool:
+    lowered = text.casefold()
+    return any(lowered == phrase or lowered.startswith(f"{phrase} ") for phrase in phrases)
 
 
 def _path_entity(path: str, *, explicit: bool) -> tuple[ResolvedEntity | None, str]:

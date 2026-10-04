@@ -16,6 +16,7 @@ from jarvis.domain.audit import AuditRecord
 from jarvis.domain.ids import ChildKind, TaskId
 from jarvis.domain.lease import Lease
 from jarvis.domain.models import ModelCallRecord
+from jarvis.domain.providers import ProviderStatus
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Task
 from jarvis.domain.trace import TraceEvent
@@ -101,6 +102,16 @@ class ModelCallRepository(Protocol):
         ...
 
 
+class ProviderStateRepository(Protocol):
+    """Состояние провайдеров моделей (ADR 0027): одна запись на провайдера, последняя запись побеждает."""
+
+    def get(self, provider: str) -> ProviderStatus | None: ...
+
+    def put(self, status: ProviderStatus) -> None: ...
+
+    def list(self) -> list[ProviderStatus]: ...
+
+
 class UnitOfWork(Protocol):
     """Одна транзакция: всё, что записано через репозитории, применяется вместе на `commit()`.
 
@@ -125,6 +136,9 @@ class UnitOfWork(Protocol):
 
     @property
     def model_calls(self) -> ModelCallRepository: ...
+
+    @property
+    def provider_states(self) -> ProviderStateRepository: ...
 
     def __enter__(self) -> Self: ...
 

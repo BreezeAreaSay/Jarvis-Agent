@@ -20,7 +20,7 @@ from pydantic import (
 
 from jarvis.domain.budget import Budget
 from jarvis.domain.models import ModelCapabilities, ModelRole
-from jarvis.domain.routing import Route
+from jarvis.domain.routing import CloudMode, Route, RoutingLevel
 
 
 class BudgetsSettings(BaseModel, frozen=True, extra="forbid"):
@@ -150,19 +150,122 @@ class EndpointSettings(BaseModel, frozen=True, extra="forbid"):
         return value.rstrip("/")
 
 
+# Ссылка на секрет: ключ лежит в переменной окружения, в конфиге — только её имя (ADR 0027).
+SECRET_REF = re.compile(r"env:[A-Z_][A-Z0-9_]{0,127}")
+_SECRET_REF_HINT = (
+    "нужна ссылка вида env:ИМЯ_ПЕРЕМЕННОЙ (латиница в верхнем регистре, цифры, «_»): сам ключ в конфиге не "
+    "хранится, значение здесь не показывается"
+)
+
+
+class RemoteEndpointSettings(BaseModel, frozen=True, extra="forbid"):
+    """Провайдер модели в интернете с OpenAI-совместимым API (ADR 0027). Промпт уходит с компьютера —
+    только через границу приватности (ADR 0028). Ядро не знает поставщика: только ID и возможности."""
+
+    base_url: str  # "https://api.provider.example/v1"
+    model: str = Field(min_length=1)  # имя модели у провайдера
+    api_key: str  # ссылка на секрет: "env:JARVIS_SMART_API_KEY"
+    request_timeout_s: float = Field(default=90.0, gt=0, le=600)
+    max_response_bytes: int = Field(default=4 * 1024 * 1024, ge=4096, le=64 * 1024 * 1024)
+    capabilities: ModelCapabilities
+    sampling: SamplingSettings = SamplingSettings()
+    # Провайдер не применяет JSON Schema, но выдаёт JSON-объект: response_format = json_object, а схема —
+    # в промпте с проверкой и ремонтом.
+    json_object: bool = False
+    # Особенности провайдера: выключить рассуждения, параметры безопасности и т. п.
+    extra_body: dict[str, JsonValue] = {}
+    # Признаки исчерпанной квоты в ответе 429 сверх общих («quota», «balance», «billing» …).
+    quota_markers: list[str] = []
+
+    @field_validator("base_url")
+    @classmethod
+    def _https(cls, value: str) -> str:
+        match = _BASE_URL.fullmatch(value)
+        if match is None or match.group("scheme") != "https":
+            raise ValueError(f"удалённый провайдер — только https-адрес вида https://host/v1, а не {value!r}")
+        if is_loopback_url(value):
+            raise ValueError(
+                f"{value}: сервер на этом компьютере — локальный эндпоинт ([models.endpoints]), "
+                "а не удалённый"
+            )
+        return value.rstrip("/")
+
+    @field_validator("api_key")
+    @classmethod
+    def _reference(cls, value: str) -> str:
+        if SECRET_REF.fullmatch(value) is None:
+            raise ValueError(_SECRET_REF_HINT)  # значение не повторяется: это может быть сам ключ
+        return value
+
+    @property
+    def api_key_env(self) -> str:
+        return self.api_key.removeprefix("env:")
+
+
+class RoutingSettings(BaseModel, frozen=True, extra="forbid"):
+    """Цепочки провайдеров по уровням (ADR 0027): порядок — предпочтение человека по качеству, цене и
+    задержке. Основная локальная модель (роль executor) добавляется в конец каждой цепочки сама."""
+
+    mode: CloudMode = CloudMode.AUTO
+    fast: list[str] = []  # только локальные эндпоинты
+    local: list[str] = []  # только локальные эндпоинты
+    smart: list[str] = []
+    coding: list[str] = []
+    max_providers: int = Field(default=3, ge=1, le=5)  # попыток на один вызов модели, последняя — локальная
+    degraded_latency_s: float = Field(default=45.0, gt=0)  # ответ медленнее — провайдер DEGRADED
+
+    def chain(self, level: RoutingLevel) -> list[str]:
+        return list(getattr(self, level.value))
+
+
+class CloudSettings(BaseModel, frozen=True, extra="forbid"):
+    """Граница приватности облака (ADR 0028). По умолчанию облако выключено: после обновления Jarvis не
+    начинает отправлять данные в сеть сам."""
+
+    enabled: bool = False
+    allow_local_metadata: bool = True
+    allow_file_content: bool = False
+    allow_source_code: bool = False
+    allow_personal_data: bool = False
+    allow_secrets: Literal[False] = (
+        False  # секреты не уходят никогда: настройка существует, чтобы это сказать
+    )
+    private_roots: list[str] = []  # всё отсюда и задачи, начатые здесь, не уходят никогда
+    personal_roots: list[str] = []  # личные папки сверх известных (Документы, Рабочий стол, Загрузки …)
+    max_prompt_tokens: int = Field(default=32_000, ge=1024)
+
+
 class ModelsSettings(BaseModel, frozen=True, extra="forbid"):
     endpoints: dict[str, EndpointSettings] = {}
-    roles: dict[ModelRole, str] = {}  # роль → ID эндпоинта; без назначения агент не запускается
+    remote: dict[str, RemoteEndpointSettings] = {}
+    roles: dict[ModelRole, str] = {}  # роль → ID локального эндпоинта; без назначения агент не запускается
+    routing: RoutingSettings = RoutingSettings()
     repair_attempts: NonNegativeInt = Field(default=2, le=5)  # повторов после ответа не по схеме
 
     @model_validator(mode="after")
     def _known_endpoints(self) -> Self:
-        for name in self.endpoints:
+        for name in (*self.endpoints, *self.remote):
             if _ENDPOINT_ID.fullmatch(name) is None:
                 raise ValueError(f"ID эндпоинта — строчные латинские буквы, цифры, «_» и «-»: {name!r}")
+        shared = sorted(set(self.endpoints) & set(self.remote))
+        if shared:
+            raise ValueError(f"ID эндпоинта занят и локальным, и удалённым: {', '.join(shared)}")
         for role, name in self.roles.items():
+            if name in self.remote:
+                raise ValueError(
+                    f"роли {role} назначен удалённый эндпоинт {name!r}: роль — только локальная модель"
+                )
             if name not in self.endpoints:
                 raise ValueError(f"роли {role} назначен неизвестный эндпоинт {name!r}")
+        for level in RoutingLevel:
+            for name in self.routing.chain(level):
+                if name not in self.endpoints and name not in self.remote:
+                    raise ValueError(f"в цепочке models.routing.{level} неизвестный эндпоинт {name!r}")
+                if level in (RoutingLevel.FAST, RoutingLevel.LOCAL) and name in self.remote:
+                    raise ValueError(
+                        f"в цепочке models.routing.{level} удалённый эндпоинт {name!r}: уровни fast и local "
+                        "работают только на этом компьютере"
+                    )
         return self
 
 
@@ -172,3 +275,4 @@ class JarvisConfig(BaseModel, frozen=True, extra="forbid"):
     runtime: RuntimeSettings = RuntimeSettings()
     policy: PolicySettings = PolicySettings()
     models: ModelsSettings = ModelsSettings()
+    cloud: CloudSettings = CloudSettings()

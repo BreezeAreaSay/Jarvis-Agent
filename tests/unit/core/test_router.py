@@ -80,7 +80,12 @@ def test_an_unknown_app_goes_to_the_local_agent() -> None:
     decision = decide("открой телегарм", TELEGRAM)
     assert decision.strategy is Route.AGENT
     assert decision.level is RoutingLevel.LOCAL
-    assert decision.rules == ["agent.default", "direct.launch.verb", "direct.reject.unknown_app"]
+    assert decision.rules == [
+        "agent.default",
+        "direct.launch.verb",
+        "direct.reject.unknown_app",
+        "level.default",
+    ]
 
 
 def test_the_browser_is_the_default_browser_from_the_inventory() -> None:
@@ -175,7 +180,7 @@ def test_entities_come_only_from_the_command_and_trusted_sources() -> None:
 def test_direct_commands_can_be_switched_off() -> None:
     decision = Router(StaticInventory([TELEGRAM]), direct=False).decide("открой телеграм")
     assert decision.strategy is Route.AGENT
-    assert decision.rules == ["agent.default", "direct.disabled"]
+    assert decision.rules == ["agent.default", "direct.disabled", "level.default"]
 
 
 @pytest.mark.parametrize(

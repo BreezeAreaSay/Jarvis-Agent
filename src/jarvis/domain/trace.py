@@ -29,6 +29,9 @@ class EventKind(StrEnum):
     TOOL_FINISHED = "tool.finished"
     TOOL_VERIFIED = "tool.verified"
     MODEL_CALLED = "model.called"
+    MODEL_ROUTED = "model.routed"  # план провайдеров вызова модели: кандидаты, вердикты, причины
+    MODEL_FALLBACK = "model.fallback"  # провайдер не ответил по своей причине: переход к следующему
+    PRIVACY_CHECKED = "privacy.checked"  # решение границы облака для провайдера вне компьютера
     ACTION_PROPOSED = "action.proposed"
     ROUTE_DECIDED = "route.decided"  # решение Router: стратегия, интент, сущности, правила
 

@@ -26,6 +26,7 @@ from jarvis.core.approvals import RUNTIME_CHANNEL
 from jarvis.core.budget import BudgetMeter
 from jarvis.core.leases import Holder, Leases
 from jarvis.core.policy import PolicyEngine
+from jarvis.core.tools.provenance import DataClassifier
 from jarvis.core.tools.registry import ToolRegistry
 from jarvis.core.trace import Tracer, shorten
 from jarvis.domain.approvals import RESOLVED, ApprovalRequest, ApprovalStatus
@@ -47,6 +48,7 @@ from jarvis.domain.errors import (
     ToolDenied,
     ToolError,
     ToolExecutionFailed,
+    ToolNotFound,
     ToolPreviewFailed,
     ToolTimeout,
     ToolVerificationFailed,
@@ -95,8 +97,10 @@ class ToolRuntime:
         approval_ttl_s: float,
         leases: Leases,
         protected_roots: Sequence[str] = (),
+        classifier: DataClassifier | None = None,
     ) -> None:
         self._registry = registry
+        self._classifier = classifier
         self._leases = leases
         self._policy = policy
         self._uow = uow
@@ -157,6 +161,9 @@ class ToolRuntime:
             task = self._owned(uow, task)
         tool = self._registry.get(call.tool_id)
         definition = tool.definition
+        if not definition.model_visible and call.invoker is Invoker.MODEL:
+            # Служебный инструмент (согласие на облако) модель не видит и вызвать не может.
+            raise ToolNotFound(f"нет инструмента {call.tool_id}", tool_id=call.tool_id)
         if call.target.kind not in definition.targets or call.target != self._target:
             raise UnsupportedTarget(
                 f"{definition.id}: цель {call.target.kind} не поддерживается", tool_id=definition.id
@@ -382,6 +389,12 @@ class ToolRuntime:
                 f"{definition.id}: постусловие не выполнено: {'; '.join(verification.checks)}",
                 tool_id=definition.id,
             )
+        # Классы данных результата — по происхождению (ADR 0028): их проверит граница облака.
+        classes = (
+            self._classifier.classify(definition, preview, result)
+            if self._classifier is not None
+            else definition.output_data
+        )
         return ToolOutcome(
             kind=ToolOutcomeKind.EXECUTED,
             call=call,
@@ -390,6 +403,7 @@ class ToolRuntime:
             result=result,
             verification=verification,
             duration_ms=round((time.perf_counter() - started) * 1000),
+            data_classes=classes,
         )
 
     def _owned(self, uow: UnitOfWork, task: Task) -> Task:

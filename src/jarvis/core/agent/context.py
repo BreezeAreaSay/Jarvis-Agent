@@ -13,6 +13,7 @@ from jarvis.core.agent.actions import clean_schema
 from jarvis.core.models.prompt import estimate_tokens, render
 from jarvis.domain.agent import DECISION_CHARS, AgentState, AgentStep
 from jarvis.domain.models import Prompt, PromptSection, Trust
+from jarvis.domain.privacy import DataClass, request_classes
 from jarvis.domain.task import Task
 from jarvis.domain.tools import EffectKind, ToolDefinition
 
@@ -65,8 +66,11 @@ def executor_prompt(
     omitted: set[int] = set()
     dropped = 0
     candidates = [index for index, step in enumerate(state.steps) if _has_data(step)]
+    classes = data_classes(task, state)
     while True:
-        prompt = _prompt(task, definitions, history, omitted, dropped)
+        prompt = _prompt(task, definitions, history, omitted, dropped).model_copy(
+            update={"data_classes": classes}
+        )
         if _tokens(prompt) <= budget_tokens:
             return prompt
         if candidates:
@@ -109,6 +113,12 @@ def _prompt(
     return Prompt(template_id=TEMPLATE_ID, sections=sections)
 
 
+def data_classes(task: Task, state: AgentState) -> frozenset[DataClass]:
+    """Классы данных промпта по происхождению (ADR 0028): запрос и все наблюдения задачи — и те, что
+    опущены из-за окна: решения модели могли их пересказать."""
+    return request_classes(task.request.text) | state.data_classes()
+
+
 def _tools(definitions: Sequence[ToolDefinition]) -> str:
     parts: list[str] = []
     for definition in definitions:
@@ -132,6 +142,8 @@ def _history(state: AgentState) -> list[tuple[int, list[PromptSection]]]:
 
 def _step(number: int, step: AgentStep) -> list[PromptSection]:
     title = f"Шаг {number}"
+    if step.consent is not None:  # вопрос Jarvis человеку о согласии на облако: модель его не видит
+        return []
     if step.proposal is None:
         # Причины пишет проверка, но в них бывает текст из ответа модели: показываются как её текст.
         listed = "\n".join(f"- {problem}" for problem in step.problems)

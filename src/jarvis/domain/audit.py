@@ -22,6 +22,7 @@ class AuditAction(StrEnum):
     DECISION = "decision"  # решение политики — до исполнения
     RESULT = "result"  # итог исполнения и проверки
     APPROVAL = "approval"  # человек решил по запросу подтверждения
+    EGRESS = "egress"  # промпт ушёл провайдеру вне компьютера: кому, какие классы, сколько (ADR 0028)
 
 
 class AuditRecord(BaseModel, frozen=True, extra="forbid"):

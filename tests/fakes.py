@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, JsonValue
 
+from jarvis.domain.privacy import DataClass
 from jarvis.domain.tools import (
     EffectKind,
     TargetKind,
@@ -39,6 +40,7 @@ class FakeTool:
     targets: frozenset[TargetKind] = frozenset({TargetKind.HOST})
     timeout_s: float = 5.0
     output: dict[str, JsonValue] = field(default_factory=lambda: {"value": "ok"})
+    output_data: frozenset[DataClass] = frozenset({DataClass.FILE_CONTENT})  # классы данных результата
     preview_error: BaseException | None = None
     execute_error: BaseException | None = None
     verify_error: BaseException | None = None
@@ -65,6 +67,7 @@ class FakeTool:
             effects=declared,
             targets=self.targets,
             timeout_s=self.timeout_s,
+            output_data=self.output_data,
         )
 
     async def preview(self, arguments: BaseModel, context: ToolContext) -> ToolPreview:

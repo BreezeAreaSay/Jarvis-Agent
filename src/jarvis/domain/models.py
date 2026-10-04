@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field, JsonValue, NonNegativeInt, PositiveInt, m
 
 from jarvis.domain.errors import ErrorInfo
 from jarvis.domain.ids import TaskId
+from jarvis.domain.privacy import DataClass
+from jarvis.domain.providers import ProviderKind
 
 
 class ModelRole(StrEnum):
@@ -73,6 +75,12 @@ class ModelInfo(BaseModel, frozen=True, extra="forbid"):
     endpoint: str  # ID эндпоинта из конфига: "main"
     model: str  # имя модели на сервере — только для журналов, ядро по нему не решает
     capabilities: ModelCapabilities
+    kind: ProviderKind = ProviderKind.LOCAL_MODEL
+
+    @property
+    def remote(self) -> bool:
+        """Промпт покидает компьютер: вызов только с разрешения политики приватности (ADR 0028)."""
+        return self.kind is ProviderKind.REMOTE_MODEL_API
 
 
 class Trust(StrEnum):
@@ -94,6 +102,9 @@ class PromptSection(BaseModel, frozen=True, extra="forbid"):
 class Prompt(BaseModel, frozen=True, extra="forbid"):
     template_id: str = Field(min_length=1)  # "executor.v1": версия промпта вместе со схемой ответа
     sections: list[PromptSection]  # стабильные секции — первыми (кэш префикса на сервере)
+    # Классы данных, которые несёт промпт, — по происхождению: запрос и все наблюдения задачи, в том
+    # числе опущенные из-за окна (решения модели могли их пересказать). Их проверяет граница облака.
+    data_classes: frozenset[DataClass] = frozenset({DataClass.LOCAL_METADATA})
 
 
 class ChatMessage(BaseModel, frozen=True, extra="forbid"):
@@ -115,6 +126,8 @@ class BackendResponse(BaseModel, frozen=True, extra="forbid"):
     truncated: bool = False  # ответ оборван лимитом длины (адаптер переводит формат сервера)
     prompt_tokens: NonNegativeInt | None = None
     completion_tokens: NonNegativeInt | None = None
+    # Токены скрытых рассуждений, если провайдер их сообщает отдельно; не сообщает — None, не выдумываем.
+    reasoning_tokens: NonNegativeInt | None = None
     latency_ms: NonNegativeInt  # от запроса до ответа целиком
     prompt_ms: NonNegativeInt | None = None  # обработка промпта, если сервер отдаёт тайминги
 
@@ -148,8 +161,10 @@ class ModelCallRecord(BaseModel, frozen=True, extra="forbid"):
     problems: list[str] = []  # почему ответ не принят
     prompt_tokens: NonNegativeInt | None = None
     completion_tokens: NonNegativeInt | None = None
+    reasoning_tokens: NonNegativeInt | None = None
     latency_ms: NonNegativeInt | None = None
     prompt_ms: NonNegativeInt | None = None
     finish_reason: str | None = None
     error: ErrorInfo | None = None
+    provider_kind: ProviderKind = ProviderKind.LOCAL_MODEL
     created_at: datetime

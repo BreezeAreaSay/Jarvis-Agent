@@ -1,4 +1,3 @@
-import os
 from datetime import UTC
 
 import pytest
@@ -88,8 +87,7 @@ async def test_tool_events_in_the_timeline() -> None:
         "00:00:00 tool started  task_1.call_1",
         "00:00:00 tool succeeded  task_1.call_1  0 мс",
     ]
-    resource = r"C:\fake\keys\a.pem" if os.name == "nt" else "/keys/a.pem"
-    assert f"effects=read {resource}" in text
+    assert "effects=read /keys/a.pem" in text
     assert "результат 15 байт, недоверенные данные" in text
     assert "verify passed  task_1.call_1" in text
     assert inspection.metrics.tool_calls == 1

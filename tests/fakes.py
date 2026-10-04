@@ -80,11 +80,6 @@ class FakeTool:
         drifted = self.drift_after is not None and self.previews > self.drift_after
         suffix = f"#{self.previews}" if drifted else ""
         normalized = arguments.model_copy(update={"path": arguments.path.rstrip("/") or "/"})
-        resource_path = normalized.path
-        if context.target.os_family == "windows" and resource_path.startswith("/"):
-            # Fake tools use portable POSIX-looking fixtures; give the Windows policy a valid
-            # absolute path without changing the arguments or summaries under test.
-            resource_path = r"C:\fake" + resource_path.replace("/", "\\")
         return ToolPreview(
             summary=f"{self.tool_id} {normalized.path}",
             normalized_arguments={
@@ -92,7 +87,7 @@ class FakeTool:
                 **({"x": 1} if self.bad_normalized else {}),
             },
             effects=[
-                ToolEffect(kind=kind, resource=template.format(path=resource_path + suffix))
+                ToolEffect(kind=kind, resource=template.format(path=normalized.path + suffix))
                 for kind, template in self.effects
             ],
             target=context.target,

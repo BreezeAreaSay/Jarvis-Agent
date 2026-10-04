@@ -31,7 +31,8 @@ _PATTERNS: dict[str, re.Pattern[str]] = {
     "secret_assignment": re.compile(
         # Имя переменной может быть частью другого: DB_PASSWORD, OPENAI_API_KEY.
         r"(?i)(?<![a-z])(?:api[_-]?key|apikey|secret[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token"
-        r"|refresh[_-]?token|private[_-]?key|password|passwd|pwd|пароль)(?![a-z])[\"']?\s*[:=]\s*[\"']?"
+        r"|refresh[_-]?token|private[_-]?key|password|passwd|pwd|пароль)(?![a-z])"
+        r"\\?[\"']?\s*[:=]\s*\\?[\"']?"  # кавычки бывают экранированы: наблюдения уходят как JSON
         r"(?!env:[A-Z_])[^\s\"',;]{6,}"  # ссылка на переменную окружения (env:ИМЯ) — не секрет
     ),
     "connection_string": re.compile(

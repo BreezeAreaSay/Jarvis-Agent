@@ -205,6 +205,22 @@ def test_the_scanner_finds_common_secrets(text: str, category: str) -> None:
     assert MASK in mask_secrets(text)
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        'DB_PASSWORD = "Tr0ub4dor&3xyz"',
+        '{"api_key": "abcdef123456"}',
+        "password: 'hunter2hunter2'",
+        "SECRET_KEY='x9f8e7d6c5b4'\nDEBUG=1",
+    ],
+)
+def test_the_scanner_finds_secrets_inside_json_encoded_output(line: str) -> None:
+    # Результат инструмента уходит в промпт через json.dumps: кавычки там экранированы.
+    assert "secret_assignment" in find_secrets(line)
+    assert "secret_assignment" in find_secrets(json.dumps({"content": line}, ensure_ascii=False))
+    assert find_secrets(json.dumps({"content": 'api_key = "env:JARVIS_SMART_API_KEY"'})) == []
+
+
 def test_the_scanner_ignores_ordinary_text() -> None:
     assert find_secrets("Docker — это контейнеры. Пароль от Wi-Fi спроси у администратора.") == []
     assert find_secrets('api_key = "env:JARVIS_SMART_API_KEY"') == []  # ссылка на переменную — не ключ

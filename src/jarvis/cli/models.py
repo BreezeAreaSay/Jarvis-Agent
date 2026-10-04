@@ -12,13 +12,14 @@ from typing import Annotated
 import typer
 from pydantic import JsonValue, ValidationError
 
-from jarvis.app.composition import build_app, model_backends
+from jarvis.app.composition import build_app, cloud_allowed, model_backends, model_endpoints
 from jarvis.cli.common import load_or_exit
 from jarvis.core.agent.actions import decision_output
 from jarvis.core.models.gateway import ROLE_REQUIREMENTS, check_requirements, extract_json, output_tokens
 from jarvis.core.timeline import clean_line
 from jarvis.domain.errors import ConfigError, ModelError
 from jarvis.domain.models import BackendRequest, BackendResponse, ChatMessage, ModelRole
+from jarvis.domain.routing import RoutingLevel
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.tools import ToolDefinition
 from jarvis.ports.models import ModelBackend
@@ -39,8 +40,15 @@ def model_check(
     probe: Annotated[
         bool, typer.Option(help="Отправить пробные запросы (иначе — только конфиг и сервер).")
     ] = True,
+    remote: Annotated[
+        bool,
+        typer.Option(
+            "--remote",
+            help="Проверить и облачных провайдеров: список моделей и пробный запрос (уходит провайдеру).",
+        ),
+    ] = False,
 ) -> None:
-    """Проверить модели ролей: конфиг, сервер, окно контекста, structured output."""
+    """Проверить модели ролей (конфиг, сервер, окно контекста, structured output) и облачных провайдеров."""
     loaded = load_or_exit()
     config = loaded.config
     if not config.models.roles:
@@ -54,6 +62,7 @@ def model_check(
         config, stages={}, home=loaded.home, config_file=loaded.config_path
     ).tools.definitions()
     problems = asyncio.run(_check_all(config, definitions, probe=probe))
+    problems += asyncio.run(_check_cloud(config, probe=remote))
     if problems:
         typer.echo(f"\nПроблем: {problems}.", err=True)
         raise typer.Exit(1)
@@ -183,6 +192,38 @@ async def _probe_decision(backend: ModelBackend, definitions: list[ToolDefinitio
         f"  ✓ схема решения исполнителя принята сервером; действие: {value.action.type}; {_speed(response)}"
     )
     return 0
+
+
+async def _check_cloud(config: JarvisConfig, *, probe: bool) -> int:
+    """Облачные провайдеры: включено ли облако, есть ли ключ в окружении (значение не показывается),
+    в каких цепочках; с --remote — сервер и пробный запрос с фиксированным текстом."""
+    if not config.models.remote:
+        return 0
+    typer.echo("")
+    if not cloud_allowed(config):
+        why = "режим local_only" if config.cloud.enabled else "cloud.enabled = false"
+        typer.echo(f"облако: выключено ({why}) — удалённые провайдеры не вызываются")
+        return 0
+    endpoints = model_endpoints(config)
+    problems = 0
+    for name, settings in config.models.remote.items():
+        levels = [level.value for level in RoutingLevel if name in config.models.routing.chain(level)]
+        chains = ", ".join(levels) or "нет"
+        typer.echo(f"облако: {name} — {settings.base_url}, модель «{settings.model}», цепочки: {chains}")
+        backend = endpoints[name]
+        if not getattr(backend, "configured", True):
+            problems += _fail(f"ключа нет: переменная окружения {settings.api_key_env} не задана")
+            continue
+        typer.echo(f"  ✓ ключ: переменная {settings.api_key_env} задана")
+        if not probe:
+            continue
+        try:
+            status = await backend.describe()
+            typer.echo(f"  ✓ провайдер отвечает: {clean_line(', '.join(status.models[:5])) or 'моделей нет'}")
+        except ModelError as exc:
+            typer.echo(f"  ? список моделей: {clean_line(exc.message)}")
+        problems += await _probe_enum(backend)
+    return problems
 
 
 def _probe_answer(text: str) -> str | None:

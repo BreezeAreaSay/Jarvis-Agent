@@ -1,0 +1,27 @@
+# C. «Проанализируй main.py»: облако читает файл, но исходный код по умолчанию не уходит — Jarvis спрашивает
+# согласие (cloud.share), человек отказывает, задача заканчивается на локальной модели. Код облаку не ушёл.
+id: cloud.code_consent_denied
+category: cloud
+input: "Проанализируй main.py"
+mode: smart
+client: {approval: deny}
+files:
+  main.py: "def main():\n    print('секретная бизнес-логика')\n"
+config:
+  cloud: {enabled: true}
+  models: {routing: {smart: [cloud_a]}}
+remote:
+  cloud_a:
+    replies:
+      - json: {decision: "Прочитаю файл", action: {type: tool, tool: filesystem.read_text, arguments: {path: main.py}}}
+model:
+  replies:
+    - json: {decision: "Отвечаю", action: {type: finish, answer: "Функция main печатает строку.", evidence: [task_1.call_1]}}
+expect:
+  status: COMPLETED
+  level: smart
+  transitions: [ROUTING, PLANNING, EXECUTING, WAITING_CONFIRMATION, EXECUTING, VERIFYING, COMPLETED]
+  model_endpoints: [cloud_a, scripted]
+  privacy: [allow, consent]
+  rules: [approval.denied]
+  cloud_never_saw: ["секретная бизнес-логика"]

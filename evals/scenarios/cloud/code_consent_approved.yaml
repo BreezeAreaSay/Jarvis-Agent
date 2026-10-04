@@ -1,0 +1,22 @@
+# C'. То же, но человек согласен: исходный код уходит этому провайдеру до конца задачи — без новых вопросов.
+id: cloud.code_consent_approved
+category: cloud
+input: "Проанализируй main.py"
+mode: smart
+client: {approval: approve}
+files:
+  main.py: "def main():\n    print('hello')\n"
+config:
+  cloud: {enabled: true}
+  models: {routing: {smart: [cloud_a]}}
+remote:
+  cloud_a:
+    replies:
+      - json: {decision: "Прочитаю файл", action: {type: tool, tool: filesystem.read_text, arguments: {path: main.py}}}
+      - json: {decision: "Отвечаю", action: {type: finish, answer: "main печатает hello.", evidence: [task_1.call_1]}}
+model: {replies: []}
+expect:
+  status: COMPLETED
+  model_endpoints: [cloud_a, cloud_a]
+  privacy: [allow, allow]
+  rules: [approval.approved, cloud.share.consent]

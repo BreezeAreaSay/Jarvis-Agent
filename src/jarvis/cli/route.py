@@ -16,7 +16,7 @@ from jarvis.app.composition import build_router
 from jarvis.core.direct.commands import direct_call
 from jarvis.core.routing.router import decision_payload
 from jarvis.core.timeline import clean_line
-from jarvis.domain.routing import Route, RouteDecision
+from jarvis.domain.routing import CloudMode, Route, RouteDecision
 
 MODEL_CALLS = {Route.DIRECT: "0", Route.CLARIFY: "0", Route.AGENT: "1+ (агент на модели)"}
 
@@ -27,6 +27,9 @@ def route_command(
         Path | None, typer.Option("--cwd", help="Рабочая папка запроса (по умолчанию текущая).")
     ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Решение в JSON.")] = False,
+    mode: Annotated[
+        CloudMode | None, typer.Option("--mode", help="Режим: auto, local_only, smart, coding.")
+    ] = None,
 ) -> None:
     """Показать, как Jarvis исполнил бы запрос: стратегия, намерение, сущности, правила. Без исполнения."""
     request = " ".join(text)
@@ -36,7 +39,7 @@ def route_command(
     router.warm_up()  # инвентарь читается здесь, а не внутри замера решения
     inventory_ms = (time.perf_counter() - loaded) * 1000
     started = time.perf_counter()
-    decision = router.decide(request, working_directory)
+    decision = router.decide(request, working_directory, mode)
     router_ms = (time.perf_counter() - started) * 1000
     call = direct_call(decision) if decision.strategy is Route.DIRECT else None
     if as_json:
@@ -61,6 +64,7 @@ def describe(decision: RouteDecision, *, router_ms: float, inventory_ms: float) 
     lines = [
         f"strategy:    {decision.strategy.value}",
         f"level:       {decision.level.value if decision.level else '—'}",
+        f"mode:        {decision.mode.value}",
         f"intent:      {decision.intent.value if decision.intent else '—'}",
         f"entities:    {'; '.join(entities) or '—'}",
         f"rules:       {', '.join(decision.rules)}",

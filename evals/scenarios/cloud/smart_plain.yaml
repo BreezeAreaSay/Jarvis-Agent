@@ -1,0 +1,18 @@
+# B. SMART, данных в промпте нет (только запрос), облако разрешено — отвечает облачный провайдер.
+id: cloud.smart_plain
+category: cloud
+input: "Проанализируй эту архитектуру: монолит против микросервисов для команды из трёх человек"
+mode: smart
+config:
+  cloud: {enabled: true}
+  models: {routing: {smart: [cloud_a]}}
+remote:
+  cloud_a:
+    replies:
+      - json: {decision: "Отвечаю", action: {type: finish, answer: "Для трёх человек — монолит.", evidence: []}}
+model: {replies: []}
+expect:
+  status: COMPLETED
+  level: smart
+  model_endpoints: [cloud_a]
+  privacy: [allow]

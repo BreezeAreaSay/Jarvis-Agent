@@ -1,0 +1,17 @@
+# Задача, начатая в cloud.private_roots, не уходит в облако целиком — даже без чтения файлов.
+id: cloud.private_root
+category: cloud
+input: "Проанализируй структуру этого проекта"
+mode: smart
+config:
+  cloud: {enabled: true, private_roots: ["{workspace}"]}
+  models: {routing: {smart: [cloud_a]}}
+remote:
+  cloud_a: {replies: []}
+model:
+  replies:
+    - json: {decision: "Отвечаю", action: {type: finish, answer: "Анализ локально.", evidence: []}}
+expect:
+  status: COMPLETED
+  model_endpoints: [scripted]
+  privacy: [deny]

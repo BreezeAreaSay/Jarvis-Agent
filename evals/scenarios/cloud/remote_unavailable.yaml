@@ -1,0 +1,20 @@
+# E. Облачный провайдер недоступен — тот же вызов модели переходит к локальной модели (fallback).
+id: cloud.remote_unavailable
+category: cloud
+input: "Проанализируй эту архитектуру"
+mode: smart
+config:
+  cloud: {enabled: true}
+  models: {routing: {smart: [cloud_a]}}
+remote:
+  cloud_a:
+    replies:
+      - error: unavailable
+model:
+  replies:
+    - json: {decision: "Отвечаю", action: {type: finish, answer: "Локальный ответ.", evidence: []}}
+expect:
+  status: COMPLETED
+  model_endpoints: [cloud_a, scripted]
+  privacy: [allow]
+  usage: {model_calls: 2}

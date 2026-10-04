@@ -143,3 +143,61 @@ def test_remote_model_servers_are_refused_by_the_config(home: Path) -> None:
     result = CliRunner().invoke(app, ["config", "check"])
     assert result.exit_code == 1
     assert "сервер модели должен быть на этом компьютере" in result.output
+
+
+CLOUD = """
+[cloud]
+enabled = true
+[models.remote.cloud_a]
+base_url = "https://cloud-a.invalid/v1"
+model = "smart"
+api_key = "env:JARVIS_TEST_CLOUD_KEY"
+[models.remote.cloud_a.capabilities]
+structured_output = true
+context_window = 65536
+[models.routing]
+smart = ["cloud_a"]
+"""
+
+
+def test_local_only_run_never_contacts_the_cloud(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JARVIS_TEST_CLOUD_KEY", "test-key-not-real")
+    with LlmStub([finish("Локальный ответ.")]) as stub:
+        (home / "config" / "config.toml").write_text(config_toml(stub.base_url) + CLOUD, encoding="utf-8")
+        result = CliRunner().invoke(app, ["run", "--local-only", "Проанализируй", "эту", "архитектуру"])
+    assert result.exit_code == 0, result.output
+    assert "Локальный ответ." in result.output
+    assert len(stub.requests) == 1  # ответила локальная модель; адрес облака даже не разрешался
+    trace = CliRunner().invoke(app, ["trace", "task_1"])
+    assert "облако" not in trace.output.split("plan")[0]  # до плана — ни одного облачного вызова
+    assert "model executor ok  task_1.mc_1  попытка 1  main" in trace.output
+
+
+def test_without_a_key_the_cloud_provider_is_skipped_and_the_local_model_answers(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("JARVIS_TEST_CLOUD_KEY", raising=False)
+    with LlmStub([finish("Локально, без облака.")]) as stub:
+        (home / "config" / "config.toml").write_text(config_toml(stub.base_url) + CLOUD, encoding="utf-8")
+        result = CliRunner().invoke(app, ["run", "--mode", "smart", "Проанализируй", "архитектуру"])
+    assert result.exit_code == 0, result.output
+    assert "cloud_a не ответил (model_misconfigured) → main" in result.output
+    assert "Локально, без облака." in result.output
+
+
+def test_secrets_cannot_be_allowed_from_the_command_line(home: Path) -> None:
+    result = CliRunner().invoke(app, ["run", "--allow-cloud", "secrets", "что-нибудь"])
+    assert result.exit_code != 0
+
+
+def test_model_check_lists_cloud_providers_without_their_keys(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("JARVIS_TEST_CLOUD_KEY", "test-key-not-real")
+    with LlmStub([probe, probe]) as stub:
+        (home / "config" / "config.toml").write_text(config_toml(stub.base_url) + CLOUD, encoding="utf-8")
+        result = CliRunner().invoke(app, ["model", "check"])
+    assert result.exit_code == 0, result.output
+    assert "облако: cloud_a — https://cloud-a.invalid/v1, модель «smart», цепочки: smart" in result.output
+    assert "✓ ключ: переменная JARVIS_TEST_CLOUD_KEY задана" in result.output
+    assert "test-key-not-real" not in result.output

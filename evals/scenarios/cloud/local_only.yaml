@@ -1,0 +1,19 @@
+# A. LOCAL_ONLY: облако включено и провайдер готов, но режим запрещает выход данных — отвечает локальная
+# модель, облачному провайдеру не уходит ни одного запроса (пустой список реплик — вызов был бы ошибкой).
+id: cloud.local_only
+category: cloud
+input: "Объясни, что такое Docker"
+mode: local_only
+config:
+  cloud: {enabled: true}
+  models: {routing: {smart: [cloud_a]}}
+remote:
+  cloud_a: {replies: []}
+model:
+  replies:
+    - json: {decision: "Объясняю", action: {type: finish, answer: "Docker — это контейнеры.", evidence: []}}
+expect:
+  status: COMPLETED
+  level: local
+  model_endpoints: [scripted]
+  privacy: []

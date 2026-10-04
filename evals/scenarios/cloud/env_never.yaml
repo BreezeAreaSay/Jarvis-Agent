@@ -1,0 +1,27 @@
+# D. «Проанализируй .env»: чтение файла секрета — с подтверждением человека (политика), а его содержимое
+# не уходит в облако никогда — ни с настройкой, ни с согласием: дальше отвечает локальная модель.
+id: cloud.env_never
+category: cloud
+input: "Проанализируй .env"
+mode: smart
+allow_cloud: [file_content, source_code]
+client: {approval: approve}
+files:
+  .env: "DATABASE_URL=postgres://app:p4ssw0rd@db.internal/app\n"
+config:
+  cloud: {enabled: true, allow_file_content: true}
+  models: {routing: {smart: [cloud_a]}}
+remote:
+  cloud_a:
+    replies:
+      - json: {decision: "Прочитаю .env", action: {type: tool, tool: filesystem.read_text, arguments: {path: .env}}}
+model:
+  replies:
+    - json: {decision: "Отвечаю", action: {type: finish, answer: "В .env — строка подключения к базе.", evidence: [task_1.call_1]}}
+expect:
+  status: COMPLETED
+  model_endpoints: [cloud_a, scripted]
+  privacy: [allow, deny]
+  rules: [approval.approved, zone.secrets.read]
+  data_only: ["p4ssw0rd"]
+  cloud_never_saw: ["p4ssw0rd", "DATABASE_URL"]

@@ -25,6 +25,7 @@ from jarvis.domain.budget import BudgetUsage
 from jarvis.domain.ids import TaskId
 from jarvis.domain.inventory import KnownFolder
 from jarvis.domain.models import BackendRequest, ModelCapabilities, ModelRole
+from jarvis.domain.providers import ProviderKind
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Origin, TaskRequest, TaskSnapshot
@@ -102,10 +103,28 @@ async def run_scenario(
         script = ScriptedStages([machine.bind(step) for step in scenario.script or []], hung=hung)
         model = _model(scenario.model, machine, hung) if scenario.model is not None else None
         launched: list[LaunchTarget] = []  # eval ничего не запускает: запуск только записывается
+        if scenario.remote or scenario.config:
+            config = with_overrides(config, _cloud_overrides(scenario, machine))
+        remote = {
+            name: ScriptedModel(
+                [
+                    reply.model_copy(update={"json_": machine.substitute(reply.json_)})
+                    for reply in spec.replies
+                ],
+                capabilities=ModelCapabilities(
+                    structured_output=spec.structured_output, context_window=spec.context_window
+                ),
+                endpoint=name,
+                hung=hung,
+                kind=ProviderKind.REMOTE_MODEL_API,
+            )
+            for name, spec in scenario.remote.items()
+        }
         app = build_app(
             config,
             stages=script.handlers if model is None else None,
             models={ModelRole.EXECUTOR: model} if model is not None else None,
+            remote_models=remote,
             storage=storage,
             home=machine.home,
             zones=host_zones(config, home=machine.home, user_home=machine.user),
@@ -118,6 +137,8 @@ async def run_scenario(
             origin=Origin.EVAL,
             working_directory=str(machine.workspace),
             dry_run=scenario.dry_run,
+            mode=scenario.mode,
+            allow_cloud=scenario.allow_cloud,
         )
         task_id = app.tasks.submit(request)
 
@@ -138,6 +159,7 @@ async def run_scenario(
         problems.extend(_check(scenario.expect, snapshot, transitions, events))
         problems.extend(_check_tools(scenario.expect, events, script.outcomes, machine.workspace))
         problems.extend(_check_route(scenario.expect, snapshot, launched, machine.root))
+        problems.extend(_check_models(scenario.expect, snapshot, events))
         if model is not None:
             with storage.unit_of_work() as uow:
                 state = uow.tasks.get(task_id).state or AgentState()
@@ -146,6 +168,12 @@ async def run_scenario(
         problems.append(f"не проиграно шагов сценария: {script.remaining}")
     if model is not None and model.remaining:
         problems.append(f"не проиграно реплик модели: {model.remaining}")
+    for name, provider in remote.items():
+        if provider.remaining:
+            problems.append(f"не проиграно реплик провайдера {name}: {provider.remaining}")
+        for text in scenario.expect.cloud_never_saw or []:
+            if any(text in message.content for request in provider.requests for message in request.messages):
+                problems.append(f"«{text}» ушло облачному провайдеру {name}")
     return ScenarioResult(
         id=scenario.id,
         task_id=task_id,
@@ -318,6 +346,49 @@ def _check_route(
         actual = [f"{target.kind}:{_relative(target.value, root)}" for target in launched]
         if actual != expect.launched:
             problems.append(f"запущено {actual}, ожидалось {expect.launched}")
+    return problems
+
+
+def _cloud_overrides(scenario: Scenario, machine: "Machine") -> dict[str, JsonValue]:
+    """Облачные провайдеры сценария в конфиге (адреса и ссылки на ключ — поддельные: вызовы идут в
+    scripted-модели) и настройки облака и цепочек сценария поверх."""
+    remote: dict[str, JsonValue] = {
+        name: {
+            "base_url": f"https://{name.replace('_', '-')}.invalid/v1",
+            "model": f"{name}-eval",
+            "api_key": "env:JARVIS_EVAL_KEY",
+            "capabilities": {
+                "structured_output": spec.structured_output,
+                "context_window": spec.context_window,
+            },
+        }
+        for name, spec in scenario.remote.items()
+    }
+    custom = machine.substitute(scenario.config)
+    assert isinstance(custom, dict)
+    models = custom.get("models")
+    models = dict(models) if isinstance(models, dict) else {}
+    return {**custom, "models": {**models, "remote": remote}}
+
+
+def _check_models(expect: Expectation, snapshot: TaskSnapshot, events: list[TraceEvent]) -> list[str]:
+    problems: list[str] = []
+    level = snapshot.routing.level if snapshot.routing is not None else None
+    if expect.level is not None and level is not expect.level:
+        problems.append(f"уровень модели {level}, ожидался {expect.level}")
+    if expect.model_endpoints is not None:
+        called = [
+            str(event.payload.get("endpoint")) for event in events if event.kind is EventKind.MODEL_CALLED
+        ]
+        if called != expect.model_endpoints:
+            problems.append(f"модели отвечали {_join(called)}, ожидалось {_join(expect.model_endpoints)}")
+    if expect.privacy is not None:
+        verdicts = [
+            str(event.payload.get("verdict")) for event in events if event.kind is EventKind.PRIVACY_CHECKED
+        ]
+        expected = [verdict.value for verdict in expect.privacy]
+        if verdicts != expected:
+            problems.append(f"решения границы облака {_join(verdicts)}, ожидались {_join(expected)}")
     return problems
 
 

@@ -24,6 +24,8 @@ from jarvis.core.trace import shorten
 from jarvis.domain.approvals import ApprovalDecision, ApprovalRequest, ApprovalStatus
 from jarvis.domain.errors import ApprovalClosed, JarvisError
 from jarvis.domain.ids import TaskId
+from jarvis.domain.privacy import DataClass
+from jarvis.domain.routing import CloudMode
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Origin, TaskRequest, TaskSnapshot
 from jarvis.domain.trace import EventKind, TraceEvent
@@ -35,8 +37,23 @@ CLI_CHANNEL = "cli"
 def run_command(
     text: Annotated[list[str], typer.Argument(help="Запрос на естественном языке.")],
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Всё, кроме исполнения инструментов.")] = False,
+    mode: Annotated[
+        CloudMode | None,
+        typer.Option("--mode", help="Режим: auto, local_only, smart, coding (по умолчанию — из конфига)."),
+    ] = None,
+    local_only: Annotated[
+        bool, typer.Option("--local-only", help="Ни одного вызова провайдера вне компьютера.")
+    ] = False,
+    allow_cloud: Annotated[
+        list[DataClass] | None,
+        typer.Option(
+            "--allow-cloud",
+            help="Разрешить отправить в облако класс данных до конца задачи: file_content, source_code, "
+            "personal_data (можно несколько). Секреты и private_roots не разрешаются.",
+        ),
+    ] = None,
 ) -> None:
-    """Выполнить запрос: модель выбирает действия, Jarvis исполняет их через Tool Runtime."""
+    """Выполнить запрос: прямая команда — без модели, иначе агент; исполняет всегда Tool Runtime."""
     loaded = load_or_exit()
     try:
         storage = open_storage(loaded.home)
@@ -50,7 +67,12 @@ def run_command(
         for task_id in app.tasks.recover_interrupted():
             typer.echo(f"{task_id}: процесс, который вёл задачу, завершился — FAILED (interrupted)", err=True)
         request = TaskRequest(
-            text=" ".join(text), origin=Origin.CLI, working_directory=str(Path.cwd()), dry_run=dry_run
+            text=" ".join(text),
+            origin=Origin.CLI,
+            working_directory=str(Path.cwd()),
+            dry_run=dry_run,
+            mode=CloudMode.LOCAL_ONLY if local_only else mode,
+            allow_cloud=allow_cloud or [],
         )
         task_id = app.tasks.submit(request)
         typer.echo(f"{task_id}{' (dry run)' if dry_run else ''}")
@@ -143,6 +165,13 @@ def progress_line(event: TraceEvent) -> str | None:
     match event.kind:
         case EventKind.ROUTE_DECIDED:
             return route_line(payload)
+        case EventKind.MODEL_ROUTED:
+            return model_route_line(payload)
+        case EventKind.PRIVACY_CHECKED if payload.get("verdict") != "allow":
+            return privacy_line(payload)
+        case EventKind.MODEL_FALLBACK:
+            failed, target = clean_line(payload.get("from")), clean_line(payload.get("to") or "—")
+            return f"  {failed} не ответил ({payload.get('category')}) → {target}"
         case EventKind.ACTION_PROPOSED if payload.get("origin") == "direct":
             return f"· {clean_line(payload.get('tool'))} — прямая команда, без модели"
         case EventKind.ACTION_PROPOSED:
@@ -184,6 +213,36 @@ def route_line(payload: Mapping[str, JsonValue]) -> str:
     if labels:
         parts.append(" ".join(labels[:2]))
     return f"· маршрут: {clean_line(' '.join(parts))}"
+
+
+def model_route_line(payload: Mapping[str, JsonValue]) -> str | None:
+    """План провайдеров одной строкой — только когда в нём было облако: «· модель smart → cloud_a
+    (облако)» или «· модель smart → local (облако пропущено: cloud.disabled)»."""
+    candidates = [item for item in _items(payload.get("candidates")) if isinstance(item, dict)]
+    remote = [item for item in candidates if item.get("kind") == "remote_model_api"]
+    if not remote:
+        return None
+    order = _items(payload.get("order"))
+    chosen = str(order[0]) if order else "нет провайдера"
+    is_remote = any(item.get("endpoint") == chosen for item in remote)
+    skipped = [
+        f"{item.get('endpoint')}: {item.get('reason')}" for item in remote if item.get("verdict") == "skipped"
+    ]
+    note = " (облако)" if is_remote else (f" (облако пропущено: {'; '.join(skipped)})" if skipped else "")
+    return f"· модель {clean_line(payload.get('level'))} → {clean_line(chosen)}{clean_line(note)}"
+
+
+def privacy_line(payload: Mapping[str, JsonValue]) -> str:
+    """Почему облако не получило промпт: нужно согласие на классы или нельзя вовсе."""
+    provider = clean_line(payload.get("provider"))
+    blocked = clean_line(", ".join(str(item) for item in _items(payload.get("blocked"))))
+    if payload.get("verdict") == "consent":
+        return f"  облако {provider}: нужно согласие на {blocked}"
+    return f"  облако {provider}: не отправлено — {blocked or clean_line(payload.get('reason'))}"
+
+
+def _items(value: JsonValue) -> list[JsonValue]:
+    return value if isinstance(value, list) else []
 
 
 def _ask(approval: ApprovalRequest) -> bool:

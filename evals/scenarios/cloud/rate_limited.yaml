@@ -1,0 +1,22 @@
+# Провайдер ответил 429: fallback на локальную модель, и до конца срока состояния (Retry-After) провайдер
+# пропускается без запроса — следующий шаг сразу идёт локально.
+id: cloud.rate_limited
+category: cloud
+input: "Проанализируй, в какой папке я работаю"
+mode: smart
+config:
+  cloud: {enabled: true}
+  models: {routing: {smart: [cloud_a]}}
+remote:
+  cloud_a:
+    replies:
+      - error: rate_limited
+        retry_after_s: 600
+model:
+  replies:
+    - json: {decision: "Узнаю папку", action: {type: tool, tool: system.cwd, arguments: {}}}
+    - json: {decision: "Отвечаю", action: {type: finish, answer: "Рабочая папка получена.", evidence: [task_1.call_1]}}
+expect:
+  status: COMPLETED
+  model_endpoints: [cloud_a, scripted, scripted]
+  privacy: [allow]

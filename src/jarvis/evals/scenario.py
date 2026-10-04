@@ -20,7 +20,8 @@ from jarvis.domain.budget import BudgetLimit, BudgetUsage
 from jarvis.domain.errors import JarvisError
 from jarvis.domain.intents import IntentId
 from jarvis.domain.inventory import AppEntry, KnownFolder
-from jarvis.domain.routing import Route
+from jarvis.domain.privacy import DataClass, PrivacyVerdict
+from jarvis.domain.routing import CloudMode, Route, RoutingLevel
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.tools import ToolOutcomeKind
 from jarvis.domain.trace import EventKind
@@ -93,6 +94,15 @@ class ScenarioInventory(BaseModel, frozen=True, extra="forbid"):
         return self
 
 
+class RemoteScript(BaseModel, frozen=True, extra="forbid"):
+    """«Облачный» провайдер сценария: scripted-модель вида REMOTE_MODEL_API, без сети. Пустой список
+    реплик — вызов провайдера будет ошибкой сценария (облако не должно быть вызвано)."""
+
+    replies: list[ModelReply] = []
+    structured_output: bool = True
+    context_window: PositiveInt = 65536
+
+
 class ClientRules(BaseModel, frozen=True, extra="forbid"):
     """Что делает авто-клиент eval, пока задача выполняется."""
 
@@ -134,6 +144,10 @@ class Expectation(BaseModel, frozen=True, extra="forbid"):
     # Что передано системе на запуск: «app:<цель>», «url:<адрес>», «folder:<путь>»; пути внутри
     # «компьютера» сценария — от его корня (user/Downloads, workspace/docs).
     launched: list[str] | None = None
+    level: RoutingLevel | None = None  # уровень модели в решении Router
+    model_endpoints: list[str] | None = None  # кто отвечал на вызовы модели, по порядку
+    privacy: list[PrivacyVerdict] | None = None  # решения границы облака по порядку
+    cloud_never_saw: list[str] | None = None  # строки, которых нет ни в одном запросе к облачным провайдерам
 
     @model_validator(mode="after")
     def _known_usage(self) -> Self:
@@ -154,6 +168,12 @@ class Scenario(BaseModel, frozen=True, extra="forbid"):
     script: list[ScriptStep] | None = None
     model: ModelScript | None = None
     inventory: ScenarioInventory = ScenarioInventory()
+    # Облачные провайдеры (ID → реплики) и настройки облака и цепочек поверх конфига по умолчанию;
+    # `{workspace}` в строках заменяется путём рабочей папки сценария.
+    remote: dict[str, RemoteScript] = {}
+    config: dict[str, JsonValue] = {}
+    mode: CloudMode | None = None
+    allow_cloud: list[DataClass] = []
     expect: Expectation
 
     @model_validator(mode="after")

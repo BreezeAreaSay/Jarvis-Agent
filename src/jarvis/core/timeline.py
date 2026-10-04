@@ -110,9 +110,10 @@ def _render_event(event: TraceEvent, tz: tzinfo) -> list[str]:
             if payload.get("prompt_tokens") is not None or payload.get("completion_tokens") is not None:
                 tokens = f"  {payload.get('prompt_tokens')}+{payload.get('completion_tokens')} токенов"
             latency = f"  {payload['latency_ms']} мс" if payload.get("latency_ms") is not None else ""
+            where = f"  {_clean(payload.get('endpoint'))}" + ("  облако" if payload.get("remote") else "")
             lines = [
                 f"{time} model {payload.get('role')} {payload.get('status')}  {payload.get('call_id')}"
-                f"  попытка {payload.get('attempt')}{tokens}{latency}"
+                f"  попытка {payload.get('attempt')}{where}{tokens}{latency}"
             ]
             problems = payload.get("problems")
             if isinstance(problems, list):
@@ -130,6 +131,29 @@ def _render_event(event: TraceEvent, tz: tzinfo) -> list[str]:
             ]
         case EventKind.ROUTE_DECIDED:
             return _render_route(time, payload)
+        case EventKind.MODEL_ROUTED:
+            lines = [f"{time} plan {payload.get('level')} ({payload.get('mode')})"]
+            candidates = payload.get("candidates")
+            for item in candidates if isinstance(candidates, list) else []:
+                if isinstance(item, dict):
+                    lines.append(
+                        f"{_INDENT}{_clean(item.get('endpoint'))}  {item.get('kind')}  "
+                        f"{item.get('verdict')}  ({_clean(item.get('reason'))})"
+                    )
+            return lines
+        case EventKind.PRIVACY_CHECKED:
+            found = payload.get("found")
+            listed = ", ".join(str(item) for item in found) if isinstance(found, list) else ""
+            return [
+                f"{time} privacy {payload.get('verdict')}  {_clean(payload.get('provider'))}",
+                f"{_INDENT}классы: {_clean(listed) or 'нет'}",
+                f"{_INDENT}{_clean(payload.get('reason'))}",
+            ]
+        case EventKind.MODEL_FALLBACK:
+            return [
+                f"{time} fallback {_clean(payload.get('from'))} → {_clean(payload.get('to'))}",
+                f"{_INDENT}{payload.get('category')}, состояние {payload.get('state')}",
+            ]
         case _:  # вид события из более новой версии: показать как есть
             return [f"{time} {event.kind}", f"{_INDENT}{_clean(json.dumps(payload, ensure_ascii=False))}"]
 

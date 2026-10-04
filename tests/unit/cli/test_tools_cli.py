@@ -70,5 +70,11 @@ def test_there_is_no_way_to_execute_a_tool_from_the_cli() -> None:
     # `jarvis run` принимает только текст запроса: задачу ведёт агент или прямая команда, инструменты —
     # через Tool Runtime; `jarvis route` только показывает решение.
     assert LAZY_COMMANDS["run"] == ("jarvis.cli.run", "run_command")
-    assert set(inspect.signature(run_command).parameters) == {"text", "dry_run"}
-    assert set(inspect.signature(route_command).parameters) == {"text", "cwd", "as_json"}
+    assert set(inspect.signature(run_command).parameters) == {
+        "text",
+        "dry_run",
+        "mode",
+        "local_only",
+        "allow_cloud",
+    }
+    assert set(inspect.signature(route_command).parameters) == {"text", "cwd", "as_json", "mode"}

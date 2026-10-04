@@ -10,7 +10,7 @@ from jarvis.domain.inventory import name_key as norm
 
 # Нормализованное имя из меню «Пуск» → разговорные имена. Совпадение по имени целиком.
 KNOWN_ALIASES: dict[str, tuple[str, ...]] = {
-    "google chrome": ("chrome", "хром", "гугл хром", "гугл"),
+    "google chrome": ("chrome", "хром", "гугл хром"),  # «гугл» — скорее сайт, чем браузер
     "microsoft edge": ("edge", "эдж", "едж"),
     "firefox": ("файрфокс", "фаерфокс", "мозилла", "mozilla firefox"),
     "mozilla firefox": ("firefox", "файрфокс", "фаерфокс", "мозилла"),
@@ -60,7 +60,7 @@ def aliases_for(name: str) -> list[str]:
 
 def slug(name: str) -> str:
     """ID приложения из имени: латиница, цифры, «.», «-» и «_»."""
-    text = norm(name).translate(_TRANSLIT)
+    text = norm(name).replace("+", " plus ").translate(_TRANSLIT)  # «Notepad++» ≠ «Notepad»
     text = re.sub(r"[^a-z0-9._]+", "-", text).strip("-._")
     return text or "app"
 

@@ -36,12 +36,15 @@ from jarvis.ports.tools import ToolContext
 LAUNCH = frozenset({EffectKind.LAUNCH})
 HOST_ONLY = frozenset({TargetKind.HOST})
 DISPATCHED = "запуск передан системе (процесс дальше не отслеживается)"
+BUNDLE_SUFFIXES = frozenset({".app", ".bundle", ".framework", ".plugin", ".prefpane"})
 
 
 def system_launcher(target: LaunchTarget) -> None:
     """Открыть средствами ОС, без командной строки и shell."""
     if sys.platform == "win32":
-        os.startfile(target.value)
+        # Папку — глаголом explore: проводник откроет только папку, а файл, подставленный вместо неё, не
+        # исполнится.
+        os.startfile(target.value, "explore" if target.kind == "folder" else "open")
         return
     argv = _posix_argv(target)
     subprocess.Popen(
@@ -246,7 +249,7 @@ class FolderOpenTool:
 
     async def preview(self, arguments: BaseModel, context: ToolContext) -> ToolPreview:
         assert isinstance(arguments, FolderOpenArgs)
-        path = str(await canonical(arguments.path, context, expect="dir"))
+        path = _plain_folder(await canonical(arguments.path, context, expect="dir"))
         return ToolPreview(
             summary=f"Открыть папку {path} в проводнике",
             normalized_arguments={"path": path},
@@ -256,10 +259,17 @@ class FolderOpenTool:
 
     async def execute(self, arguments: BaseModel, context: ToolContext) -> BaseModel:
         assert isinstance(arguments, FolderOpenArgs)
-        path = str(await in_thread(lambda stop: unchanged(arguments.path, expect="dir")))
+        path = _plain_folder(await in_thread(lambda stop: unchanged(arguments.path, expect="dir")))
         await _dispatch(self._launcher, LaunchTarget("folder", path))
         return FolderOpenOutput(path=path)
 
     async def verify(self, arguments: BaseModel, output: BaseModel, context: ToolContext) -> ToolVerification:
         assert isinstance(output, FolderOpenOutput)
         return ToolVerification(passed=bool(output.path), checks=[DISPATCHED])
+
+
+def _plain_folder(path: Path) -> str:
+    """Папка-пакет (`Name.app` на macOS) открылась бы как программа: это не папка для folder.open."""
+    if path.suffix.casefold() in BUNDLE_SUFFIXES:
+        raise ToolPreviewFailed(f"это пакет приложения, а не папка: {path}")
+    return str(path)

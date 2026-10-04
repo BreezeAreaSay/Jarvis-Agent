@@ -13,7 +13,9 @@ from jarvis.domain.urls import is_web_url, normalize_web_url
         ("github.com", "https://github.com"),
         ("GitHub.com/Anthropics", "https://github.com/Anthropics"),
         ("ya.ru", "https://ya.ru"),
-        ("сайт.рф", "https://сайт.рф"),
+        ("сайт.рф", "https://xn--80aswg.xn--p1ai"),  # домен — в punycode: похожие буквы видны
+        ("https://example.com/ёлка", "https://example.com/ёлка"),
+        ('https://example.com/a"b<c>`d', "https://example.com/a%22b%3Cc%3E%60d"),
         ("https://docs.python.org/3/", "https://docs.python.org/3/"),
         ("HTTP://Example.COM/a?b=1#c", "http://example.com/a?b=1#c"),
         ("http://localhost:8000", "http://localhost:8000"),
@@ -29,6 +31,8 @@ def test_web_addresses_are_normalized(raw: str, expected: str) -> None:
     "raw",
     [
         "README.md",  # зона .md — расширение файла, а не сайт
+        "logo.ai",  # .ai и .app — тоже расширения: без схемы не сайт
+        "Calculator.app",
         "main.py",
         "evil.exe",
         "archive.zip",
@@ -53,6 +57,10 @@ def test_anything_else_is_not_a_web_address(raw: str) -> None:
     assert normalize_web_url(raw) is None
 
 
+def test_a_domain_in_a_file_extension_zone_needs_the_scheme() -> None:
+    assert normalize_web_url("https://claude.ai") == "https://claude.ai"
+
+
 def test_a_bare_domain_needs_permission() -> None:
     assert normalize_web_url("github.com", allow_bare=False) is None
     assert normalize_web_url("https://github.com", allow_bare=False) == "https://github.com"
@@ -73,4 +81,6 @@ def test_a_normalized_address_is_always_http_without_credentials_or_spaces(raw: 
     assert url.startswith(("http://", "https://"))
     assert not any(ch.isspace() or ord(ch) < 32 for ch in url)
     assert "@" not in url.split("/", 3)[2]  # ни логина, ни пароля в адресе
+    assert url.split("/", 3)[2].isascii()  # домен в punycode
+    assert not any(ch in url for ch in '"<>`')
     assert normalize_web_url(url, allow_bare=False) == url  # нормализация идемпотентна

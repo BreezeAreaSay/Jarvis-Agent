@@ -153,6 +153,16 @@ async def test_a_clarifying_question_is_the_answer(tmp_path: Path) -> None:
     assert direct.kinds() == [EventKind.ROUTE_DECIDED, EventKind.TASK_FINISHED]
 
 
+async def test_dry_run_says_that_a_human_would_be_asked(tmp_path: Path) -> None:
+    direct = Direct(tmp_path)
+    snapshot = await direct.run(f'открой папку "{direct.secrets}"', dry_run=True)
+    assert snapshot.status is S.COMPLETED
+    assert snapshot.outcome is not None
+    assert snapshot.outcome.answer is not None
+    assert snapshot.outcome.answer.endswith("— не исполнялось (понадобилось бы подтверждение человека).")
+    assert direct.launched == []
+
+
 def test_the_direct_stage_has_no_way_to_call_a_model() -> None:
     assert set(inspect.signature(DirectStage).parameters) == {"tools", "uow", "tracer"}
 

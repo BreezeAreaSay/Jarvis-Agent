@@ -101,8 +101,21 @@ def test_equal_candidates_are_a_question_not_a_guess() -> None:
     assert [entity.value for entity in decision.entities] == ["py312", "py313"]
 
 
+def test_a_site_named_like_an_installed_app_is_a_question() -> None:
+    battle = app("battle-net", "Battle.net")
+    decision = decide("открой Battle.net", battle)
+    assert decision.strategy is Route.CLARIFY
+    assert decision.question == "Что открыть: приложение «Battle.net» или сайт https://battle.net?"
+    assert decide("открой github.com", battle).intent is IntentId.URL_OPEN
+
+
 def test_a_question_never_launches_anything() -> None:
-    for text in ("открыть телеграм?", "открой загрузки?", "открыть github.com?"):
+    for text in (
+        "открыть телеграм?",
+        "открой загрузки?",
+        "открыть github.com?",
+        "открыть телеграм?!",
+    ):
         decision = decide(text, TELEGRAM, downloads="/home/u/Downloads")
         assert decision.strategy is Route.AGENT
         assert "direct.reject.question" in decision.rules
@@ -172,12 +185,25 @@ def test_direct_commands_can_be_switched_off() -> None:
         ("  запусти   стим  ", "запусти стим", False),
         ("открыть браузер?", "открыть браузер", True),
         ("ну плиз открой загрузки...", "открой загрузки", False),
-        ("Ёлка", "Елка", False),
+        ("открыть браузер?!", "открыть браузер", True),
+        ("открыть телеграм? пожалуйста", "открыть телеграм", True),
+        ("open https://ya.ru/search?q=1", "open https://ya.ru/search?q=1", False),
+        ("ls ..", "ls ..", False),
+        ('открой папку "Мои  проекты"', 'открой папку "Мои  проекты"', False),
+        ("открой папку ~/дача-ка", "открой папку ~/дача-ка", False),
     ],
 )
 def test_politeness_and_punctuation_do_not_change_the_command(raw: str, text: str, question: bool) -> None:
     command = prepare(raw)
     assert (command.text, command.question) == (text, question)
+
+
+def test_entities_keep_the_characters_of_the_command() -> None:
+    command = prepare("Открой Ёлку!")
+    assert command.text == "Открой Ёлку"  # из text берутся сущности: «ё» и регистр на месте
+    assert command.key == "Открой Елку"  # key — для словаря, той же длины
+    assert prepare("открой https://example.com/a!").tail_on_path
+    assert not prepare("открой github.com!").tail_on_path
 
 
 def test_the_decision_payload_is_bounded_and_carries_the_rules() -> None:

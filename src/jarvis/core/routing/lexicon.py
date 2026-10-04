@@ -106,13 +106,23 @@ CURRENT_FOLDER = frozenset(
     }
 )  # fmt: skip
 
-# Имена файлов, которые ищут без расширения: «найди README».
-KNOWN_FILE_NAMES = frozenset(
+# Имена файлов, которые ищут без расширения. Обычные слова («security», «notice») — имя файла, только
+# если написаны заглавными, как файл в репозитории: «найди README», но не «find security».
+UPPERCASE_FILE_NAMES = frozenset(
     {
-        "readme", "license", "licence", "changelog", "contributing", "makefile", "dockerfile", "procfile",
-        "gemfile", "authors", "notice", "security", "codeowners", "vagrantfile", "justfile",
+        "readme",
+        "license",
+        "licence",
+        "changelog",
+        "contributing",
+        "authors",
+        "notice",
+        "security",
+        "codeowners",
     }
-)  # fmt: skip
+)
+# Имена файлов инструментов сборки — в любом регистре: «найди makefile».
+TOOL_FILE_NAMES = frozenset({"makefile", "dockerfile", "procfile", "gemfile", "vagrantfile", "justfile"})
 
 # Расширения для «найди все pdf».
 SEARCH_EXTENSIONS = frozenset(
@@ -126,8 +136,8 @@ SEARCH_EXTENSIONS = frozenset(
 # Слова, которые не являются именем процесса в «покажи процессы …».
 PROCESS_STOP_WORDS = frozenset(
     {
-        "все", "всех", "мои", "запущенные", "активные", "работающие", "сейчас", "the", "all", "running",
-        "active", "my", "that", "which", "которые", "что", "с", "и", "and", "of",
+        "все", "всё", "всех", "мои", "запущенные", "активные", "работающие", "сейчас", "the", "all",
+        "running", "active", "my", "that", "which", "которые", "что", "с", "и", "and", "of",
     }
 )  # fmt: skip
 

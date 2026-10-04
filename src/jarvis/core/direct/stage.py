@@ -19,7 +19,7 @@ from jarvis.domain.errors import InvalidTransition, ToolDenied
 from jarvis.domain.routing import Route, RouteDecision
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import StageOutcome, Task, TaskChanges
-from jarvis.domain.tools import Invoker, ToolOutcome, ToolOutcomeKind
+from jarvis.domain.tools import Invoker, PolicyOutcome, ToolOutcome, ToolOutcomeKind
 from jarvis.domain.trace import EventKind
 from jarvis.ports.storage import UnitOfWorkFactory
 
@@ -74,7 +74,10 @@ class DirectStage:
                 text = answer(decision, outcome.result.output)
                 evidence: list[str] = [outcome.call.id]
             case ToolOutcomeKind.DRY_RUN:
-                text = f"Dry run: {outcome.preview.summary} — не исполнялось."
+                ask = outcome.decision.outcome is PolicyOutcome.REQUIRE_APPROVAL
+                text = f"Dry run: {outcome.preview.summary} — не исполнялось" + (
+                    " (понадобилось бы подтверждение человека)." if ask else "."
+                )
                 evidence = list[str]()
             case ToolOutcomeKind.DENIED:
                 # Отказ прямой команде — итог задачи: модели, которая искала бы обход, здесь нет.

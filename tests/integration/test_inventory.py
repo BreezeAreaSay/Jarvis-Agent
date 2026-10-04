@@ -97,6 +97,7 @@ def test_the_static_inventory_checks_its_default_browser() -> None:
         ("Блокнот", "bloknot"),
         ("Python 3.12 (64-bit)", "python-3.12-64-bit"),
         ("™", "app"),
+        ("Notepad++", "notepad-plus-plus"),  # не совпадает с «Notepad»
     ],
 )
 def test_ids_are_latin_slugs(name: str, expected: str) -> None:

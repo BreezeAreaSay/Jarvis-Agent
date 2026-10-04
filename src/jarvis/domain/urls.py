@@ -10,10 +10,10 @@ import re
 MAX_URL_CHARS = 2000
 
 # Зоны, по которым адрес без схемы считается сайтом. Зоны, совпадающие с расширениями файлов (.md, .py,
-# .sh, .zip …), сюда не входят.
+# .sh, .zip, .ai, .app …), сюда не входят: такой адрес открывается только со схемой («https://claude.ai»).
 BARE_TLDS = frozenset(
     {
-        "com", "org", "net", "ru", "io", "dev", "app", "ai", "co", "me", "tv", "info", "su", "рф", "edu",
+        "com", "org", "net", "ru", "io", "dev", "co", "me", "tv", "info", "su", "рф", "edu",
         "gov", "uk", "de", "fr", "eu", "us", "ua", "by", "kz", "cn", "jp", "tech", "site", "online",
     }
 )  # fmt: skip
@@ -24,6 +24,7 @@ _URL = re.compile(
     rf"(?P<scheme>https?)://(?P<host>{_HOST})(?::(?P<port>\d{{1,5}}))?(?P<rest>[/?#][^\s]*)?",
     re.IGNORECASE,
 )
+_UNSAFE = re.compile(r'["<>\\^`{|}]')
 _BARE = re.compile(rf"(?P<host>(?:{_LABEL}\.)+(?P<tld>{_LABEL}))(?::(?P<port>\d{{1,5}}))?(?P<rest>/[^\s]*)?")
 
 
@@ -51,9 +52,15 @@ def normalize_web_url(raw: str, *, allow_bare: bool = True) -> str | None:
     host = match.group("host")
     if re.fullmatch(r"[\d.]+", host) and any(int(part) > 255 for part in host.split(".") if part):
         return None
+    try:
+        # Домен — в ASCII (punycode): в подтверждении и журнале видно «xn--…», а не похожие буквы.
+        host = host.casefold().encode("idna").decode("ascii")
+    except UnicodeError:
+        return None
     # Учётных данных в адресе нет: хост идёт сразу за схемой, и «user:pass@» до пути не пройдёт.
-    rest = match.group("rest") or ""
-    netloc = host.casefold() + (f":{port}" if port else "")
+    # Знаки, опасные для старых обработчиков ссылок (кавычки, `<>`, обратная кавычка), кодируются.
+    rest = _UNSAFE.sub(lambda found: f"%{ord(found.group()):02X}", match.group("rest") or "")
+    netloc = host + (f":{port}" if port else "")
     return f"{match.group('scheme').lower()}://{netloc}{rest}"
 
 

@@ -39,6 +39,8 @@ inventory:
     - {id: discord, name: Discord, aliases: [дискорд], target: "C:/Apps/Discord.lnk", kind: shortcut}
     - {id: spotify, name: Spotify, aliases: [спотифай], target: "C:/Apps/Spotify.lnk", kind: shortcut}
     - {id: obs, name: OBS Studio, aliases: [obs], target: "C:/Apps/OBS.lnk", kind: shortcut}
+    # Имя приложения, похожее на домен: «открой Battle.net» — сайт или приложение, решает человек.
+    - {id: battle-net, name: Battle.net, aliases: [батлнет], target: "C:/Apps/Battle.net.lnk", kind: shortcut}
     # Две версии Python с общими алиасами: «запусти питон» — вопрос человеку, а не выбор наугад.
     - {id: python-3-12, name: "Python 3.12 (64-bit)", aliases: [python, питон], target: "C:/Apps/Python312.lnk", kind: shortcut}
     - {id: python-3-13, name: "Python 3.13 (64-bit)", aliases: [python, питон], target: "C:/Apps/Python313.lnk", kind: shortcut}
@@ -68,6 +70,9 @@ cases:
   - {text: "открой OBS", expect: direct, intent: app.launch, entity: obs, tags: [mixed, launch]}
   - {text: "запусти питон", expect: clarify, tags: [ru, launch, ambiguous]}
   - {text: "open python", expect: clarify, tags: [en, launch, ambiguous]}
+  - {text: "открой python-3-12", expect: direct, intent: app.launch, entity: python-3-12, tags: [mixed, launch]}
+  - {text: "открой Battle.net", expect: clarify, tags: [mixed, launch, url, ambiguous], note: "и сайт, и приложение"}
+  - {text: "запусти Battle.net", expect: direct, intent: app.launch, entity: battle-net, tags: [mixed, launch]}
 
   # --- url.open ---------------------------------------------------------------------------------
   - {text: "открой github.com", expect: direct, intent: url.open, entity: "https://github.com", tags: [ru, url]}
@@ -79,6 +84,8 @@ cases:
   - {text: "go to github.com", expect: direct, intent: url.open, entity: "https://github.com", tags: [en, url]}
   - {text: "visit example.org", expect: direct, intent: url.open, entity: "https://example.org", tags: [en, url]}
   - {text: "открой http://localhost:8000", expect: direct, intent: url.open, entity: "http://localhost:8000", tags: [ru, url]}
+  - {text: "открой https://example.com/ёлка", expect: direct, intent: url.open, entity: "https://example.com/ёлка", tags: [ru, url], note: "«ё» в адресе не меняется"}
+  - {text: "открой claude.ai", expect: direct, intent: url.open, entity: "https://claude.ai", tags: [mixed, url, missed], note: "зона .ai — и расширение файла: без схемы — агент"}
 
   # --- folder.open ------------------------------------------------------------------------------
   - {text: "открой загрузки", expect: direct, intent: folder.open, entity: "folder:downloads", tags: [ru, folder]}
@@ -92,6 +99,10 @@ cases:
   - {text: "открой эту папку", expect: direct, intent: folder.open, entity: "/work", tags: [ru, folder]}
   - {text: "открой папку src", expect: direct, intent: folder.open, entity: "src", tags: [ru, folder]}
   - {text: "открой папку ~/projects", expect: direct, intent: folder.open, entity: "~/projects", tags: [ru, folder]}
+  - {text: "открой папку ../..", expect: direct, intent: folder.open, entity: "../..", tags: [ru, folder], note: "точки пути — не конец предложения"}
+  - {text: "открой папку ~/дача-ка", expect: direct, intent: folder.open, entity: "~/дача-ка", tags: [ru, folder]}
+  - {text: 'открой папку "C:\Users\Алёна\Мои  проекты"', expect: direct, intent: folder.open, entity: 'C:\Users\Алёна\Мои  проекты', tags: [ru, folder], note: "путь в кавычках — как есть"}
+  - {text: "открой ~/projects/", expect: direct, intent: folder.open, entity: "~/projects/", tags: [ru, folder]}
   - {text: 'открой папку "C:\Users\me\Мои проекты"', expect: direct, intent: folder.open, entity: 'C:\Users\me\Мои проекты', tags: [ru, folder]}
   - {text: "open downloads", expect: direct, intent: folder.open, entity: "folder:downloads", tags: [en, folder]}
   - {text: "open the downloads folder", expect: direct, intent: folder.open, entity: "folder:downloads", tags: [en, folder]}
@@ -127,6 +138,8 @@ cases:
   - {text: "найди *.log", expect: direct, intent: fs.search, entity: "*.log", tags: [ru, search]}
   - {text: "find all png files", expect: direct, intent: fs.search, entity: "*.png", tags: [en, search]}
   - {text: "find LICENSE", expect: direct, intent: fs.search, entity: "LICENSE*", tags: [en, search]}
+  - {text: "find SECURITY", expect: direct, intent: fs.search, entity: "SECURITY*", tags: [en, search]}
+  - {text: "найди makefile", expect: direct, intent: fs.search, entity: "makefile*", tags: [mixed, search]}
   - {text: "where is README.md", expect: direct, intent: fs.search, entity: "README.md", tags: [en, search]}
 
   # --- process.list -----------------------------------------------------------------------------
@@ -135,7 +148,8 @@ cases:
   - {text: "какие процессы запущены?", expect: direct, intent: process.list, tags: [ru, process]}
   - {text: "покажи процессы python", expect: direct, intent: process.list, entity: python, tags: [mixed, process]}
   - {text: "show running processes", expect: direct, intent: process.list, tags: [en, process]}
-  - {text: "show python processes", expect: direct, intent: process.list, entity: python, tags: [en, process]}
+  - {text: "show python processes", expect: direct, intent: process.list, entity: python, tags: [en, process, missed], note: "слово перед processes бывает и не именем: zombie, system, top"}
+  - {text: "show processes named python", expect: direct, intent: process.list, entity: python, tags: [en, process]}
   - {text: "list processes named node", expect: direct, intent: process.list, entity: node, tags: [en, process]}
   - {text: "what processes are running?", expect: direct, intent: process.list, tags: [en, process]}
   - {text: "Какие Python процессы работают?", expect: direct, intent: process.list, entity: python, tags: [mixed, process]}
@@ -239,6 +253,37 @@ cases:
   - {text: "opne telegram", expect: agent, tags: [en, typo]}
   - {text: "open firefx", expect: agent, tags: [en, typo]}
   - {text: "open telegarm", expect: agent, tags: [en, typo]}
+
+  # --- найдено ревью V2.1: вопрос, путь и адрес, которые нельзя исказить -------------------------
+  - {text: "запустить телеграм?!", expect: agent, tags: [ru, question, adversarial]}
+  - {text: "открыть браузер?!", expect: agent, tags: [ru, question, adversarial]}
+  - {text: "open firefox?!", expect: agent, tags: [en, question, adversarial]}
+  - {text: "открыть телеграм?..", expect: agent, tags: [ru, question, adversarial]}
+  - {text: "открыть телеграм?…", expect: agent, tags: [ru, question, adversarial]}
+  - {text: "открыть загрузки?!", expect: agent, tags: [ru, question, adversarial]}
+  - {text: "открыть github.com?!", expect: agent, tags: [mixed, question, adversarial]}
+  - {text: "открыть телеграм? пожалуйста", expect: agent, tags: [ru, question, adversarial]}
+  - {text: "ls ..", expect: agent, tags: [en, adversarial], note: "не «ls» текущей папки"}
+  - {text: "открой https://example.com/a!", expect: agent, tags: [mixed, adversarial], note: "«!» мог быть частью адреса"}
+  - {text: "открой папку ~/projects.", expect: agent, tags: [ru, adversarial]}
+  - {text: "открой logo.ai", expect: agent, tags: [mixed, adversarial], note: ".ai — и файл Illustrator"}
+  - {text: "открой Calculator.app", expect: agent, tags: [mixed, adversarial]}
+  - {text: "покажи /etc/hosts", expect: agent, tags: [mixed, hard_negative], note: "без слова «папка» путь может быть файлом"}
+  - {text: "что в ~/.bashrc", expect: agent, tags: [mixed, hard_negative]}
+  - {text: "открой /etc/passwd", expect: agent, tags: [mixed, adversarial]}
+  - {text: 'открой "C:\Windows\System32\cmd.exe"', expect: agent, tags: [mixed, adversarial]}
+  - {text: "show zombie processes", expect: agent, tags: [en, hard_negative]}
+  - {text: "list system processes", expect: agent, tags: [en, hard_negative]}
+  - {text: "show top processes", expect: agent, tags: [en, hard_negative]}
+  - {text: "show processes now", expect: agent, tags: [en, hard_negative]}
+  - {text: "show me 10 processes", expect: agent, tags: [en, hard_negative]}
+  - {text: "покажи процессы 10", expect: agent, tags: [ru, hard_negative]}
+  - {text: "where is google.com", expect: agent, tags: [en, hard_negative, question]}
+  - {text: "где находится python.org", expect: agent, tags: [mixed, hard_negative, question]}
+  - {text: "найди 3.14", expect: agent, tags: [ru, hard_negative]}
+  - {text: "find security", expect: agent, tags: [en, hard_negative]}
+  - {text: 'открой папку /\evil.com\share', expect: agent, tags: [mixed, adversarial]}
+  - {text: 'что в \/evil.com/share', expect: agent, tags: [mixed, adversarial]}
 
   # --- атаки: команды, пути и схемы в тексте ---------------------------------------------------
   - {text: "открой телеграм; rm -rf /", expect: agent, tags: [mixed, adversarial]}

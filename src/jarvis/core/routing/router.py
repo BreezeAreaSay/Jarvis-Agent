@@ -11,6 +11,7 @@ DIRECT исполнила бы не то. Поэтому шаблоны якор
 («…?») не запускает ничего.
 """
 
+import asyncio
 import re
 import time
 from collections.abc import Iterable, Sequence
@@ -23,6 +24,7 @@ from jarvis.core.routing import lexicon as lx
 from jarvis.core.trace import Tracer, shorten
 from jarvis.domain.intents import EntityKind, IntentId, ResolvedEntity
 from jarvis.domain.inventory import AppEntry, name_key
+from jarvis.domain.paths import unsupported_form
 from jarvis.domain.routing import Route, RouteDecision, RoutingLevel
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import StageOutcome, Task, TaskChanges
@@ -63,10 +65,10 @@ _CURRENT = _compile(
 _PROCESSES = _compile(
     rf"(?:{_SHOW} )?(?:мне )?(?:все )?(?:запущенные |активные |работающие )?процессы(?: {_NAME})?",
     rf"(?:какие|что за) (?:{_NAME} )?процессы(?: сейчас)?(?: (?:запущены|работают|активны|есть))?",
-    rf"(?:show|list)(?: me)?(?: all)?(?: running| active)?(?: {_NAME})? processes",
-    rf"(?:show|list)(?: me)?(?: all)?(?: running| active)? processes"
-    rf"(?: (?:named |called |matching )?{_NAME})?",
-    rf"(?:what|which)(?: {_NAME})? processes are (?:running|active)(?: now)?",
+    # По-английски слово перед processes бывает и не именем («zombie», «system», «top»): фильтр — только
+    # после named / called / matching.
+    rf"(?:show|list)(?: me)?(?: all)?(?: running| active)? processes(?: (?:named|called|matching) {_NAME})?",
+    r"(?:what|which) processes are (?:running|active)(?: now)?",
     r"running processes|ps|список процессов",
 )
 _LISTING = _compile(
@@ -94,39 +96,75 @@ _FOLDER_PREFIXES = (
     "the folder", "folder", "the directory", "directory",
 )  # fmt: skip
 _PATH = re.compile(r'(?:[A-Za-z]:[\\/]|[\\/]|~(?:[\\/]|$)|\.{1,2}[\\/])[^"«»]*')
+_ROOT = re.compile(r"~|[A-Za-z]:[\\/]?|[\\/]")
 _FILE_SUFFIX = re.compile(r"[^\\/]+\.[A-Za-z0-9]{1,5}")  # последний сегмент «имя.расширение» — файл
 _QUOTED = re.compile(r'"(?P<a>[^"]+)"|«(?P<b>[^»]+)»')
 _RELATIVE = re.compile(r"[\w.-]+")
 _FILE_NAME = re.compile(r"[A-Za-z0-9_.*?-]+")
-_ASCII_PROCESS = re.compile(r"[a-z0-9_.+-]+")
+_ASCII_PROCESS = re.compile(r"[a-z0-9_.+-]*[a-z][a-z0-9_.+-]*")  # латиница, хотя бы одна буква
 
 
 @dataclass(frozen=True)
 class Command:
-    """Текст команды без вежливости и знаков в конце: регистр сохранён (в нём бывают пути)."""
+    """Команда без вежливости и знаков в конце. `text` — символы самой команды (регистр, «ё», пробелы в
+    кавычках сохранены: из него берутся пути и адреса), `key` — та же строка с «ё» → «е» для сравнения
+    со словарём: длины равны, поэтому позиции совпадений в `key` — позиции в `text`."""
 
     text: str
-    question: bool  # заканчивался «?»: вопрос ничего не запускает
+    key: str
+    question: bool  # в запросе есть «?»: вопрос ничего не запускает
+    tail_on_path: bool = False  # знаки в конце сняты с пути или адреса («…/a!»): их сущность неточна
 
 
 def prepare(raw: str) -> Command:
-    text = raw.strip().replace("ё", "е").replace("Ё", "Е")
-    question = text.endswith("?")
-    text = re.sub(r"[\s!?.…]+$", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    text = re.sub(r"(?<=\w)-ка\b", "", text, flags=_FLAGS)  # «открой-ка»
+    question = _is_question(raw)
+    text = _collapse_spaces(raw.strip())
+    tail_on_path = False
     changed = True
     while changed:
-        changed = False
+        before = text
+        text, on_path = _strip_tail(text)
+        tail_on_path = tail_on_path or on_path
         for word in lx.POLITE_PREFIXES:
-            stripped = re.sub(rf"^{re.escape(word)}[\s,!:]+", "", text, flags=_FLAGS)
-            if stripped != text:
-                text, changed = stripped, True
+            text = re.sub(rf"^{re.escape(word)}[\s,!:]+", "", text, flags=_FLAGS)
+        text = re.sub(r"^(\w+)-ка\b", r"\1", text, flags=_FLAGS)  # «открой-ка»; «~/дача-ка» не трогаем
         for word in lx.POLITE_SUFFIXES:
-            stripped = re.sub(rf"[\s,]+{re.escape(word)}$", "", text, flags=_FLAGS)
-            if stripped != text:
-                text, changed = stripped, True
-    return Command(text=text, question=question)
+            text = re.sub(rf"[\s,]+{re.escape(word)}$", "", text, flags=_FLAGS)
+        changed = text != before
+    key = text.replace("ё", "е").replace("Ё", "Е")
+    return Command(text=text, key=key, question=question, tail_on_path=tail_on_path)
+
+
+def _is_question(raw: str) -> bool:
+    """Вопрос — любой «?» в запросе («открыть браузер?!», «а?»), кроме «?» внутри адреса со схемой
+    (`https://ya.ru/search?q=1`); «?» в конце такого адреса — снова вопрос."""
+    for token in raw.split():
+        if "://" in token:
+            if "?" in token[len(token.rstrip("!?.…")) :]:
+                return True
+        elif "?" in token:
+            return True
+    return False
+
+
+def _collapse_spaces(text: str) -> str:
+    """Пробелы схлопываются вне кавычек: внутри кавычек — путь как есть («Мои  проекты»)."""
+    parts = re.split(r'("[^"]*"|«[^»]*»)', text)
+    return "".join(
+        part if index % 2 else re.sub(r"\s+", " ", part) for index, part in enumerate(parts)
+    ).strip()
+
+
+def _strip_tail(text: str) -> tuple[str, bool]:
+    """Снять знаки в конце предложения («загрузки!», «github.com.»). Точки пути («..», «C:\\Users\\..»)
+    остаются: если без знаков от слова ничего не осталось или оно кончается разделителем пути, знаки —
+    часть слова. Второй результат — знаки сняты со слова, похожего на путь или адрес."""
+    body = text.rstrip()
+    head, _, last = body.rpartition(" ")
+    bare = last.rstrip("!?.…")
+    if bare == last or not bare or bare.endswith((".", "/", "\\")):
+        return body, False
+    return (f"{head} {bare}" if head else bare), ("/" in bare or "\\" in bare)
 
 
 norm = name_key
@@ -157,11 +195,32 @@ class _Miss:
 _Result = _Hit | _Clarify | _Miss | None
 
 
-def _first(patterns: Sequence[re.Pattern[str]], text: str) -> re.Match[str] | None:
+@dataclass(frozen=True)
+class _Match:
+    """Совпадение шаблона по `Command.key`; группы — символы из `Command.text`."""
+
+    found: re.Match[str]
+    text: str
+
+    def group(self, name: str) -> str | None:
+        if name not in self.found.re.groupindex:
+            return None
+        start, end = self.found.span(name)
+        return None if start < 0 else self.text[start:end]
+
+    def required(self, name: str) -> str:
+        """Группа, которая в шаблоне обязательна."""
+        value = self.group(name)
+        if value is None:
+            raise LookupError(f"в совпадении нет группы {name}")
+        return value
+
+
+def _first(patterns: Sequence[re.Pattern[str]], command: Command) -> _Match | None:
     for pattern in patterns:
-        match = pattern.fullmatch(text)
-        if match is not None:
-            return match
+        found = pattern.fullmatch(command.key)
+        if found is not None:
+            return _Match(found, command.text)
     return None
 
 
@@ -195,6 +254,10 @@ class Router:
             self._launch,
         ):
             result = matcher(command, working_directory)
+            if isinstance(result, _Hit) and command.tail_on_path and _from_command(result.entities):
+                # «открой https://example.com/a!»: «!» мог быть частью адреса — не угадываем.
+                misses.extend([*result.rules, "direct.reject.trailing_punctuation"])
+                continue
             if isinstance(result, _Hit):
                 return RouteDecision(
                     strategy=Route.DIRECT,
@@ -218,16 +281,16 @@ class Router:
     # --- чтение -----------------------------------------------------------------------------------
 
     def _current(self, command: Command, working_directory: str | None) -> _Result:
-        if _first(_CURRENT, command.text) is None:
+        if _first(_CURRENT, command) is None:
             return None
         return _Hit(IntentId.FS_CURRENT, [], ["direct.current.folder"], "прямая команда: текущая папка")
 
     def _processes(self, command: Command, working_directory: str | None) -> _Result:
-        match = _first(_PROCESSES, command.text)
+        match = _first(_PROCESSES, command)
         if match is None:
             return None
         rules = ["direct.process.list"]
-        raw = (match.groupdict().get("name") or "").casefold()
+        raw = (match.group("name") or "").casefold()
         if not raw or raw in lx.PROCESS_STOP_WORDS:
             return _Hit(IntentId.PROCESS_LIST, [], rules, "прямая команда: список процессов")
         # Имя процесса — как его написал пользователь, латиницей: разговорных имён программ («хром»)
@@ -240,10 +303,9 @@ class Router:
         )
 
     def _listing(self, command: Command, working_directory: str | None) -> _Result:
-        match = _first(_LISTING, command.text)
+        match = _first(_LISTING, command)
         if match is not None:
-            groups = match.groupdict()
-            loc = groups.get("loc")
+            loc = match.group("loc")
             # «что в X» бывает и про файл («что в файле?», «что в отчёте»): относительное имя — папка,
             # только если так и сказано («в папке src») или это путь.
             folder, rule = (
@@ -256,10 +318,10 @@ class Router:
             return _Hit(
                 IntentId.FS_LIST, [folder], ["direct.list.files", rule], "прямая команда: содержимое папки"
             )
-        match = _first(_SHOW_FOLDER, command.text)
+        match = _first(_SHOW_FOLDER, command)
         if match is None:
             return None
-        folder, rule = self._folder(match.group("loc"), working_directory, explicit=False)
+        folder, rule = self._folder(match.required("loc"), working_directory, explicit=False)
         if folder is None:
             return _Miss()  # «покажи …» — не обязательно папка: решит агент
         return _Hit(
@@ -268,9 +330,9 @@ class Router:
 
     def _search(self, command: Command, working_directory: str | None) -> _Result:
         root = _working(working_directory)
-        match = _first(_SEARCH_EXTENSION, command.text)
+        match = _first(_SEARCH_EXTENSION, command)
         if match is not None:
-            extension = match.group("ext").casefold()
+            extension = match.required("ext").casefold()
             if extension in lx.SEARCH_EXTENSIONS:
                 pattern = ResolvedEntity(
                     kind=EntityKind.PATTERN, value=f"*.{extension}", label=f"*.{extension}", source="command"
@@ -281,10 +343,10 @@ class Router:
                     ["direct.search.file", "pattern.extension"],
                     "прямая команда: поиск файлов по расширению",
                 )
-        match = _first(_SEARCH_NAME, command.text)
+        match = _first(_SEARCH_NAME, command)
         if match is None:
             return None
-        raw = _unquote(match.group("name"))
+        raw = _unquote(match.required("name"))
         found = _file_pattern(raw)
         if found is None:
             return _Miss(["direct.search.file", "direct.reject.not_a_file_name"])
@@ -297,10 +359,10 @@ class Router:
     # --- открыть и запустить (побочный эффект: вопрос ничего не запускает) ------------------------
 
     def _open_folder(self, command: Command, working_directory: str | None) -> _Result:
-        match = _first(_OPEN_TARGET, command.text)
+        match = _first(_OPEN_TARGET, command)
         if match is None:
             return None
-        target = match.group("target")
+        target = match.required("target")
         explicit = _folder_word(target) is not None
         folder, rule = self._folder(target, working_directory, explicit=explicit)
         if folder is None:
@@ -314,25 +376,33 @@ class Router:
         )
 
     def _open_url(self, command: Command, working_directory: str | None) -> _Result:
-        match = _first(_URL_TARGET, command.text)
+        match = _first(_URL_TARGET, command)
         if match is None:
             return None
-        raw = match.group("url")
+        raw = match.required("url")
         url = normalize_web_url(raw)
         if url is None:
             return None
         if command.question:
             return _Miss(["direct.open.url", "direct.reject.question"])
         rule = "url.http" if raw.casefold().startswith(("http://", "https://")) else "url.domain"
-        entity = ResolvedEntity(kind=EntityKind.URL, value=url, label=url, source="command")
+        entity = ResolvedEntity(kind=EntityKind.URL, value=url, label=raw, source="command")
+        apps = _apps_named(norm(raw), self._inventory.apps()) if rule == "url.domain" else []
+        if apps:  # «открой Battle.net» — и сайт, и установленное приложение: выбирает человек
+            names = ", ".join(f"приложение «{app.name}»" for app, _ in apps[:4])
+            return _Clarify(
+                question=f"Что открыть: {names} или сайт {url}?",
+                candidates=[*(_app_entity(app, source) for app, source in apps[:4]), entity],
+                rules=["direct.open.url", rule, "url.or_app.ambiguous"],
+            )
         return _Hit(IntentId.URL_OPEN, [entity], ["direct.open.url", rule], "прямая команда: открыть адрес")
 
     def _launch(self, command: Command, working_directory: str | None) -> _Result:
-        match = _first(_LAUNCH_TARGET, command.text)
+        match = _first(_LAUNCH_TARGET, command)
         if match is None:
             return None
         rules = ["direct.launch.verb"]
-        key = norm(_strip_words(match.group("target"), lx.APP_WORDS))
+        key = norm(_strip_words(match.required("target"), lx.APP_WORDS))
         if not key:
             return _Miss([*rules, "direct.reject.no_target"])
         if command.question:
@@ -375,9 +445,11 @@ class Router:
         word = _folder_word(text)
         if word is not None:
             text, explicit = text[len(word) :].strip(), True
-        if text.startswith(("\\\\", "//")):
-            # Сетевой путь (\\сервер\папка): открытие обратилось бы к чужому серверу — только через агента.
-            return None, "direct.reject.network_path"
+        candidate = text.strip('"«»')
+        if re.match(r"[\\/]|[A-Za-z]:", candidate) and unsupported_form(candidate, "windows"):
+            # Сетевой путь (\\сервер\папка, /\сервер), \\?\… или поток NTFS: открытие обратилось бы к
+            # чужому серверу — только через агента, на любой ОС.
+            return None, "direct.reject.unsupported_path"
         key = norm(text)
         if key in lx.CURRENT_FOLDER:
             return _working(working_directory), "folder.current"
@@ -397,15 +469,9 @@ class Router:
             path = quoted.group("a") or quoted.group("b")
             if not explicit and _PATH.fullmatch(path) is None:
                 return None, "direct.reject.unknown_folder"
-            return ResolvedEntity(
-                kind=EntityKind.FOLDER, value=path, label=path, source="command"
-            ), "folder.path"
+            return _path_entity(path, explicit=explicit)
         if _PATH.fullmatch(text) is not None and " " not in text.strip():
-            if _FILE_SUFFIX.fullmatch(re.split(r"[\\/]", text.rstrip("\\/"))[-1]) is not None:
-                return None, "direct.reject.file_not_folder"
-            return ResolvedEntity(
-                kind=EntityKind.FOLDER, value=text, label=text, source="command"
-            ), "folder.path"
+            return _path_entity(text, explicit=explicit)
         if explicit and _RELATIVE.fullmatch(text) is not None:
             return ResolvedEntity(
                 kind=EntityKind.FOLDER, value=text, label=text, source="command"
@@ -423,7 +489,10 @@ class RoutingStage:
 
     async def handle(self, task: Task, budget: BudgetMeter) -> StageOutcome:
         started = time.perf_counter()
-        decision = self._router.decide(task.request.text, task.request.working_directory)
+        # В потоке: первое решение о запуске читает инвентарь (меню «Пуск»), цикл событий не ждёт.
+        decision = await asyncio.to_thread(
+            self._router.decide, task.request.text, task.request.working_directory
+        )
         elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
         event = self._tracer.event(task.id, EventKind.ROUTE_DECIDED, decision_payload(decision, elapsed_ms))
         with self._uow() as uow:
@@ -483,6 +552,18 @@ def _agent(rules: list[str]) -> RouteDecision:
     )
 
 
+def _path_entity(path: str, *, explicit: bool) -> tuple[ResolvedEntity | None, str]:
+    """Путь из команды. Router не видит диска: файл от папки отличает только сама команда. Последняя
+    часть «имя.расширение» — файл; без слова «папка» путь — папка, только если кончается разделителем
+    («~/projects/») или это корень («~», «C:\\»): «покажи /etc/hosts» ведёт агент."""
+    last = re.split(r"[\\/]", path.rstrip("\\/"))[-1]
+    if _FILE_SUFFIX.fullmatch(last) is not None:
+        return None, "direct.reject.file_not_folder"
+    if not explicit and not (path.endswith(("/", "\\")) or _ROOT.fullmatch(path)):
+        return None, "direct.reject.path_needs_folder_word"
+    return ResolvedEntity(kind=EntityKind.FOLDER, value=path, label=path, source="command"), "folder.path"
+
+
 def _working(working_directory: str | None) -> ResolvedEntity:
     path = working_directory or "."
     return ResolvedEntity(kind=EntityKind.FOLDER, value=path, label=path, source="working_directory")
@@ -517,10 +598,13 @@ def _file_pattern(raw: str) -> tuple[str, str] | None:
         return None
     if "*" in raw or "?" in raw:
         return raw, "pattern.wildcard"
+    if normalize_web_url(raw) is not None:
+        return None  # «где находится python.org» — вопрос о сайте, а не поиск файла
     stem, dot, extension = raw.rpartition(".")
-    if dot and stem and 1 <= len(extension) <= 10 and extension.isalnum():
+    if dot and stem and 1 <= len(extension) <= 10 and extension.isalnum() and not extension.isdigit():
         return raw, "pattern.file_name"
-    if raw.casefold() in lx.KNOWN_FILE_NAMES:
+    # «найди README», «найди Makefile»: имя в привычном написании; «find security» — не файл.
+    if (raw.isupper() and raw.casefold() in lx.UPPERCASE_FILE_NAMES) or raw.casefold() in lx.TOOL_FILE_NAMES:
         return f"{raw}*", "pattern.known_name"
     return None
 
@@ -531,9 +615,16 @@ def _apps_named(key: str, apps: Sequence[AppEntry]) -> list[tuple[AppEntry, str]
     for entry in apps:
         if key == norm(entry.name):
             found.setdefault(entry.id, (entry, "inventory.app.name"))
-        elif key in {norm(alias) for alias in entry.aliases} or key == entry.id:
+        elif key in {norm(alias) for alias in entry.aliases} or key == norm(entry.id):
             found.setdefault(entry.id, (entry, "inventory.app.alias"))
     return list(found.values())
+
+
+def _from_command(entities: Sequence[ResolvedEntity]) -> bool:
+    return any(
+        entity.source == "command" and entity.kind in (EntityKind.URL, EntityKind.FOLDER)
+        for entity in entities
+    )
 
 
 def _app_entity(entry: AppEntry, source: str) -> ResolvedEntity:

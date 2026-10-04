@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from jarvis.adapters.inventory import StaticInventory
 from jarvis.adapters.tools import HOST
+from jarvis.adapters.tools import launch as launch_module
 from jarvis.adapters.tools.launch import (
     AppLaunchArgs,
     AppLaunchOutput,
@@ -22,6 +23,7 @@ from jarvis.adapters.tools.launch import (
     UrlOpenOutput,
     UrlOpenTool,
     _posix_argv,
+    system_launcher,
 )
 from jarvis.domain.errors import ToolExecutionFailed, ToolPreviewFailed
 from jarvis.domain.inventory import AppEntry
@@ -171,3 +173,35 @@ def test_posix_launch_is_an_argument_list_without_shell(monkeypatch: pytest.Monk
     monkeypatch.setattr("shutil.which", lambda name: None)
     with pytest.raises(ToolExecutionFailed, match="нет xdg-open"):
         _posix_argv(url)
+
+
+@pytest.mark.parametrize("bundle", ["Evil.app", "Plugin.bundle"])
+async def test_an_app_bundle_is_not_a_folder(tmp_path: Path, bundle: str) -> None:
+    """На macOS `open Name.app` запустил бы программу вне инвентаря: folder.open такой «папки» не откроет,
+    в том числе через ссылку."""
+    (tmp_path / bundle / "Contents").mkdir(parents=True)
+    launcher = Recorder()
+    tool = FolderOpenTool(launcher)
+    with pytest.raises(ToolPreviewFailed, match="пакет приложения"):
+        await tool.preview(FolderOpenArgs(path=bundle), context(tmp_path))
+    if sys.platform != "win32":
+        (tmp_path / "link").symlink_to(tmp_path / bundle)
+        with pytest.raises(ToolPreviewFailed, match="пакет приложения"):
+            await tool.preview(FolderOpenArgs(path="link"), context(tmp_path))
+    assert launcher.targets == []
+
+
+def test_on_windows_a_folder_is_opened_with_the_explore_verb(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(launch_module.sys, "platform", "win32")
+    monkeypatch.setattr(
+        launch_module.os, "startfile", lambda path, verb: calls.append((path, verb)), raising=False
+    )
+    system_launcher(LaunchTarget("folder", "C:\\Users\\me\\Downloads"))
+    system_launcher(LaunchTarget("app", "C:/Apps/Telegram.lnk", "shortcut"))
+    system_launcher(LaunchTarget("url", "https://github.com"))
+    assert calls == [
+        ("C:\\Users\\me\\Downloads", "explore"),  # файл вместо папки проводник не исполнит
+        ("C:/Apps/Telegram.lnk", "open"),
+        ("https://github.com", "open"),
+    ]

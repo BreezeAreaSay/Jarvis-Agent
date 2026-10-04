@@ -281,8 +281,26 @@ async def test_describe_lists_models() -> None:
         "https://127.0.0.1/v1",
         "https://localhost:8443/v1",
         "ftp://x/v1",
+        # этот компьютер в другой записи
+        "https://LOCALHOST/v1",
+        "https://localhost./v1",
+        "https://api.localhost/v1",
+        "https://0.0.0.0/v1",
+        "https://[::]/v1",
+        "https://[::1]/v1",
+        "https://[::ffff:127.0.0.1]/v1",
+        "https://127.1/v1",
+        "https://2130706433/v1",
+        "https://0x7f000001/v1",
     ],
 )
 def test_only_https_to_another_computer(url: str) -> None:
     with pytest.raises(ValueError, match=r"https|этом компьютере"):
         settings(base_url=url)
+
+
+@pytest.mark.parametrize(
+    "url", ["https://api.provider.example/v1", "https://203.0.113.7/v1", "https://[2001:db8::1]:8443/v1"]
+)
+def test_another_computer_by_name_or_address_is_accepted(url: str) -> None:
+    assert settings(base_url=url).base_url == url

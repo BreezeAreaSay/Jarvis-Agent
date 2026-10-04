@@ -116,6 +116,34 @@ def is_loopback_url(url: str) -> bool:
         return False
 
 
+def _points_here(host: str) -> bool:
+    """Хост удалённого провайдера ведёт на этот компьютер или неоднозначен: localhost в любом виде
+    (`localhost.`, `api.localhost`), петля и «любой адрес» (0.0.0.0, [::], [::ffff:127.0.0.1]), а также
+    IP в нестандартной записи (`127.1`, `2130706433`, `0x7f000001`), которую резолвер понимает по-своему."""
+    name = host.lower().rstrip(".")
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    if name.startswith("["):
+        try:
+            address = ipaddress.IPv6Address(name[1:-1])
+        except ValueError:
+            return True
+        mapped = address.ipv4_mapped
+        return (
+            address.is_loopback
+            or address.is_unspecified
+            or (mapped is not None and (mapped.is_loopback or mapped.is_unspecified))
+        )
+    last = name.rsplit(".", 1)[-1]
+    if not (last.isdigit() or last.startswith("0x")):
+        return False  # имя хоста (у доменов верхнего уровня нет чисел)
+    try:
+        address = ipaddress.IPv4Address(name)  # только каноническая запись из четырёх чисел
+    except ValueError:
+        return True
+    return address.is_loopback or address.is_unspecified
+
+
 class SamplingSettings(BaseModel, frozen=True, extra="forbid"):
     """Параметры генерации: их читает только адаптер. None — умолчание сервера."""
 
@@ -183,10 +211,10 @@ class RemoteEndpointSettings(BaseModel, frozen=True, extra="forbid"):
         match = _BASE_URL.fullmatch(value)
         if match is None or match.group("scheme") != "https":
             raise ValueError(f"удалённый провайдер — только https-адрес вида https://host/v1, а не {value!r}")
-        if is_loopback_url(value):
+        if _points_here(match.group("host")):
             raise ValueError(
-                f"{value}: сервер на этом компьютере — локальный эндпоинт ([models.endpoints]), "
-                "а не удалённый"
+                f"{value}: сервер на этом компьютере (или IP не в виде 1.2.3.4) — это локальный эндпоинт "
+                "([models.endpoints]), а не удалённый"
             )
         return value.rstrip("/")
 

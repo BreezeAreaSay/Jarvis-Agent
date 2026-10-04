@@ -55,6 +55,13 @@ def run_command(
 ) -> None:
     """Выполнить запрос: прямая команда — без модели, иначе агент; исполняет всегда Tool Runtime."""
     loaded = load_or_exit()
+    if local_only:
+        mode = CloudMode.LOCAL_ONLY
+    config = loaded.config
+    if mode is CloudMode.LOCAL_ONLY:
+        # Удалённые адаптеры даже не создаются и ключи не читаются — сверх плана и guard в Model Gateway.
+        routing = config.models.routing.model_copy(update={"mode": CloudMode.LOCAL_ONLY})
+        config = config.model_copy(update={"models": config.models.model_copy(update={"routing": routing})})
     try:
         storage = open_storage(loaded.home)
     except JarvisError as exc:
@@ -63,7 +70,7 @@ def run_command(
     try:
         # Без модели работают прямые команды (ADR 0026); задача, которой нужен агент, завершится ошибкой
         # конфига с подсказкой, как назначить модель.
-        app = build_app(loaded.config, storage=storage, home=loaded.home, config_file=loaded.config_path)
+        app = build_app(config, storage=storage, home=loaded.home, config_file=loaded.config_path)
         for task_id in app.tasks.recover_interrupted():
             typer.echo(f"{task_id}: процесс, который вёл задачу, завершился — FAILED (interrupted)", err=True)
         request = TaskRequest(
@@ -71,7 +78,7 @@ def run_command(
             origin=Origin.CLI,
             working_directory=str(Path.cwd()),
             dry_run=dry_run,
-            mode=CloudMode.LOCAL_ONLY if local_only else mode,
+            mode=mode,
             allow_cloud=allow_cloud or [],
         )
         task_id = app.tasks.submit(request)

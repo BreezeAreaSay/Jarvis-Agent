@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+import jarvis.adapters.models as models_package
 from jarvis.cli.main import app
 from tests.integration.llm_stub import LlmStub, call, config_toml, finish
 
@@ -160,11 +161,19 @@ smart = ["cloud_a"]
 """
 
 
-def test_local_only_run_never_contacts_the_cloud(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("flag", [["--local-only"], ["--mode", "local_only"]])
+def test_local_only_run_never_contacts_the_cloud(
+    home: Path, monkeypatch: pytest.MonkeyPatch, flag: list[str]
+) -> None:
     monkeypatch.setenv("JARVIS_TEST_CLOUD_KEY", "test-key-not-real")
+
+    def no_remote(*args: object, **kwargs: object) -> None:
+        raise AssertionError("в local_only удалённый адаптер не создаётся")
+
+    monkeypatch.setattr(models_package.RemoteOpenAICompatibleBackend, "__init__", no_remote)
     with LlmStub([finish("Локальный ответ.")]) as stub:
         (home / "config" / "config.toml").write_text(config_toml(stub.base_url) + CLOUD, encoding="utf-8")
-        result = CliRunner().invoke(app, ["run", "--local-only", "Проанализируй", "эту", "архитектуру"])
+        result = CliRunner().invoke(app, ["run", *flag, "Проанализируй", "эту", "архитектуру"])
     assert result.exit_code == 0, result.output
     assert "Локальный ответ." in result.output
     assert len(stub.requests) == 1  # ответила локальная модель; адрес облака даже не разрешался

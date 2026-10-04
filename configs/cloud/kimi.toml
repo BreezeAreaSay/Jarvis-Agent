@@ -1,0 +1,13 @@
+# Шаблон: Moonshot AI (Kimi), OpenAI-совместимый API. Сверьте адрес и имя модели с документацией провайдера.
+# Международный адрес — api.moonshot.ai, китайский — api.moonshot.cn. Ключ — только в окружении.
+[models.remote.smart_primary]
+base_url = "https://api.moonshot.ai/v1"
+model = "kimi-k2-0905-preview"            # проверьте актуальное имя модели
+api_key = "env:JARVIS_KIMI_API_KEY"
+request_timeout_s = 120
+json_object = true                        # JSON-объект — да, JSON Schema — не применяет
+
+[models.remote.smart_primary.capabilities]
+structured_output = false
+context_window = 131072                   # проверьте окно выбранной модели
+max_output_tokens = 16384

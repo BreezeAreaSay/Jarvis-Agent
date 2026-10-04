@@ -1,0 +1,13 @@
+# Шаблон: Alibaba Cloud Model Studio (DashScope), режим совместимости с OpenAI. Международный адрес —
+# dashscope-intl.aliyuncs.com, китайский — dashscope.aliyuncs.com. Сверьте имя модели с документацией.
+[models.remote.qwen_cloud]
+base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+model = "qwen-plus"                       # проверьте актуальное имя модели
+api_key = "env:JARVIS_DASHSCOPE_API_KEY"
+request_timeout_s = 120
+json_object = true
+
+[models.remote.qwen_cloud.capabilities]
+structured_output = false
+context_window = 131072
+max_output_tokens = 8192

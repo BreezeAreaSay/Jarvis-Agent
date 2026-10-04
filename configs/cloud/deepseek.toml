@@ -1,0 +1,25 @@
+# Шаблон: DeepSeek, OpenAI-совместимый API. Сверьте имена моделей и лимиты с документацией провайдера.
+[models.remote.coding_primary]
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-chat"                   # проверьте актуальное имя модели
+api_key = "env:JARVIS_DEEPSEEK_API_KEY"
+request_timeout_s = 120
+json_object = true
+
+[models.remote.coding_primary.capabilities]
+structured_output = false
+context_window = 65536
+max_output_tokens = 8192
+
+# «Рассуждающая» модель: рассуждения расходуют тот же лимит вывода, провайдер сообщает их число в usage —
+# Jarvis сохраняет его как reasoning_tokens. Бюджет рассуждений здесь не задаётся, поэтому ответу и
+# рассуждениям отдаётся весь max_output_tokens.
+# [models.remote.reasoner]
+# base_url = "https://api.deepseek.com/v1"
+# model = "deepseek-reasoner"
+# api_key = "env:JARVIS_DEEPSEEK_API_KEY"
+# [models.remote.reasoner.capabilities]
+# structured_output = false
+# context_window = 65536
+# max_output_tokens = 32768
+# reasoning_behavior = "shares_output"

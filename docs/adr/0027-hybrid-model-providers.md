@@ -106,3 +106,29 @@ Jarvis не использует токены подписки как ключи
   `local` не содержат удалённых; fallback ограничен; трасса содержит решение, но не секреты.
 - Бюджеты вывода (`max_output_tokens`, `reasoning_behavior`, `reasoning_budget`) реализованы раньше
   остального ADR — вместе с исправлением PR #1 (профиль Ollama qwen3:4b), с проверками при сборке.
+
+## Реализация (V2.2, 2026-10-04)
+
+- Виды провайдеров — `ProviderKind` (`local_model`, `remote_model_api`) в `ModelInfo.kind`; порт
+  `ModelBackend` прежний. Удалённый адаптер — один OpenAI-совместимый (`adapters/models/remote.py`):
+  только https, без перенаправлений, прокси и сертификатов из окружения, таймаут ≤ 600 с, ответ ≤
+  `max_response_bytes` (поток), `json_object`, `extra_body`, `quota_markers`; ошибки — таксономия ядра.
+  Тексты ошибок провайдера маскируются поиском секретов и самим ключом.
+- Конфиг: `[models.remote.<id>]` (`api_key = "env:ИМЯ"`; ключ в конфиге — ошибка схемы без повтора
+  значения), `[models.routing]` (`mode`, цепочки `fast`/`local`/`smart`/`coding`, `max_providers`,
+  `degraded_latency_s`), `[cloud]`. Значение ключа читает `jarvis.config.resolve_secret` при сборке;
+  при выключенном облаке и в `local_only` удалённые адаптеры не создаются. Роль — только локальная модель.
+- План (`ModelGateway.plan`) и fallback — как в решении выше; `NoProviderAvailable` — план пуст или
+  ни один кандидат не ответил; единственный кандидат — его собственная ошибка (совместимость с V2.1).
+  Повтор того же сервера — только у локального (модель ещё грузится).
+- Состояния — `ProviderAvailability` по итогам вызовов, в хранилище (`provider_states`, миграция 005), кроме
+  `MISCONFIGURED` (до перезапуска процесса). Сроки: UNAVAILABLE 30 с, RATE_LIMITED Retry-After или
+  60 с, AUTH_REQUIRED и LIMIT_EXCEEDED 1 ч, DEGRADED 5 мин (ответ медленнее `degraded_latency_s`).
+- Router выбирает уровень: режим запуска или (в `auto`) признаки `lexicon.SMART_SIGNALS`/`CODING_SIGNALS`
+  в начале запроса; `RouteDecision.mode`. Признаков `fast` нет: 4B в рантайме нет.
+- Трасса: `model.routed` (кандидаты, вердикты, порядок), `privacy.checked`, `model.fallback`;
+  `model.called` — эндпоинт, вид, `remote`, модель, уровень, `reasoning_tokens`, если провайдер их
+  сообщил. Отдельного события «remote.call» нет: это `model.called` с `remote: true` и запись аудита.
+- Не сделано: ключи из хранилища ОС (`keyring:`), прокси для удалённых провайдеров, фоновые пробы
+  состояния, сборка промпта под окно облачной модели (промпт строится под самое маленькое окно).
+

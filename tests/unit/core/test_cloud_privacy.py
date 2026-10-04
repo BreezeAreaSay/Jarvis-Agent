@@ -170,6 +170,7 @@ def test_the_scanner_finds_common_secrets(text: str, category: str) -> None:
 
 def test_the_scanner_ignores_ordinary_text() -> None:
     assert find_secrets("Docker — это контейнеры. Пароль от Wi-Fi спроси у администратора.") == []
+    assert find_secrets('api_key = "env:JARVIS_SMART_API_KEY"') == []  # ссылка на переменную — не ключ
 
 
 def test_masking_removes_a_known_value() -> None:

@@ -1,0 +1,16 @@
+# Шаблон: Zhipu AI / Z.ai (GLM), OpenAI-совместимый API. Международный вход — api.z.ai, китайский —
+# open.bigmodel.cn/api/paas/v4. Сверьте адрес, имя модели и параметр «thinking» с документацией.
+[models.remote.smart_secondary]
+base_url = "https://api.z.ai/api/paas/v4"
+model = "glm-4.6"                         # проверьте актуальное имя модели
+api_key = "env:JARVIS_GLM_API_KEY"
+request_timeout_s = 120
+json_object = true
+
+[models.remote.smart_secondary.extra_body]
+thinking = { type = "disabled" }          # без скрытых рассуждений ответ укладывается в лимит вывода
+
+[models.remote.smart_secondary.capabilities]
+structured_output = false
+context_window = 131072
+max_output_tokens = 16384

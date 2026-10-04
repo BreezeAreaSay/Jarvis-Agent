@@ -171,7 +171,8 @@ def progress_line(event: TraceEvent) -> str | None:
             return privacy_line(payload)
         case EventKind.MODEL_FALLBACK:
             failed, target = clean_line(payload.get("from")), clean_line(payload.get("to") or "—")
-            return f"  {failed} не ответил ({payload.get('category')}) → {target}"
+            verb = "не вызван" if payload.get("category") == "privacy_violation" else "не ответил"
+            return f"  {failed} {verb} ({payload.get('category')}) → {target}"
         case EventKind.ACTION_PROPOSED if payload.get("origin") == "direct":
             return f"· {clean_line(payload.get('tool'))} — прямая команда, без модели"
         case EventKind.ACTION_PROPOSED:

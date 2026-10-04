@@ -6,6 +6,8 @@
 
 import pytest
 
+from jarvis.cli.run import progress_line
+from jarvis.core.models.prompt import messages_tokens
 from jarvis.domain.approvals import ApprovalDecision
 from jarvis.domain.audit import AuditAction
 from jarvis.domain.privacy import DataClass
@@ -148,6 +150,39 @@ async def test_invalid_output_after_repair_is_feedback_not_fallback() -> None:
     await hybrid.run("Проанализируй", mode=CloudMode.SMART)
     assert hybrid.events(EventKind.MODEL_FALLBACK) == []
     assert hybrid.local.requests == []
+
+
+async def test_a_cloud_reply_is_echoed_back_only_if_it_passes_the_privacy_boundary() -> None:
+    # Ответ облака не по схеме, похожий на секрет: ремонт уходит без эха, а не роняет задачу.
+    bad = ModelReply(text="не JSON, но тут password=hunter2hunter2")
+    hybrid = Hybrid([finish("локально")], {"cloud_a": [bad, finish("облако")]})
+    snapshot = await hybrid.run("Проанализируй эту архитектуру", mode=CloudMode.SMART)
+    assert snapshot.status is S.COMPLETED
+    assert hybrid.called() == ["cloud_a", "cloud_a"]
+    repair = hybrid.remotes["cloud_a"].requests[1]
+    assert "hunter2" not in "".join(message.content for message in repair.messages)
+
+
+async def test_a_repair_blocked_by_the_privacy_boundary_falls_back_without_sending() -> None:
+    probe = Hybrid([], {"cloud_a": [finish()]})
+    await probe.run("Проанализируй эту архитектуру", mode=CloudMode.SMART)
+    (first,) = probe.remotes["cloud_a"].requests
+    exact = messages_tokens(first.messages)  # первая попытка проходит, ремонт уже нет
+    bad = ModelReply(text="не JSON")
+    hybrid = Hybrid(
+        [finish("локально")], {"cloud_a": [bad, finish("не дойдёт")]}, cloud={"max_prompt_tokens": exact}
+    )
+    snapshot = await hybrid.run("Проанализируй эту архитектуру", mode=CloudMode.SMART)
+    assert snapshot.status is S.COMPLETED
+    assert snapshot.outcome is not None
+    assert snapshot.outcome.answer == "локально"
+    assert hybrid.called() == ["cloud_a", "local"]
+    assert len(hybrid.remotes["cloud_a"].requests) == 1  # ремонт не ушёл
+    (fallback,) = hybrid.events(EventKind.MODEL_FALLBACK)
+    assert (fallback.payload["category"], fallback.payload["state"]) == ("privacy_violation", None)
+    assert progress_line(fallback) == "  cloud_a не вызван (privacy_violation) → local"
+    with hybrid.storage.unit_of_work() as uow:
+        assert uow.provider_states.get("cloud_a") is None  # провайдер исправен: состояние не меняется
 
 
 async def test_file_content_needs_consent_and_a_refusal_keeps_the_task_local() -> None:

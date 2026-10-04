@@ -262,15 +262,22 @@ class ModelGateway:
         failures: list[str] = []
         for index, candidate in enumerate(plan.candidates):
             assert candidate.backend is not None
+            following = plan.candidates[index + 1] if index + 1 < len(plan.candidates) else None
             try:
                 return await self._attempt(candidate.backend, role, prompt, output, task_id, budget, route)
             except PROVIDER_FAILURES as exc:
                 status = self._availability.record_failure(candidate.endpoint, exc)
-                following = plan.candidates[index + 1] if index + 1 < len(plan.candidates) else None
                 failures.append(f"{candidate.endpoint}: {exc.category}")
                 if len(plan.candidates) == 1:
                     raise  # единственный кандидат: прежняя ошибка, а не «нет провайдера»
                 self._fallback(task_id, candidate, following, exc, status)
+            except CloudPrivacyViolation as exc:
+                # Guard не выпустил запрос (ничего не ушло): провайдер исправен, состояние не меняется,
+                # задачу ведёт следующий кандидат — его граница проверяет заново.
+                failures.append(f"{candidate.endpoint}: {exc.category}")
+                if following is None:
+                    raise
+                self._fallback(task_id, candidate, following, exc, None)
         raise NoProviderAvailable(
             f"ни один провайдер уровня {route.level} не ответил: {'; '.join(failures)}",
             level=route.level.value,
@@ -363,8 +370,11 @@ class ModelGateway:
             repairs += 1
             repair = _repair(problems)
             echoed = ChatMessage(role="assistant", content=shorten(response.text, REPAIR_ECHO_CHARS))
-            # Испорченный ответ показывается модели, только если с ним промпт помещается в окно.
-            fits = messages_tokens([*base, echoed, repair]) <= self._window(role, backend)
+            # Испорченный ответ показывается модели, только если с ним промпт помещается в окно и (у
+            # провайдера вне компьютера) проходит границу приватности: в нём бывает что угодно.
+            fits = messages_tokens([*base, echoed, repair]) <= self._window(role, backend) and (
+                not info.remote or self._check(info, prompt, [*base, echoed, repair], route).allowed
+            )
             messages = [*base, echoed, repair] if fits else [*base, repair]
             hidden = ChatMessage(role="assistant", content=_SECRET_REPLY)
             logged = [*journal, hidden if secret else echoed, repair] if fits else [*journal, repair]
@@ -530,7 +540,7 @@ class ModelGateway:
         task_id: TaskId,
         failed: Candidate,
         following: Candidate | None,
-        error: ModelError,
+        error: ModelError | CloudPrivacyViolation,
         status: ProviderStatus | None,
     ) -> None:
         payload: dict[str, JsonValue] = {

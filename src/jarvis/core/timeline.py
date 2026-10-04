@@ -152,7 +152,7 @@ def _render_event(event: TraceEvent, tz: tzinfo) -> list[str]:
         case EventKind.MODEL_FALLBACK:
             return [
                 f"{time} fallback {_clean(payload.get('from'))} → {_clean(payload.get('to'))}",
-                f"{_INDENT}{payload.get('category')}, состояние {payload.get('state')}",
+                f"{_INDENT}{payload.get('category')}, состояние {payload.get('state') or 'не изменилось'}",
             ]
         case _:  # вид события из более новой версии: показать как есть
             return [f"{time} {event.kind}", f"{_INDENT}{_clean(json.dumps(payload, ensure_ascii=False))}"]

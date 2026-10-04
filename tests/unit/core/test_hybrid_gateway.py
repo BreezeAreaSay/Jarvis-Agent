@@ -67,6 +67,18 @@ async def test_local_only_never_calls_a_remote_provider() -> None:
     assert hybrid.called() == ["local"]
 
 
+async def test_a_task_mode_cannot_loosen_local_only_from_the_config() -> None:
+    # Режим запуска может только ужесточить настройку: local_only конфига сильнее --mode smart.
+    hybrid = Hybrid([finish()], {"cloud_a": []}, routing={"mode": "local_only"})
+    snapshot = await hybrid.run("Проанализируй эту архитектуру", mode=CloudMode.SMART)
+    assert snapshot.status is S.COMPLETED
+    assert hybrid.remotes["cloud_a"].requests == []
+    assert snapshot.routing is not None
+    assert snapshot.routing.mode is CloudMode.LOCAL_ONLY
+    (routed,) = hybrid.events(EventKind.MODEL_ROUTED)
+    assert routed.payload["order"] == ["local"]
+
+
 async def test_local_levels_never_call_a_remote_provider() -> None:
     hybrid = Hybrid([finish()], {"cloud_a": []})
     await hybrid.run("какая погода в файлах?")  # auto, без признаков — уровень local

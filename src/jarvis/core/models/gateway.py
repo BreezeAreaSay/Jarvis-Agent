@@ -403,10 +403,14 @@ class ModelGateway:
                 found.append(backend)
         return found
 
+    def _local_only(self, route: ModelRoute) -> bool:
+        """local_only задачи или конфига: режим задачи не ослабляет настройку."""
+        return CloudMode.LOCAL_ONLY in (route.mode, self._routing.mode)
+
     def _cloud_allowed(self, route: ModelRoute) -> bool:
         return (
             route.level not in LOCAL_LEVELS
-            and route.mode is not CloudMode.LOCAL_ONLY
+            and not self._local_only(route)
             and self._privacy is not None
             and self._privacy.enabled
         )
@@ -421,7 +425,7 @@ class ModelGateway:
         if info.remote:
             if route.level in LOCAL_LEVELS:
                 return Candidate(endpoint, backend, False, "level.local_only")
-            if route.mode is CloudMode.LOCAL_ONLY:
+            if self._local_only(route):
                 return Candidate(endpoint, backend, False, "mode.local_only")
             if self._privacy is None or not self._privacy.enabled:
                 return Candidate(endpoint, backend, False, "cloud.disabled")

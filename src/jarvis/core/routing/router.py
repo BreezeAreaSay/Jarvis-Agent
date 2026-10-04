@@ -246,7 +246,8 @@ class Router:
         """`mode` — режим запуска задачи; None — режим по умолчанию. Router выбирает стратегию и уровень
         модели, но не провайдера: провайдера внутри уровня выбирает Model Gateway (ADR 0027)."""
         command = prepare(text)
-        mode = mode or self._mode
+        # Режим запуска может только ужесточить настройку: local_only конфига не отменяется (ADR 0026).
+        mode = CloudMode.LOCAL_ONLY if self._mode is CloudMode.LOCAL_ONLY else (mode or self._mode)
         if not self._direct:
             return _agent(command, ["agent.default", "direct.disabled"], mode)
         if not command.text:

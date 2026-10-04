@@ -8,7 +8,7 @@ from jarvis.adapters.inventory import StaticInventory
 from jarvis.core.routing.router import Router, decision_payload, prepare
 from jarvis.domain.intents import EntityKind, IntentId
 from jarvis.domain.inventory import AppEntry, KnownFolder
-from jarvis.domain.routing import Route, RouteDecision, RoutingLevel
+from jarvis.domain.routing import CloudMode, Route, RouteDecision, RoutingLevel
 from jarvis.evals.routing import RoutingCase, dataset_inventory, load_routing_datasets
 
 DATASET_DIR = Path(__file__).resolve().parents[3] / "evals" / "routing"
@@ -233,3 +233,12 @@ def test_routing_is_fast() -> None:
     for case in DATASET.cases:
         dataset_router.decide(case.text, DATASET.working_directory)
     assert (time.perf_counter() - started) / len(DATASET.cases) < 0.05
+
+
+def test_a_task_mode_only_tightens_the_configured_mode() -> None:
+    strict = Router(StaticInventory([TELEGRAM]), mode=CloudMode.LOCAL_ONLY)
+    decision = strict.decide("Проанализируй архитектуру", "/work", mode=CloudMode.SMART)
+    assert (decision.mode, decision.level) == (CloudMode.LOCAL_ONLY, RoutingLevel.LOCAL)
+    assert "level.mode.local_only" in decision.rules
+    relaxed = Router(StaticInventory([TELEGRAM])).decide("Проанализируй", "/work", mode=CloudMode.LOCAL_ONLY)
+    assert relaxed.mode is CloudMode.LOCAL_ONLY

@@ -71,6 +71,7 @@ _PROCESSES = _compile(
 )
 _LISTING = _compile(
     rf"{_SHOW}(?: мне)?(?: все)? {_FILES}(?: {_IN} (?P<loc>.+))?",
+    rf"{_SHOW}(?: мне)? (?:содержимое|список файлов) (?P<loc>(?:папки|каталога|директории) .+)",
     r"что (?:лежит|есть|находится) (?:в|на) (?P<loc>.+)",
     r"что (?:здесь|тут) (?:лежит|есть)(?P<here>)",
     r"что (?:в|на) (?P<loc>.+)",
@@ -89,8 +90,8 @@ _URL_TARGET = _compile(rf"{_URL_VERB}(?: {_URL_WORD})? (?P<url>\S+)")
 _LAUNCH_TARGET = _compile(rf"{_LAUNCH} (?P<target>.+)")
 
 _FOLDER_PREFIXES = (
-    "папке", "папку", "папка", "каталоге", "каталог", "директории", "директорию", "the folder", "folder",
-    "the directory", "directory",
+    "папке", "папку", "папка", "папки", "каталоге", "каталога", "каталог", "директории", "директорию",
+    "the folder", "folder", "the directory", "directory",
 )  # fmt: skip
 _PATH = re.compile(r'(?:[A-Za-z]:[\\/]|[\\/]|~(?:[\\/]|$)|\.{1,2}[\\/])[^"«»]*')
 _FILE_SUFFIX = re.compile(r"[^\\/]+\.[A-Za-z0-9]{1,5}")  # последний сегмент «имя.расширение» — файл
@@ -171,6 +172,12 @@ class Router:
         self._inventory = inventory
         self._direct = direct  # False — только AGENT (бенчмарк модели, где нужна именно модель)
 
+    def warm_up(self) -> None:
+        """Прочитать инвентарь заранее: первое решение тогда не включает чтение меню «Пуск» и реестра."""
+        if self._direct:
+            self._inventory.apps()
+            self._inventory.default_browser()
+
     def decide(self, text: str, working_directory: str | None = None) -> RouteDecision:
         command = prepare(text)
         if not self._direct:
@@ -223,13 +230,11 @@ class Router:
         raw = (match.groupdict().get("name") or "").casefold()
         if not raw or raw in lx.PROCESS_STOP_WORDS:
             return _Hit(IntentId.PROCESS_LIST, [], rules, "прямая команда: список процессов")
-        name, source = (
-            lx.PROCESS_ALIASES.get(raw, raw),
-            "alias.process" if raw in lx.PROCESS_ALIASES else "command",
-        )
-        if _ASCII_PROCESS.fullmatch(name) is None:
+        # Имя процесса — как его написал пользователь, латиницей: разговорных имён программ («хром»)
+        # ядро не знает, такие запросы ведёт агент.
+        if _ASCII_PROCESS.fullmatch(raw) is None:
             return _Miss([*rules, "direct.reject.process_name"])
-        entity = ResolvedEntity(kind=EntityKind.PROCESS, value=name, label=name, source=source)
+        entity = ResolvedEntity(kind=EntityKind.PROCESS, value=raw, label=raw, source="command")
         return _Hit(
             IntentId.PROCESS_LIST, [entity], [*rules, "filter.process"], "прямая команда: процессы по имени"
         )
@@ -299,7 +304,9 @@ class Router:
         explicit = _folder_word(target) is not None
         folder, rule = self._folder(target, working_directory, explicit=explicit)
         if folder is None:
-            return _Miss(["direct.open.folder", rule]) if explicit else None
+            # Не папка — возможно, приложение («открой телеграм»): тогда отказ не нужен в объяснении.
+            plain = not explicit and rule == "direct.reject.unknown_folder"
+            return None if plain else _Miss(["direct.open.folder", rule])
         if command.question:
             return _Miss(["direct.open.folder", "direct.reject.question"])
         return _Hit(
@@ -368,6 +375,9 @@ class Router:
         word = _folder_word(text)
         if word is not None:
             text, explicit = text[len(word) :].strip(), True
+        if text.startswith(("\\\\", "//")):
+            # Сетевой путь (\\сервер\папка): открытие обратилось бы к чужому серверу — только через агента.
+            return None, "direct.reject.network_path"
         key = norm(text)
         if key in lx.CURRENT_FOLDER:
             return _working(working_directory), "folder.current"
@@ -376,14 +386,17 @@ class Router:
             if not explicit and known not in lx.UNAMBIGUOUS_FOLDERS:
                 return None, "direct.reject.ambiguous_folder"
             path = self._inventory.known_folder(known)
-            if path is None:
-                return None, "direct.reject.unknown_folder"
+            if path is None:  # такой папки на этом компьютере нет
+                return None, "direct.reject.folder_not_found"
             return ResolvedEntity(
                 kind=EntityKind.FOLDER, value=path, label=text, source="folder.known"
             ), f"folder.known.{known.value}"
         quoted = _QUOTED.fullmatch(text)
         if quoted is not None:
+            # «открой "Discord"» — не папка: в кавычках папка, только если так и сказано или это путь.
             path = quoted.group("a") or quoted.group("b")
+            if not explicit and _PATH.fullmatch(path) is None:
+                return None, "direct.reject.unknown_folder"
             return ResolvedEntity(
                 kind=EntityKind.FOLDER, value=path, label=path, source="command"
             ), "folder.path"

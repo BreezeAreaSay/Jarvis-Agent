@@ -1,0 +1,13 @@
+# Прямая команда: процессы с фильтром по имени (снимок только для чтения).
+id: direct.processes
+category: direct
+input: "покажи процессы python"
+model: {replies: []}
+expect:
+  status: COMPLETED
+  strategy: direct
+  intent: process.list
+  route_rules: [direct.process.list, filter.process]
+  rules: [effect.read]
+  usage: {model_calls: 0}
+  answer_contains: ["Процесс"]

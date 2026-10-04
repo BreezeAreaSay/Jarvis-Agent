@@ -1,0 +1,15 @@
+# Прямая команда: содержимое папки, ответ — шаблон по результату инструмента.
+id: direct.list_folder
+category: direct
+input: "покажи файлы в папке docs"
+files:
+  docs/guide.md: "# Guide"
+  docs/api/: ""
+model: {replies: []}
+expect:
+  status: COMPLETED
+  strategy: direct
+  intent: fs.list
+  rules: [effect.read]
+  usage: {model_calls: 0, tool_calls: 1}
+  answer_contains: ["2 элемента", "api/", "guide.md"]

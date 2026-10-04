@@ -51,9 +51,8 @@ def normalize_web_url(raw: str, *, allow_bare: bool = True) -> str | None:
     host = match.group("host")
     if re.fullmatch(r"[\d.]+", host) and any(int(part) > 255 for part in host.split(".") if part):
         return None
-    rest = (
-        match.group("rest") or ""
-    )  # учётных данных в адресе нет: хост сразу за схемой, «@» до пути не пройдёт
+    # Учётных данных в адресе нет: хост идёт сразу за схемой, и «user:pass@» до пути не пройдёт.
+    rest = match.group("rest") or ""
     netloc = host.casefold() + (f":{port}" if port else "")
     return f"{match.group('scheme').lower()}://{netloc}{rest}"
 

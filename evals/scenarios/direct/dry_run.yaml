@@ -1,0 +1,15 @@
+# Dry run прямой команды: preview и политика, без запуска.
+id: direct.dry_run
+category: direct
+input: "открой телеграм"
+dry_run: true
+inventory:
+  apps:
+    - {id: telegram, name: Telegram Desktop, aliases: [телеграм], target: "C:/Apps/Telegram.lnk", kind: shortcut}
+model: {replies: []}
+expect:
+  status: COMPLETED
+  strategy: direct
+  launched: []
+  usage: {model_calls: 0}
+  answer_contains: ["Dry run: Запустить Telegram Desktop"]

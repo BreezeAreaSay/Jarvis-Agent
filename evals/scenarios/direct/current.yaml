@@ -1,0 +1,11 @@
+# Прямая команда: рабочая папка задачи.
+id: direct.current
+category: direct
+input: "где я?"
+model: {replies: []}
+expect:
+  status: COMPLETED
+  strategy: direct
+  intent: fs.current
+  usage: {model_calls: 0}
+  answer_contains: ["Рабочая папка:"]

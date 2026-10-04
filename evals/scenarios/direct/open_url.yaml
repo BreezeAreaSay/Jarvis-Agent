@@ -1,0 +1,13 @@
+# Прямая команда: адрес из команды разбирается безопасно (только http и https) и открывается в браузере.
+id: direct.open_url
+category: direct
+input: "открой github.com/anthropics"
+model: {replies: []}
+expect:
+  status: COMPLETED
+  strategy: direct
+  intent: url.open
+  rules: [launch.url.direct]
+  launched: ["url:https://github.com/anthropics"]
+  usage: {model_calls: 0}
+  answer_contains: ["Открываю https://github.com/anthropics"]

@@ -1,0 +1,20 @@
+# Запуск, предложенный моделью, — не прямая команда: нужен человек (ADR 0030). Человек отказал —
+# ничего не запущено, модель видит отказ.
+id: direct.model_launch_denied
+category: direct
+input: "мне надо написать коллегам, помоги"
+client: {approval: deny}
+inventory:
+  apps:
+    - {id: telegram, name: Telegram Desktop, aliases: [телеграм], target: "C:/Apps/Telegram.lnk", kind: shortcut}
+model:
+  replies:
+    - json: {decision: "Открою мессенджер", action: {type: tool, tool: app.launch, arguments: {app: telegram}}}
+    - json: {decision: "Человек отказал", action: {type: finish, answer: "Хорошо, не открываю Telegram.", evidence: []}}
+expect:
+  status: COMPLETED
+  strategy: agent
+  transitions: [ROUTING, PLANNING, EXECUTING, WAITING_CONFIRMATION, EXECUTING, VERIFYING, COMPLETED]
+  observations: [denied]
+  rules: [approval.denied]  # запрос подтверждения был: policy.decided — launch.app.model
+  launched: []

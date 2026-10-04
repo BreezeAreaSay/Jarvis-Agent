@@ -1,0 +1,15 @@
+# Прямая команда: известная папка из инвентаря открывается по каноническому пути.
+id: direct.open_folder
+category: direct
+input: "открой загрузки"
+inventory:
+  folders: {downloads: Downloads}
+model: {replies: []}
+expect:
+  status: COMPLETED
+  strategy: direct
+  intent: folder.open
+  route_rules: [direct.open.folder, folder.known.downloads]
+  rules: [launch.folder.direct]
+  launched: ["folder:user/Downloads"]
+  usage: {model_calls: 0}

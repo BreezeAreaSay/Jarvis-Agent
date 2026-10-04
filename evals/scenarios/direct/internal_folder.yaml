@@ -1,0 +1,14 @@
+# Прямая команда с путём к данным Jarvis: Router честно отдаёт DIRECT, политика отказывает — без модели,
+# которая могла бы искать обход, и без запуска.
+id: direct.internal_folder
+category: direct
+input: "открой папку ../jarvis-home"
+model: {replies: []}
+expect:
+  status: FAILED
+  strategy: direct
+  intent: folder.open
+  error_category: tool_denied
+  rules: [zone.internal]
+  launched: []
+  usage: {model_calls: 0}

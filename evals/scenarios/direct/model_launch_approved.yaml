@@ -1,0 +1,18 @@
+# Запуск, предложенный моделью и подтверждённый человеком, исполняется через тот же Tool Runtime.
+id: direct.model_launch_approved
+category: direct
+input: "мне надо написать коллегам, открой что-нибудь для этого"
+client: {approval: approve}
+inventory:
+  apps:
+    - {id: telegram, name: Telegram Desktop, aliases: [телеграм], target: "C:/Apps/Telegram.lnk", kind: shortcut}
+model:
+  replies:
+    - json: {decision: "Открою мессенджер", action: {type: tool, tool: app.launch, arguments: {app: telegram}}}
+    - json: {decision: "Открыл", action: {type: finish, answer: "Открыл Telegram.", evidence: [task_1.call_1]}}
+expect:
+  status: COMPLETED
+  strategy: agent
+  observations: [executed]
+  rules: [approval.approved, launch.app.model]
+  launched: ["app:C:/Apps/Telegram.lnk"]

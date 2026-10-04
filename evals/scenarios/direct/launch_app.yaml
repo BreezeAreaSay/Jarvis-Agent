@@ -1,0 +1,19 @@
+# Прямая команда: приложение из инвентаря запускается без модели и без подтверждения (ADR 0030).
+id: direct.launch_app
+category: direct
+input: "открой телеграм"
+inventory:
+  apps:
+    - {id: telegram, name: Telegram Desktop, aliases: [телеграм], target: "C:/Apps/Telegram.lnk", kind: shortcut}
+model: {replies: []}  # вызов модели — ошибка сценария
+expect:
+  status: COMPLETED
+  transitions: [ROUTING, EXECUTING, VERIFYING, COMPLETED]
+  strategy: direct
+  intent: app.launch
+  route_rules: [direct.launch.verb, inventory.app.alias]
+  tool_events: [tool.previewed, policy.decided, tool.started, tool.finished, tool.verified]
+  rules: [launch.app.direct]
+  launched: ["app:C:/Apps/Telegram.lnk"]
+  usage: {model_calls: 0, model_tokens: 0, tool_calls: 1}
+  answer_contains: ["Запускаю Telegram Desktop"]

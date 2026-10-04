@@ -175,6 +175,13 @@ def _outside(name: str) -> bool:
     return name.startswith(("/", "\\")) or ":" in name or ".." in parts
 
 
+ROUTING_KIND = "routing_dataset"  # набор фраз Router (evals/routing.py), а не сценарий
+
+
+def is_routing_dataset(data: object) -> bool:
+    return isinstance(data, dict) and data.get("kind") == ROUTING_KIND  # pyright: ignore[reportUnknownMemberType]
+
+
 def load_scenarios(paths: Sequence[Path]) -> list[Scenario]:
     files: list[Path] = []
     for path in paths:
@@ -188,7 +195,10 @@ def load_scenarios(paths: Sequence[Path]) -> list[Scenario]:
     seen: dict[str, Path] = {}
     for file in files:
         try:
-            scenario = Scenario.model_validate(yaml.safe_load(file.read_text(encoding="utf-8")))
+            data = yaml.safe_load(file.read_text(encoding="utf-8"))
+            if is_routing_dataset(data):
+                continue
+            scenario = Scenario.model_validate(data)
         except (yaml.YAMLError, ValueError) as exc:
             raise ScenarioError(f"{file}: {exc}") from None
         if scenario.id in seen:

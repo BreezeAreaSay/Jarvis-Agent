@@ -17,6 +17,7 @@ from jarvis.cli.main import app as cli
 from jarvis.core.trace import normalize_events
 from jarvis.domain.ids import TaskId
 from jarvis.domain.settings import JarvisConfig
+from jarvis.domain.task import TaskOutcome
 from jarvis.evals.engine import run_scenario
 from jarvis.evals.scenario import load_scenarios
 
@@ -26,8 +27,10 @@ SCENARIOS = Path(__file__).resolve().parents[2] / "evals" / "scenarios"
 # Трасса budget.wall_time содержит замер (сколько успел проработать прерванный такт): с эталонным
 # прогоном она совпадает только до этого числа, поэтому в сравнение трасс не входит.
 MEASURED = {"budget.wall_time"}
+# Ответ прямой команды process.list — снимок процессов этого компьютера: от прогона к прогону он разный.
+HOST_SNAPSHOT = {"direct.processes"}
 RUNTIME_SCENARIOS = sorted(
-    scenario.id for scenario in load_scenarios([SCENARIOS]) if scenario.id not in MEASURED
+    scenario.id for scenario in load_scenarios([SCENARIOS]) if scenario.id not in MEASURED | HOST_SNAPSHOT
 )
 
 RUN_SCENARIO = """
@@ -109,7 +112,22 @@ async def test_task_and_trace_survive_a_process_restart(tmp_path: Path, scenario
     assert restored.task.usage.model_copy(update={"active_time_s": 0}) == expected.task.usage.model_copy(
         update={"active_time_s": 0}
     )
-    assert restored.task.outcome == expected.task.outcome
+    # Ответ и ошибка прямой команды содержат пути временной папки прогона: в сравнении она тоже метка.
+    assert _without_root(restored.task.outcome, root) == _without_root(expected.task.outcome, reference.root)
+
+
+def _without_root(outcome: TaskOutcome | None, root: str) -> TaskOutcome | None:
+    if outcome is None:
+        return None
+    error = outcome.error
+    return outcome.model_copy(
+        update={
+            "answer": outcome.answer.replace(root, "{root}") if outcome.answer else outcome.answer,
+            "error": error.model_copy(update={"message": error.message.replace(root, "{root}")})
+            if error
+            else None,
+        }
+    )
 
 
 def test_killed_process_leaves_an_interrupted_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

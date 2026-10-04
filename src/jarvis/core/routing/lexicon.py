@@ -123,8 +123,6 @@ SEARCH_EXTENSIONS = frozenset(
     }
 )  # fmt: skip
 
-# Разговорные имена процессов: «покажи процессы питон».
-PROCESS_ALIASES = {"питон": "python", "пайтон": "python", "хром": "chrome", "нода": "node"}
 # Слова, которые не являются именем процесса в «покажи процессы …».
 PROCESS_STOP_WORDS = frozenset(
     {

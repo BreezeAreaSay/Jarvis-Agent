@@ -31,6 +31,7 @@ from jarvis.domain.task import Origin, TaskRequest, TaskSnapshot
 from jarvis.domain.tools import ToolOutcome, ToolOutcomeKind
 from jarvis.domain.trace import EventKind, TraceEvent
 from jarvis.evals.models import ScriptedModel
+from jarvis.evals.routing import RoutingDataset, RoutingReport, run_routing
 from jarvis.evals.scenario import (
     TOOL_EVENTS,
     ClientRules,
@@ -64,16 +65,21 @@ class EvalReport(BaseModel, frozen=True):
     mode: str = "scripted"
     started_at: datetime
     results: list[ScenarioResult]
+    routing: list[RoutingReport] = []  # наборы фраз Router
 
     @property
     def passed(self) -> bool:
-        return all(result.passed for result in self.results)
+        return all(result.passed for result in self.results) and all(item.passed for item in self.routing)
 
 
-async def run_scenarios(scenarios: Sequence[Scenario], config: JarvisConfig) -> EvalReport:
+async def run_scenarios(
+    scenarios: Sequence[Scenario], config: JarvisConfig, routing: Sequence[RoutingDataset] = ()
+) -> EvalReport:
     started_at = datetime.now(UTC)
     results = [await run_scenario(scenario, config) for scenario in scenarios]
-    return EvalReport(started_at=started_at, results=results)
+    return EvalReport(
+        started_at=started_at, results=results, routing=[run_routing(dataset) for dataset in routing]
+    )
 
 
 async def run_scenario(

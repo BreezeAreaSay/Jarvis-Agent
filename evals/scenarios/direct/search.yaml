@@ -1,0 +1,15 @@
+# Прямая команда: поиск по расширению в рабочей папке.
+id: direct.search
+category: direct
+input: "найди все pdf"
+files:
+  report.pdf: "%PDF"
+  notes.txt: "заметки"
+  scans/march.pdf: "%PDF"
+model: {replies: []}
+expect:
+  status: COMPLETED
+  strategy: direct
+  intent: fs.search
+  usage: {model_calls: 0}
+  answer_contains: ["Найдено 2", "report.pdf", "scans/march.pdf"]

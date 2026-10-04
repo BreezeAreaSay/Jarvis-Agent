@@ -21,8 +21,10 @@ from jarvis.domain.errors import (
     TaskNotFound,
 )
 from jarvis.domain.ids import TaskId, child_number
+from jarvis.domain.intents import EntityKind, ResolvedEntity
 from jarvis.domain.lease import Lease
 from jarvis.domain.models import ChatMessage, ModelCallRecord, ModelRole
+from jarvis.domain.routing import RouteDecision, RoutingLevel
 from jarvis.domain.settings import BudgetsSettings
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Origin, Route, Task, TaskOutcome, TaskRequest
@@ -107,6 +109,15 @@ def test_task_round_trip_keeps_every_field(storage: Storage) -> None:
             "version": 2,
             "status": TaskStatus.FAILED,
             "route": Route.AGENT,
+            "routing": RouteDecision(
+                strategy=Route.AGENT,
+                level=RoutingLevel.LOCAL,
+                entities=[
+                    ResolvedEntity(kind=EntityKind.APP, value="telegram", label="«Telegram»", source="x")
+                ],
+                rules=["agent.default", "direct.reject.question"],
+                reason="прямой команды нет",
+            ),
             "usage": BudgetUsage(steps=3, active_time_s=1.25, model_tokens=900),
             "outcome": TaskOutcome(
                 status=TaskStatus.FAILED,

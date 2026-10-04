@@ -1,0 +1,17 @@
+# Два приложения с одним алиасом: Router не выбирает наугад, а спрашивает человека.
+id: direct.clarify
+category: direct
+input: "запусти питон"
+inventory:
+  apps:
+    - {id: python-3-12, name: "Python 3.12", aliases: [питон], target: "C:/Apps/Python312.lnk", kind: shortcut}
+    - {id: python-3-13, name: "Python 3.13", aliases: [питон], target: "C:/Apps/Python313.lnk", kind: shortcut}
+model: {replies: []}
+expect:
+  status: COMPLETED
+  transitions: [ROUTING, COMPLETED]
+  strategy: clarify
+  route_rules: [inventory.app.ambiguous]
+  launched: []
+  usage: {model_calls: 0, tool_calls: 0}
+  answer_contains: ["Какое приложение открыть", "«Python 3.12»", "«Python 3.13»"]

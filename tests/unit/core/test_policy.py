@@ -9,6 +9,7 @@ from jarvis.domain.ids import TaskId
 from jarvis.domain.tools import (
     EffectKind,
     ExecutionTarget,
+    Invoker,
     PolicyOutcome,
     TargetKind,
     ToolCall,
@@ -30,7 +31,10 @@ ALLOW, DENY, ASK = PolicyOutcome.ALLOW, PolicyOutcome.DENY, PolicyOutcome.REQUIR
 
 
 def decide(
-    *effects: tuple[EffectKind, str], target: ExecutionTarget = HOST, zones: PolicyZones = ZONES
+    *effects: tuple[EffectKind, str],
+    target: ExecutionTarget = HOST,
+    zones: PolicyZones = ZONES,
+    invoker: Invoker = Invoker.MODEL,
 ) -> tuple[PolicyOutcome, list[str]]:
     call = ToolCall(
         id=ToolCallId("task_1.call_1"),
@@ -38,6 +42,7 @@ def decide(
         tool_id=ToolId("t"),
         arguments={},
         target=target,
+        invoker=invoker,
     )
     preview = ToolPreview(
         summary="s",
@@ -210,3 +215,66 @@ def test_a_call_with_side_effects_is_never_allowed_without_a_human(
     признака «задача заражена» нет (ADR 0006, ADR 0023): он понадобится первому разрешённому эффекту."""
     outcome, _ = decide(*side, *reads)
     assert outcome in (DENY, ASK)
+
+
+# --- LAUNCH (ADR 0030): прямая команда пользователя или предложение модели --------------------------
+
+DIRECT, MODEL = Invoker.DIRECT, Invoker.MODEL
+
+
+@pytest.mark.parametrize(
+    ("resource", "invoker", "outcome", "rule"),
+    [
+        ("app:telegram", DIRECT, ALLOW, "launch.app.direct"),
+        ("app:telegram", MODEL, ASK, "launch.app.model"),
+        ("url:https://github.com", DIRECT, ALLOW, "launch.url.direct"),
+        ("url:https://github.com", MODEL, ASK, "launch.url.model"),
+        ("url:file:///etc/passwd", DIRECT, DENY, "launch.url.scheme"),
+        ("url:javascript:alert(1)", DIRECT, DENY, "launch.url.scheme"),
+        ("url:http://user:pass@evil.com", DIRECT, DENY, "launch.url.scheme"),
+        ("/home/u/docs", DIRECT, ALLOW, "launch.folder.direct"),
+        ("/home/u/docs", MODEL, ASK, "launch.folder.model"),
+        ("/home/u/.ssh", DIRECT, ASK, "zone.secrets.launch"),
+        ("/home/u/.ssh", MODEL, ASK, "zone.secrets.launch"),
+        ("/home/u/.local/share/jarvis", DIRECT, DENY, "zone.internal"),
+        ("/home/u/.local/share/jarvis/data", MODEL, DENY, "zone.internal"),
+        ("docs", DIRECT, DENY, "launch.unknown"),
+        ("cmd.exe", DIRECT, DENY, "launch.unknown"),
+        ("cmd.exe /c del *", DIRECT, DENY, "path.unsupported_form"),
+        ("C:/Windows/System32/cmd.exe", DIRECT, DENY, "path.unsupported_form"),
+    ],
+)
+def test_launch_depends_on_who_proposed_it(
+    resource: str, invoker: Invoker, outcome: PolicyOutcome, rule: str
+) -> None:
+    assert decide((EffectKind.LAUNCH, resource), invoker=invoker) == (outcome, [rule])
+
+
+def test_a_direct_launch_does_not_cover_other_effects_of_the_same_call() -> None:
+    outcome, rules = decide(
+        (EffectKind.LAUNCH, "app:telegram"), (EffectKind.WRITE, "/home/u/docs/a.txt"), invoker=DIRECT
+    )
+    assert outcome is DENY
+    assert "effect.write.outside" in rules
+
+
+@given(
+    st.lists(st.tuples(st.sampled_from(SIDE_EFFECTS), RESOURCES), min_size=1, max_size=4),
+    st.lists(st.tuples(st.just(EffectKind.READ), RESOURCES), max_size=3),
+)
+def test_a_side_effect_proposed_by_a_model_is_never_allowed(
+    side: list[tuple[EffectKind, str]], reads: list[tuple[EffectKind, str]]
+) -> None:
+    """ADR 0030: побочный эффект, предложенный моделью, без человека не исполняется никогда — LAUNCH
+    из инвентаря тоже."""
+    launches = [(EffectKind.LAUNCH, resource) for resource in ("app:telegram", "url:https://ya.ru")]
+    outcome, _ = decide(*side, *launches[: len(side) % 3], *reads, invoker=MODEL)
+    assert outcome in (DENY, ASK)
+
+
+@given(st.lists(st.tuples(st.sampled_from(SIDE_EFFECTS), RESOURCES), min_size=1, max_size=4))
+def test_a_direct_command_allows_only_a_launch(side: list[tuple[EffectKind, str]]) -> None:
+    """Прямой команде без человека разрешён только LAUNCH; любой другой побочный эффект — как прежде."""
+    outcome, _ = decide(*side, invoker=DIRECT)
+    if any(kind is not EffectKind.LAUNCH for kind, _ in side):
+        assert outcome in (DENY, ASK)

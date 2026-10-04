@@ -90,7 +90,7 @@ async def test_waiting_confirmation_blocks_the_run() -> None:
 
 async def test_route_decision_starts_the_route_budget_from_zero() -> None:
     app, _ = scripted(
-        step(S.ROUTING, S.PLANNING, route="agent", charge={"model_calls": 3, "model_tokens": 500}),
+        step(S.ROUTING, S.PLANNING, route="agent", failures=1),
         step(S.PLANNING, S.FAILED, reason="стоп"),
     )
     task_id = app.tasks.submit(request())
@@ -98,6 +98,14 @@ async def test_route_decision_starts_the_route_budget_from_zero() -> None:
 
     assert snapshot.usage == BudgetUsage()  # расход маршрутизации учтён в её собственном бюджете
     assert snapshot.budget == JarvisConfig().budgets.agent
+
+
+async def test_routing_cannot_call_a_model() -> None:
+    """Router детерминированный (ADR 0026): у маршрутизации нулевой бюджет вызовов модели."""
+    app, _ = scripted(step(S.ROUTING, S.PLANNING, route="agent", charge={"model_calls": 1}))
+    task_id = app.tasks.submit(request())
+    snapshot = await app.tasks.run_until_blocked(task_id)
+    assert snapshot.status is S.BUDGET_EXCEEDED
 
 
 async def test_verifying_can_fail_the_task() -> None:

@@ -15,15 +15,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from jarvis.adapters.clock import SystemClock
+from jarvis.adapters.inventory import system_inventory
 from jarvis.adapters.memory import InMemoryStorage
 from jarvis.adapters.models import OpenAICompatibleBackend
 from jarvis.adapters.sqlite import SqliteStorage
-from jarvis.adapters.tools import HOST, OS_FAMILY, builtin_tools
+from jarvis.adapters.tools import HOST, OS_FAMILY, builtin_tools, host_tools, system_launcher
 from jarvis.core.agent.stages import agent_stages
 from jarvis.core.approvals import Approvals
 from jarvis.core.leases import Leases
 from jarvis.core.models.gateway import ModelGateway
 from jarvis.core.policy import PolicyEngine, PolicyZones
+from jarvis.core.routing.router import Router
 from jarvis.core.runner import StageHandler, TaskRunner
 from jarvis.core.service import TaskService
 from jarvis.core.tools.registry import ToolRegistry
@@ -34,6 +36,8 @@ from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.tools import ExecutionTarget
 from jarvis.ports.clock import Clock
+from jarvis.ports.inventory import Inventory
+from jarvis.ports.launcher import Launcher
 from jarvis.ports.models import ModelBackend
 from jarvis.ports.tools import Tool
 
@@ -86,6 +90,11 @@ def model_backends(config: JarvisConfig) -> dict[ModelRole, ModelBackend]:
     }
 
 
+def read_only_tools() -> list[Tool]:
+    """Встроенные инструменты только для чтения — набор, на котором снят бенчмарк модели (ADR 0025)."""
+    return builtin_tools()
+
+
 def database_path(home: Path) -> Path:
     """База лежит в данных Jarvis: JARVIS_HOME/data/jarvis.db."""
     return home / "data" / "jarvis.db"
@@ -136,21 +145,29 @@ def build_app(
     extra_tools: Sequence[Tool] = (),
     zones: PolicyZones | None = None,
     target: ExecutionTarget | None = None,
+    inventory: Inventory | None = None,
+    launcher: Launcher | None = None,
+    direct_commands: bool = True,
     home: Path | None = None,
     config_file: Path | None = None,
 ) -> App:
     """`stages` не задан — задачу ведёт агент, модели — `models` или из конфига (ConfigError, если
     модель не подходит роли). `home` — JARVIS_HOME: его данные недоступны инструментам. `tools` по
     умолчанию — встроенные; `extra_tools` добавляются к ним (инструменты eval). `target` и `zones` по
-    умолчанию — этот компьютер; тесты с фейковыми инструментами задают их явно, чтобы не зависеть от ОС."""
+    умолчанию — этот компьютер; тесты с фейковыми инструментами задают их явно, чтобы не зависеть от ОС.
+    `inventory` и `launcher` — приложения и папки для прямых команд и способ их открыть (по умолчанию —
+    этого компьютера); `direct_commands=False` — Router отдаёт всё агенту (бенчмарк модели)."""
     storage = storage if storage is not None else InMemoryStorage()
     clock = clock if clock is not None else SystemClock()
     owner = owner if owner is not None else process_owner()
     zones = zones if zones is not None else host_zones(config, home=home, config_file=config_file)
     tracer = Tracer(storage.ids, clock)
     leases = Leases(uow=storage.unit_of_work, clock=clock, owner=owner, ttl_s=config.runtime.lease_ttl_s)
+    inventory = inventory if inventory is not None else system_inventory()
+    if tools is None:
+        tools = host_tools(inventory, launcher if launcher is not None else system_launcher)
     runtime = ToolRuntime(
-        registry=ToolRegistry([*(builtin_tools() if tools is None else tools), *extra_tools]),
+        registry=ToolRegistry([*tools, *extra_tools]),
         policy=PolicyEngine(zones),
         uow=storage.unit_of_work,
         tracer=tracer,
@@ -169,7 +186,13 @@ def build_app(
             clock=clock,
             repair_attempts=config.models.repair_attempts,
         )
-        stages = agent_stages(gateway=gateway, tools=runtime, uow=storage.unit_of_work, tracer=tracer)
+        stages = agent_stages(
+            gateway=gateway,
+            tools=runtime,
+            router=Router(inventory, direct=direct_commands),
+            uow=storage.unit_of_work,
+            tracer=tracer,
+        )
     runner = TaskRunner(
         stages=stages(runtime) if callable(stages) else stages,
         uow=storage.unit_of_work,

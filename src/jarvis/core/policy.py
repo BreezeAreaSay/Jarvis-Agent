@@ -1,7 +1,11 @@
-"""Policy Engine v1 (04-security.md §2): чистая функция от вызова, его preview и зон.
+"""Policy Engine v1 (04-security.md §2, ADR 0022, ADR 0030): чистая функция от вызова, его preview и зон.
 
 Решение не зависит ни от содержимого, прочитанного раньше, ни от текста модели: права не выводятся
 из данных. Самое строгое правило среди всех эффектов вызова побеждает: DENY > REQUIRE_APPROVAL > ALLOW.
+
+Единственный побочный эффект, который может пройти без человека, — LAUNCH (открыть приложение из
+инвентаря, http(s)-адрес, папку) по прямой команде пользователя. Тот же LAUNCH, предложенный моделью,
+требует подтверждения: побочный эффект, предложенный моделью, без человека не исполняется никогда.
 """
 
 import fnmatch
@@ -10,6 +14,7 @@ from dataclasses import dataclass
 from jarvis.domain.paths import OsFamily, is_absolute, is_within, name_of, unsupported_form
 from jarvis.domain.tools import (
     EffectKind,
+    Invoker,
     PolicyDecision,
     PolicyOutcome,
     TargetKind,
@@ -17,6 +22,7 @@ from jarvis.domain.tools import (
     ToolEffect,
     ToolPreview,
 )
+from jarvis.domain.urls import is_web_url
 
 _FORBIDDEN = {
     EffectKind.DELETE: "удаление в Session 3 не поддерживается",
@@ -25,6 +31,10 @@ _FORBIDDEN = {
     EffectKind.SYSTEM_CHANGE: "изменение системы запрещено",
 }
 _RANK = {PolicyOutcome.ALLOW: 0, PolicyOutcome.REQUIRE_APPROVAL: 1, PolicyOutcome.DENY: 2}
+
+# Ресурсы эффекта LAUNCH (ADR 0030): приложение из инвентаря, веб-адрес; папка — канонический путь.
+APP_RESOURCE = "app:"
+URL_RESOURCE = "url:"
 
 
 @dataclass(frozen=True)
@@ -78,12 +88,14 @@ class PolicyEngine:
             )
         if not preview.effects:
             return PolicyDecision(outcome=PolicyOutcome.ALLOW, rules=["effect.none"], reason="без эффектов")
-        verdicts = [self._effect(effect) for effect in preview.effects]
+        verdicts = [self._effect(effect, call.invoker) for effect in preview.effects]
         worst = max(verdicts, key=lambda verdict: _RANK[verdict[0]])
         rules = sorted({rule for _, rule, _ in verdicts})
         return PolicyDecision(outcome=worst[0], rules=rules, reason=worst[2])
 
-    def _effect(self, effect: ToolEffect) -> tuple[PolicyOutcome, str, str]:
+    def _effect(self, effect: ToolEffect, invoker: Invoker) -> tuple[PolicyOutcome, str, str]:
+        if effect.kind is EffectKind.LAUNCH:
+            return self._launch(effect.resource, invoker)
         zones, resource = self._zones, effect.resource
         path_like = _looks_like_path(resource)
         if path_like and (
@@ -122,3 +134,46 @@ class PolicyEngine:
                 f"чтение вне разрешённых папок требует подтверждения: {resource}",
             )
         return PolicyOutcome.ALLOW, "effect.read", "чтение разрешено"
+
+    def _launch(self, resource: str, invoker: Invoker) -> tuple[PolicyOutcome, str, str]:
+        """LAUNCH: только приложение из инвентаря, http(s)-адрес или папка вне внутренних зон."""
+        zones = self._zones
+        if resource.startswith(APP_RESOURCE):
+            what, kind = f"запуск приложения {resource.removeprefix(APP_RESOURCE)}", "app"
+        elif resource.startswith(URL_RESOURCE):
+            if not is_web_url(resource.removeprefix(URL_RESOURCE)):
+                return (
+                    PolicyOutcome.DENY,
+                    "launch.url.scheme",
+                    f"открывать можно только http(s)-адреса: {resource}",
+                )
+            what, kind = f"открыть {resource.removeprefix(URL_RESOURCE)}", "url"
+        elif _looks_like_path(resource):
+            if unsupported_form(resource, zones.os_family) or not is_absolute(resource, zones.os_family):
+                return (
+                    PolicyOutcome.DENY,
+                    "path.unsupported_form",
+                    f"форма пути не поддерживается: {resource}",
+                )
+            if zones.is_internal(resource):
+                return (
+                    PolicyOutcome.DENY,
+                    "zone.internal",
+                    f"данные Jarvis недоступны инструментам: {resource}",
+                )
+            if zones.is_secret(resource):
+                return (
+                    PolicyOutcome.REQUIRE_APPROVAL,
+                    "zone.secrets.launch",
+                    f"открыть папку с секретами — только с подтверждением: {resource}",
+                )
+            what, kind = f"открыть папку {resource}", "folder"
+        else:
+            return PolicyOutcome.DENY, "launch.unknown", f"запускать можно только известное: {resource}"
+        if invoker is Invoker.DIRECT:
+            return PolicyOutcome.ALLOW, f"launch.{kind}.direct", f"{what}: прямая команда пользователя"
+        return (
+            PolicyOutcome.REQUIRE_APPROVAL,
+            f"launch.{kind}.model",
+            f"{what}: предложено моделью — нужно подтверждение человека",
+        )

@@ -20,20 +20,21 @@ from pydantic import (
 
 from jarvis.domain.budget import Budget
 from jarvis.domain.models import ModelCapabilities, ModelRole
-from jarvis.domain.task import Route
+from jarvis.domain.routing import Route
 
 
 class BudgetsSettings(BaseModel, frozen=True, extra="forbid"):
     """Стартовые значения из 02-domain.md §4; уточняются по eval."""
 
+    # Router детерминированный (ADR 0026): у фазы маршрутизации нет вызовов модели вовсе.
     routing: Budget = Budget(
         max_steps=0,
         max_tool_calls=0,
         max_failures=1,
         max_replans=0,
         max_wall_time_s=10,
-        max_model_calls=3,
-        max_model_tokens=8_000,
+        max_model_calls=0,
+        max_model_tokens=0,
     )
     direct: Budget = Budget(
         max_steps=1,

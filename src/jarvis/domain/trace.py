@@ -30,6 +30,7 @@ class EventKind(StrEnum):
     TOOL_VERIFIED = "tool.verified"
     MODEL_CALLED = "model.called"
     ACTION_PROPOSED = "action.proposed"
+    ROUTE_DECIDED = "route.decided"  # решение Router: стратегия, интент, сущности, правила
 
 
 class TraceEvent(BaseModel, frozen=True, extra="forbid"):

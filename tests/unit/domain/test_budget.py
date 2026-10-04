@@ -37,7 +37,7 @@ def test_every_limit_maps_to_its_fields(limit: BudgetLimit, maximum: float, valu
 
 def test_default_budgets_match_the_specification_table() -> None:
     table = {
-        "routing": (0, 0, 1, 0, 10, 3, 8_000),
+        "routing": (0, 0, 1, 0, 10, 0, 0),  # Router без модели (ADR 0026)
         "direct": (1, 3, 1, 0, 15, 0, 0),
         "chat": (1, 0, 1, 0, 60, 3, 16_000),
         "agent": (20, 30, 5, 3, 300, 60, 250_000),

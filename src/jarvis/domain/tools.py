@@ -45,6 +45,16 @@ class EffectKind(StrEnum):
     PROCESS_CONTROL = "process_control"
     NETWORK = "network"
     SYSTEM_CHANGE = "system_change"
+    # Открыть что-то в интерфейсе, не меняя данных: приложение из инвентаря, http(s)-адрес, папку
+    # (ADR 0030). Запуск произвольного файла или команды — не LAUNCH.
+    LAUNCH = "launch"
+
+
+class Invoker(StrEnum):
+    """Кто вызывает инструмент — вход политики (ADR 0030)."""
+
+    DIRECT = "direct"  # прямая команда пользователя, распознанная Router без модели
+    MODEL = "model"  # агентный цикл: действие предложила модель
 
 
 class ToolEffect(BaseModel, frozen=True, extra="forbid"):
@@ -89,6 +99,7 @@ class ToolCall(BaseModel, frozen=True, extra="forbid"):
     tool_id: ToolId
     arguments: dict[str, JsonValue]  # как пришли от стадии; проверяет input_model инструмента
     target: ExecutionTarget
+    invoker: Invoker = Invoker.MODEL  # по умолчанию — самый строгий случай
 
 
 class ToolPreview(BaseModel, frozen=True, extra="forbid"):

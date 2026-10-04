@@ -14,6 +14,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, JsonValue
 
+from jarvis.adapters.inventory import StaticInventory
 from jarvis.adapters.memory import InMemoryStorage
 from jarvis.app.composition import App, Storage, build_app, host_zones
 from jarvis.config import with_overrides
@@ -22,6 +23,7 @@ from jarvis.domain.agent import AgentState
 from jarvis.domain.approvals import ApprovalStatus
 from jarvis.domain.budget import BudgetUsage
 from jarvis.domain.ids import TaskId
+from jarvis.domain.inventory import KnownFolder
 from jarvis.domain.models import BackendRequest, ModelCapabilities, ModelRole
 from jarvis.domain.settings import JarvisConfig
 from jarvis.domain.states import TaskStatus
@@ -29,9 +31,18 @@ from jarvis.domain.task import Origin, TaskRequest, TaskSnapshot
 from jarvis.domain.tools import ToolOutcome, ToolOutcomeKind
 from jarvis.domain.trace import EventKind, TraceEvent
 from jarvis.evals.models import ScriptedModel
-from jarvis.evals.scenario import TOOL_EVENTS, ClientRules, Expectation, ModelScript, Scenario, ScriptStep
+from jarvis.evals.scenario import (
+    TOOL_EVENTS,
+    ClientRules,
+    Expectation,
+    ModelScript,
+    Scenario,
+    ScenarioInventory,
+    ScriptStep,
+)
 from jarvis.evals.scripted import ScriptedStages
 from jarvis.evals.tools import SleepTool
+from jarvis.ports.launcher import LaunchTarget
 
 SCENARIO_TIMEOUT_S = 30.0
 APPROVAL_ROUNDS = 5  # сколько раз авто-клиент отвечает на запросы подтверждения в одном сценарии
@@ -84,6 +95,7 @@ async def run_scenario(
         hung = asyncio.Event()  # шаг завис или инструмент eval начал ждать — клиент может отменять
         script = ScriptedStages([machine.bind(step) for step in scenario.script or []], hung=hung)
         model = _model(scenario.model, machine, hung) if scenario.model is not None else None
+        launched: list[LaunchTarget] = []  # eval ничего не запускает: запуск только записывается
         app = build_app(
             config,
             stages=script.handlers if model is None else None,
@@ -92,6 +104,8 @@ async def run_scenario(
             home=machine.home,
             zones=host_zones(config, home=machine.home, user_home=machine.user),
             extra_tools=[SleepTool(hung)],
+            inventory=machine.inventory(scenario.inventory),
+            launcher=launched.append,
         )
         request = TaskRequest(
             text=scenario.input,
@@ -117,6 +131,7 @@ async def run_scenario(
         ]
         problems.extend(_check(scenario.expect, snapshot, transitions, events))
         problems.extend(_check_tools(scenario.expect, events, script.outcomes, machine.workspace))
+        problems.extend(_check_route(scenario.expect, snapshot, launched, machine.root))
         if model is not None:
             with storage.unit_of_work() as uow:
                 state = uow.tasks.get(task_id).state or AgentState()
@@ -160,6 +175,15 @@ class Machine:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8", newline="\n")  # одинаковые байты на любой ОС
         return machine
+
+    def inventory(self, spec: ScenarioInventory) -> StaticInventory:
+        """Инвентарь сценария: известные папки — внутри его домашней папки пользователя (создаются)."""
+        folders: dict[KnownFolder, str] = {}
+        for folder, relative in spec.folders.items():
+            path = self.user / relative
+            path.mkdir(parents=True, exist_ok=True)
+            folders[folder] = str(path)
+        return StaticInventory(spec.apps, default_browser=spec.default_browser, folders=folders)
 
     def bind(self, step: ScriptStep) -> ScriptStep:
         """Подставить пути этого «компьютера» в аргументы вызова."""
@@ -266,6 +290,28 @@ def _check_tools(
         found = [_relative(path, workspace) for path in _paths(output)]
         if found != expect.found:
             problems.append(f"найдено {found}, ожидалось {expect.found}")
+    return problems
+
+
+def _check_route(
+    expect: Expectation, snapshot: TaskSnapshot, launched: list[LaunchTarget], root: Path
+) -> list[str]:
+    problems: list[str] = []
+    routing = snapshot.routing
+    if expect.strategy is not None and (routing is None or routing.strategy is not expect.strategy):
+        problems.append(
+            f"решение Router {routing.strategy if routing else None}, ожидалось {expect.strategy}"
+        )
+    if expect.intent is not None and (routing is None or routing.intent is not expect.intent):
+        problems.append(f"намерение {routing.intent if routing else None}, ожидалось {expect.intent}")
+    if expect.route_rules is not None:
+        missing = sorted(set(expect.route_rules) - set(routing.rules if routing else []))
+        if missing:
+            problems.append(f"в решении Router нет правил {missing}: {routing.rules if routing else None}")
+    if expect.launched is not None:
+        actual = [f"{target.kind}:{_relative(target.value, root)}" for target in launched]
+        if actual != expect.launched:
+            problems.append(f"запущено {actual}, ожидалось {expect.launched}")
     return problems
 
 

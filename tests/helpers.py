@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from jarvis.adapters.clock import ManualClock
+from jarvis.adapters.inventory import StaticInventory
 from jarvis.adapters.memory import InMemoryStorage
 from jarvis.app.composition import SECRET_NAMES, App, Stages, StagesFactory, build_app
 from jarvis.core.policy import PolicyZones
@@ -21,11 +22,12 @@ from tests.fakes import FakeTool
 
 S = TaskStatus
 
-# Цель и зоны тестов с фейковыми инструментами: POSIX на любой ОС хоста. Пути фейков («/keys/a.pem») и
-# решения политики по ним не зависят от того, где идут тесты; настоящие пути проверяют интеграционные тесты.
+# Цель, зоны и инвентарь тестов с фейковыми инструментами: POSIX на любой ОС хоста, без приложений и
+# папок этого компьютера. Пути фейков («/keys/a.pem»), решения политики и Router не зависят от того, где
+# идут тесты; настоящие пути и инвентарь проверяют интеграционные тесты.
 TEST_TARGET = ExecutionTarget(kind=TargetKind.HOST, os_family="posix", name="test")
 TEST_ZONES = PolicyZones(os_family="posix", secret_names=SECRET_NAMES)
-FAKE_HOST = {"target": TEST_TARGET, "zones": TEST_ZONES}
+FAKE_HOST = {"target": TEST_TARGET, "zones": TEST_ZONES, "inventory": StaticInventory()}
 
 # Инструмент, чей вызов всегда требует подтверждения: читает файл с именем секрета.
 APPROVAL_TOOL = "test.secret"
@@ -70,8 +72,7 @@ def make_app(
         storage=storage if storage is not None else InMemoryStorage(),
         clock=clock if clock is not None else ManualClock(),
         tools=tools if tools is not None else [approval_tool()],
-        target=TEST_TARGET,
-        zones=TEST_ZONES,
+        **FAKE_HOST,
     )
 
 

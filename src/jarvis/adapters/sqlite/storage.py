@@ -26,13 +26,14 @@ from jarvis.domain.errors import ApprovalNotFound, ConcurrentModification, Stora
 from jarvis.domain.ids import ChildKind, TaskId, child_id, child_number, task_id, task_number
 from jarvis.domain.lease import Lease
 from jarvis.domain.models import ModelCallRecord
+from jarvis.domain.routing import Route, RouteDecision
 from jarvis.domain.states import TaskStatus
-from jarvis.domain.task import Route, Task, TaskOutcome, TaskRequest
+from jarvis.domain.task import Task, TaskOutcome, TaskRequest
 from jarvis.domain.trace import EventKind, TraceEvent
 
 _TASK_COLUMNS = (
     "id, version, status, route, request_json, budget_json, usage_json, outcome_json, state_json, "
-    "created_at, updated_at"
+    "routing_json, created_at, updated_at"
 )
 
 
@@ -273,7 +274,7 @@ class SqliteUnitOfWork:
             final = tasks.saved[key][0] if key in tasks.saved else task
             try:
                 conn.execute(
-                    f"INSERT INTO tasks (seq, {_TASK_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    f"INSERT INTO tasks (seq, {_TASK_COLUMNS}) VALUES ({', '.join('?' * 13)})",
                     (task_number(final.id), *_task_row(final)),
                 )
             except sqlite3.IntegrityError:
@@ -284,7 +285,8 @@ class SqliteUnitOfWork:
             row = _task_row(task)
             changed = conn.execute(
                 "UPDATE tasks SET version = ?, status = ?, route = ?, request_json = ?, budget_json = ?, "
-                "usage_json = ?, outcome_json = ?, state_json = ?, created_at = ?, updated_at = ? "
+                "usage_json = ?, outcome_json = ?, state_json = ?, routing_json = ?, created_at = ?, "
+                "updated_at = ? "
                 "WHERE id = ? AND version = ?",
                 (*row[1:], key, expected),
             ).rowcount
@@ -412,13 +414,14 @@ def _task_row(task: Task) -> tuple[object, ...]:
         task.usage.model_dump_json(),
         task.outcome.model_dump_json() if task.outcome else None,
         task.state.model_dump_json() if task.state else None,
+        task.routing.model_dump_json() if task.routing else None,
         task.created_at.isoformat(),
         task.updated_at.isoformat(),
     )
 
 
 def _task_from(row: tuple[object, ...]) -> Task:
-    key, version, status, route, request, budget, usage, outcome, state, created, updated = row
+    key, version, status, route, request, budget, usage, outcome, state, routing, created, updated = row
     return Task(
         id=TaskId(str(key)),
         version=int(str(version)),
@@ -429,6 +432,7 @@ def _task_from(row: tuple[object, ...]) -> Task:
         usage=BudgetUsage.model_validate_json(str(usage)),
         outcome=TaskOutcome.model_validate_json(str(outcome)) if outcome is not None else None,
         state=AgentState.model_validate_json(str(state)) if state is not None else None,
+        routing=RouteDecision.model_validate_json(str(routing)) if routing is not None else None,
         created_at=datetime.fromisoformat(str(created)),
         updated_at=datetime.fromisoformat(str(updated)),
     )

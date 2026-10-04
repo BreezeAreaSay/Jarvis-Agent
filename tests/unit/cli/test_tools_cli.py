@@ -27,14 +27,18 @@ def test_tools_lists_every_builtin_tool_sorted() -> None:
     assert code == 0
     ids = [line.split()[0] for line in output.splitlines()]
     assert ids == [
+        "app.launch",
         "filesystem.list",
         "filesystem.read_text",
         "filesystem.search",
         "filesystem.stat",
+        "folder.open",
         "process.list",
         "system.cwd",
+        "url.open",
     ]
     assert "system.cwd             нет" in output
+    assert "url.open               launch" in output
 
 
 def test_show_prints_the_definition_and_schemas() -> None:

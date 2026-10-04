@@ -36,8 +36,20 @@ def configure(home: Path, stub: LlmStub, **options: Any) -> None:
 
 def test_run_without_a_model_explains_the_setup(home: Path) -> None:
     result = CliRunner().invoke(app, ["run", "привет"])
-    assert result.exit_code == 2
-    assert "Модель не настроена" in result.output
+    assert result.exit_code == 1
+    assert "· маршрут: agent (local)" in result.output
+    assert "config: роли executor не назначена модель" in result.output
+    assert "docs/development.md" in result.output
+
+
+def test_a_direct_command_runs_without_a_model(home: Path) -> None:
+    result = CliRunner().invoke(app, ["run", "покажи", "файлы", "в", "папке", "docs"])
+    assert result.exit_code == 0, result.output
+    assert "· маршрут: direct fs.list «docs»" in result.output
+    assert "· filesystem.list — прямая команда, без модели" in result.output
+    assert "filesystem.list: succeeded" in result.output
+    assert "docs — 0 элементов" in result.output or "пуста" in result.output
+    assert "вызовов модели 0" in result.output
 
 
 def test_run_lets_the_model_use_tools_and_answer(home: Path) -> None:

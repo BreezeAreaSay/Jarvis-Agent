@@ -1,28 +1,29 @@
-"""Стадии агента (02-domain.md §3, ADR 0009, ADR 0023).
+"""Стадии задачи Architecture V2 (02-domain.md §3, ADR 0009, ADR 0023, ADR 0026).
 
-Первый путь, где задачу ведёт модель:
+    запрос → ROUTING: Router решает стратегию без модели
+        DIRECT  → EXECUTING: прямая команда (инструмент без модели) → VERIFYING → COMPLETED
+        CLARIFY → COMPLETED с уточняющим вопросом
+        AGENT   → PLANNING (плана нет) → EXECUTING ⟲ → VERIFYING → COMPLETED
 
-    запрос → ROUTING (маршрут agent) → PLANNING (плана пока нет) → EXECUTING ⟲ → VERIFYING → COMPLETED
-
-На каждом такте EXECUTING исполнитель просит модель (через Model Gateway) об одном действии. Модель
-отвечает только проверенным JSON: вызов инструмента или ответ. Вызов уходит в Tool Runtime — с
+На каждом такте агентного EXECUTING исполнитель просит модель (через Model Gateway) об одном действии.
+Модель отвечает только проверенным JSON: вызов инструмента или ответ. Вызов уходит в Tool Runtime — с
 preview, политикой, подтверждением, проверкой и аудитом; модель не получает к компьютеру никакого
 другого пути. Итог вызова становится наблюдением в рабочей памяти задачи, и на следующем такте
 модель видит его блоком DATA. Ответ проверяется детерминированно: ссылаться можно только на
-исполненные вызовы этой задачи.
-
-Маршрутизатор (M7) и планировщик (M8) появятся своими milestone; до тех пор ROUTING и PLANNING
-переходят дальше без модели и пишут в трассе, почему.
+исполненные вызовы этой задачи. Планировщика на модели нет (ADR 0026): PLANNING — проходная стадия.
 """
 
-import json
+from collections.abc import Mapping
 
 from pydantic import JsonValue
 
 from jarvis.core.agent.actions import decision_output
 from jarvis.core.agent.context import executor_prompt
+from jarvis.core.agent.observations import failed_observation, observation_of
 from jarvis.core.budget import BudgetMeter
+from jarvis.core.direct.stage import DirectStage
 from jarvis.core.models.gateway import ModelGateway
+from jarvis.core.routing.router import Router, RoutingStage
 from jarvis.core.runner import StageHandler
 from jarvis.core.tools.runtime import ToolRuntime
 from jarvis.core.trace import Tracer, shorten
@@ -30,34 +31,26 @@ from jarvis.domain.agent import AgentState, AgentStep, FinishAction, Observation
 from jarvis.domain.budget import BudgetLimit
 from jarvis.domain.errors import (
     InvalidModelOutput,
+    InvalidTransition,
     ModelContextExceeded,
     ToolCancelled,
     ToolError,
     VerificationFailed,
 )
 from jarvis.domain.models import ModelRole
+from jarvis.domain.routing import Route
 from jarvis.domain.states import TaskStatus
-from jarvis.domain.task import Route, StageOutcome, Task, TaskChanges
+from jarvis.domain.task import StageOutcome, Task, TaskChanges
 from jarvis.domain.tools import ToolOutcome, ToolOutcomeKind
 from jarvis.domain.trace import EventKind
 from jarvis.ports.storage import UnitOfWorkFactory
-
-OBSERVATION_BYTES = 6000  # результат вызова в рабочей памяти и промпте; больше — обрезается
-
-
-class AgentRouting:
-    async def handle(self, task: Task, budget: BudgetMeter) -> StageOutcome:
-        return StageOutcome(
-            next_status=TaskStatus.PLANNING,
-            reason="маршрутизатора ещё нет (M7): запрос ведёт агент",
-            changes=TaskChanges(route=Route.AGENT),
-        )
 
 
 class AgentPlanning:
     async def handle(self, task: Task, budget: BudgetMeter) -> StageOutcome:
         return StageOutcome(
-            next_status=TaskStatus.EXECUTING, reason="планировщика ещё нет (M8): агент действует по запросу"
+            next_status=TaskStatus.EXECUTING,
+            reason="планировщика на модели нет (ADR 0026): агент действует по запросу",
         )
 
 
@@ -117,7 +110,7 @@ class Executor:
             raise
         except ToolError as exc:
             budget.record_failure()
-            observation = _failed(exc)
+            observation = failed_observation(exc)
             return _stay(
                 state.with_step(AgentStep(proposal=proposal, observation=observation)), observation.summary
             )
@@ -141,7 +134,7 @@ class Executor:
             raise
         except ToolError as exc:
             budget.record_failure()
-            observation = _failed(exc)
+            observation = failed_observation(exc)
             return _stay(state.with_observation(observation), observation.summary)
         if outcome is None:
             observation = Observation(status="failed", summary="решения по вызову нет: вызов не исполнялся")
@@ -156,36 +149,9 @@ class Executor:
         return _stay(state.with_observation(observation), observation.summary)
 
     def _observe(self, outcome: ToolOutcome, budget: BudgetMeter) -> Observation:
-        tool = outcome.call.tool_id
-        match outcome.kind:
-            case ToolOutcomeKind.EXECUTED:
-                assert outcome.result is not None
-                data, note = _clip(json.dumps(outcome.result.output, ensure_ascii=False))
-                # Прочитанное из зоны секретов (с разрешения человека) не оседает в журналах.
-                secret = any(rule.startswith("zone.secrets") for rule in outcome.decision.rules)
-                return Observation(
-                    status="executed",
-                    summary=f"{tool}: исполнен, проверка пройдена{note}",
-                    data=data,
-                    sensitive=secret,
-                )
-            case ToolOutcomeKind.DRY_RUN:
-                would = "был бы исполнен" if outcome.would_execute else "потребовал бы подтверждения"
-                return Observation(status="dry_run", summary=f"{tool}: dry run — не исполнялся ({would})")
-            case ToolOutcomeKind.DENIED:
-                budget.record_failure()
-                rules = outcome.decision.rules
-                if "approval.expired" in rules:
-                    verdict = "срок подтверждения истёк"
-                elif "approval.denied" in rules:
-                    verdict = "отказано человеком"
-                else:
-                    verdict = "отказано политикой"
-                # Причина может содержать пути из аргументов — это данные, а не текст Jarvis.
-                reason = f"{outcome.decision.reason} [{', '.join(rules)}]"
-                return Observation(status="denied", summary=f"{tool}: {verdict}, не исполнен", data=reason)
-            case ToolOutcomeKind.NEEDS_APPROVAL:
-                raise AssertionError("ожидание подтверждения обрабатывает стадия")
+        if outcome.kind is ToolOutcomeKind.DENIED:
+            budget.record_failure()
+        return observation_of(outcome)
 
     def _proposed(self, task: Task, number: int, proposal: ProposedAction, call_id: str) -> None:
         action = proposal.action
@@ -231,28 +197,35 @@ class AnswerVerifier:
         )
 
 
+class ByRoute:
+    """EXECUTING по стратегии задачи: прямую команду ведёт стадия без модели, остальное — агент."""
+
+    def __init__(self, handlers: Mapping[Route, StageHandler]) -> None:
+        self._handlers = dict(handlers)
+
+    async def handle(self, task: Task, budget: BudgetMeter) -> StageOutcome:
+        handler = self._handlers.get(task.route) if task.route is not None else None
+        if handler is None:
+            raise InvalidTransition(f"нет исполнителя для маршрута {task.route}")
+        return await handler.handle(task, budget)
+
+
 def agent_stages(
-    *, gateway: ModelGateway, tools: ToolRuntime, uow: UnitOfWorkFactory, tracer: Tracer
+    *, gateway: ModelGateway, tools: ToolRuntime, router: Router, uow: UnitOfWorkFactory, tracer: Tracer
 ) -> dict[TaskStatus, StageHandler]:
+    """Стадии Architecture V2: ROUTING — Router (без модели), EXECUTING — по стратегии (ADR 0026)."""
     return {
-        TaskStatus.ROUTING: AgentRouting(),
+        TaskStatus.ROUTING: RoutingStage(router=router, uow=uow, tracer=tracer),
         TaskStatus.PLANNING: AgentPlanning(),
-        TaskStatus.EXECUTING: Executor(gateway=gateway, tools=tools, uow=uow, tracer=tracer),
+        TaskStatus.EXECUTING: ByRoute(
+            {
+                Route.AGENT: Executor(gateway=gateway, tools=tools, uow=uow, tracer=tracer),
+                Route.DIRECT: DirectStage(tools=tools, uow=uow, tracer=tracer),
+            }
+        ),
         TaskStatus.VERIFYING: AnswerVerifier(),
     }
 
 
 def _stay(state: AgentState, reason: str) -> StageOutcome:
     return StageOutcome(next_status=TaskStatus.EXECUTING, reason=reason, changes=TaskChanges(state=state))
-
-
-def _failed(error: ToolError) -> Observation:
-    return Observation(status="failed", summary=f"вызов не удался ({error.category})", data=error.message)
-
-
-def _clip(text: str) -> tuple[str, str]:
-    encoded = text.encode("utf-8")
-    if len(encoded) <= OBSERVATION_BYTES:
-        return text, ""
-    clipped = encoded[:OBSERVATION_BYTES].decode("utf-8", errors="ignore")
-    return clipped, f"; результат обрезан: {OBSERVATION_BYTES} из {len(encoded)} байт"

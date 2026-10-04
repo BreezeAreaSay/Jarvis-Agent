@@ -13,8 +13,9 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
+from jarvis.adapters.inventory import StaticInventory
 from jarvis.adapters.memory import InMemoryStorage
-from jarvis.app.composition import App, build_app, host_zones
+from jarvis.app.composition import App, build_app, host_zones, read_only_tools
 from jarvis.core.policy import PolicyZones
 from jarvis.domain.approvals import ApprovalDecision, ApprovalStatus
 from jarvis.domain.errors import JarvisError
@@ -104,10 +105,15 @@ async def run_task(
     storage = InMemoryStorage()
     with tempfile.TemporaryDirectory(prefix="jarvis-bench-") as temp:
         machine = Machine.create(Path(temp).resolve(), dataset.workspace)
+        # Бенчмарк меряет модель: без прямых команд Router и на инструментах только для чтения — как в
+        # базовом прогоне (ADR 0024, ADR 0025), иначе результаты перестают быть сравнимыми.
         app = build_app(
             config,
             models={ModelRole.EXECUTOR: backend_for(task, machine.workspace)},
             storage=storage,
+            tools=read_only_tools(),
+            direct_commands=False,
+            inventory=StaticInventory(),
             home=machine.home,
             zones=bench_zones(config, machine, real_home, real_config),
         )

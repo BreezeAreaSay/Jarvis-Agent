@@ -1,7 +1,7 @@
 # Сервер без structured_output: схема — в промпте, ответ в обрамлении ```json разбирается и проверяется.
 id: model.unconstrained
 category: model
-input: "какая рабочая папка?"
+input: "узнай рабочую папку и скажи, что получилось"
 model:
   structured_output: false
   replies:

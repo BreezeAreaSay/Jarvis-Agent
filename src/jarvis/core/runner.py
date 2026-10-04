@@ -40,6 +40,7 @@ from jarvis.domain.errors import (
 )
 from jarvis.domain.ids import TaskId
 from jarvis.domain.lease import Lease
+from jarvis.domain.routing import Route, RouteDecision
 from jarvis.domain.settings import BudgetsSettings
 from jarvis.domain.states import (
     ACTIVE_STATUSES,
@@ -49,7 +50,7 @@ from jarvis.domain.states import (
     check_transition,
     is_terminal,
 )
-from jarvis.domain.task import Route, StageOutcome, Task, TaskOutcome, check_route_target
+from jarvis.domain.task import StageOutcome, Task, TaskOutcome, check_route_target
 from jarvis.domain.trace import EventKind, TraceEvent
 from jarvis.ports.clock import Clock
 from jarvis.ports.storage import UnitOfWorkFactory
@@ -353,6 +354,7 @@ class TaskRunner:
     def _apply(self, task: Task, run: _Run, outcome: StageOutcome, usage: BudgetUsage) -> Task:
         target = outcome.next_status
         route = outcome.changes.route
+        routing = outcome.changes.routing
         try:
             if target in RUNNER_ONLY_TARGETS:
                 raise InvalidTransition(f"{target} выставляет runner; стадия сообщает об этом исключением")
@@ -361,8 +363,12 @@ class TaskRunner:
                     raise InvalidTransition(f"такт в {task.status} должен сменить состояние")
             elif task.status is TaskStatus.ROUTING:
                 check_route_target(route, target)
-            if route is not None and task.status is not TaskStatus.ROUTING:
+            if (route is not None or routing is not None) and task.status is not TaskStatus.ROUTING:
                 raise InvalidTransition(f"маршрут решается только в ROUTING, а не в {task.status}")
+            if routing is not None and routing.strategy is not route:
+                raise InvalidTransition(
+                    f"решение Router ({routing.strategy}) не совпадает с маршрутом {route}"
+                )
             if target is not task.status:
                 check_transition(task.status, target)
             if target is TaskStatus.WAITING_CONFIRMATION and not self._has_pending_approval(task.id):
@@ -385,6 +391,7 @@ class TaskRunner:
                 outcome.reason,
                 usage=BudgetUsage(),
                 route=route,
+                routing=routing,
                 budget=self._budgets.for_route(route),
                 answer=outcome.changes.answer,
                 state=state,
@@ -453,6 +460,7 @@ class TaskRunner:
         *,
         usage: BudgetUsage,
         route: Route | None = None,
+        routing: RouteDecision | None = None,
         budget: Budget | None = None,
         answer: str | None = None,
         state: AgentState | None = None,
@@ -470,6 +478,8 @@ class TaskRunner:
             changes["state"] = memory
         if route is not None:
             changes["route"] = route
+        if routing is not None:
+            changes["routing"] = routing
         if budget is not None:
             changes["budget"] = budget
         if is_terminal(target):

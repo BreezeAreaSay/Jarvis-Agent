@@ -9,6 +9,8 @@ import re
 from collections.abc import Sequence
 from datetime import tzinfo
 
+from pydantic import JsonValue
+
 from jarvis.domain.metrics import TaskMetrics
 from jarvis.domain.models import ModelCallRecord
 from jarvis.domain.task import TaskSnapshot
@@ -121,12 +123,32 @@ def _render_event(event: TraceEvent, tz: tzinfo) -> list[str]:
             return lines
         case EventKind.ACTION_PROPOSED:
             target = payload.get("tool") if payload.get("type") == "tool" else "ответ"
+            origin = f"  ({payload['origin']})" if payload.get("origin") else ""
             return [
-                f"{time} STEP {payload.get('step')}  {payload.get('type')} {_clean(target)}",
+                f"{time} STEP {payload.get('step')}  {payload.get('type')} {_clean(target)}{origin}",
                 f"{_INDENT}{_quote(payload.get('decision'))}",
             ]
+        case EventKind.ROUTE_DECIDED:
+            return _render_route(time, payload)
         case _:  # вид события из более новой версии: показать как есть
             return [f"{time} {event.kind}", f"{_INDENT}{_clean(json.dumps(payload, ensure_ascii=False))}"]
+
+
+def _render_route(time: str, payload: dict[str, JsonValue]) -> list[str]:
+    intent = f" {payload['intent']}" if payload.get("intent") else ""
+    level = f" ({payload['level']})" if payload.get("level") else ""
+    duration = f"  {payload['duration_ms']} мс" if payload.get("duration_ms") is not None else ""
+    lines = [f"{time} route {payload.get('strategy')}{intent}{level}{duration}"]
+    entities = payload.get("entities")
+    for entity in entities if isinstance(entities, list) else []:
+        if isinstance(entity, dict):
+            value, source = _quote(entity.get("value")), _clean(entity.get("source"))
+            lines.append(f"{_INDENT}{entity.get('kind')}={value}  из {source}")
+    rules = payload.get("rules")
+    shown = ", ".join(str(rule) for rule in rules) if isinstance(rules, list) else ""
+    lines.append(f"{_INDENT}правила: {_clean(shown)}")
+    lines.append(f"{_INDENT}{_clean(payload.get('reason'))}")
+    return lines
 
 
 def render_model_call(call: ModelCallRecord) -> str:

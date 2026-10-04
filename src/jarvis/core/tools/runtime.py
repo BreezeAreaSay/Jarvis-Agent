@@ -57,6 +57,7 @@ from jarvis.domain.states import ACTIVE_STATUSES
 from jarvis.domain.task import Task
 from jarvis.domain.tools import (
     ExecutionTarget,
+    Invoker,
     PolicyDecision,
     PolicyOutcome,
     ToolCall,
@@ -113,15 +114,23 @@ class ToolRuntime:
         return self._registry.definitions()
 
     async def call(
-        self, task: Task, budget: BudgetMeter, tool_id: str, arguments: dict[str, JsonValue]
+        self,
+        task: Task,
+        budget: BudgetMeter,
+        tool_id: str,
+        arguments: dict[str, JsonValue],
+        *,
+        invoker: Invoker = Invoker.MODEL,
     ) -> ToolOutcome:
-        """Новый вызов инструмента от стадии задачи."""
+        """Новый вызов инструмента от стадии задачи. `invoker` — кто его предложил: по умолчанию модель
+        (самый строгий случай); прямую команду помечает только стадия DIRECT (ADR 0030)."""
         call = ToolCall(
             id=ToolCallId(self._tracer.next_id(task.id, "call")),
             task_id=task.id,
             tool_id=ToolId(tool_id),
             arguments=arguments,
             target=self._target,
+            invoker=invoker,
         )
         return await self._run(task, budget, call, approval=None)
 

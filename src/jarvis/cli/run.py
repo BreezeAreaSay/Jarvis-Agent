@@ -1,4 +1,4 @@
-"""`jarvis run "<запрос>"`: задачу ведёт агент на локальной модели.
+"""`jarvis run "<запрос>"`: прямая команда без модели или задача агента на локальной модели.
 
 Команда — клиент ядра: создаёт задачу, продвигает её `run_until_blocked`, показывает ход по событиям
 трассы и спрашивает человека, когда вызову нужно подтверждение. Ctrl+C отменяет задачу
@@ -9,11 +9,13 @@ import asyncio
 import contextlib
 import json
 import signal
+from collections.abc import Mapping
 from pathlib import Path
 from types import FrameType
 from typing import Annotated
 
 import typer
+from pydantic import JsonValue
 
 from jarvis.app.composition import App, build_app, open_storage
 from jarvis.cli.common import load_or_exit
@@ -22,7 +24,6 @@ from jarvis.core.trace import shorten
 from jarvis.domain.approvals import ApprovalDecision, ApprovalRequest, ApprovalStatus
 from jarvis.domain.errors import ApprovalClosed, JarvisError
 from jarvis.domain.ids import TaskId
-from jarvis.domain.models import ModelRole
 from jarvis.domain.states import TaskStatus
 from jarvis.domain.task import Origin, TaskRequest, TaskSnapshot
 from jarvis.domain.trace import EventKind, TraceEvent
@@ -43,15 +44,9 @@ def run_command(
         typer.echo(exc.message, err=True)
         raise typer.Exit(1) from None
     try:
+        # Без модели работают прямые команды (ADR 0026); задача, которой нужен агент, завершится ошибкой
+        # конфига с подсказкой, как назначить модель.
         app = build_app(loaded.config, storage=storage, home=loaded.home, config_file=loaded.config_path)
-        assert app.models is not None
-        if not app.models.available(ModelRole.EXECUTOR):
-            typer.echo(
-                "Модель не настроена: назначьте роли executor эндпоинт в config.toml "
-                "([models.endpoints.<id>] и [models.roles]); как — docs/development.md, «Настройка модели».",
-                err=True,
-            )
-            raise typer.Exit(2)
         for task_id in app.tasks.recover_interrupted():
             typer.echo(f"{task_id}: процесс, который вёл задачу, завершился — FAILED (interrupted)", err=True)
         request = TaskRequest(
@@ -146,6 +141,10 @@ def progress_line(event: TraceEvent) -> str | None:
     """Короткая строка хода задачи; содержимое событий — данные, управляющие символы экранируются."""
     payload = event.payload
     match event.kind:
+        case EventKind.ROUTE_DECIDED:
+            return route_line(payload)
+        case EventKind.ACTION_PROPOSED if payload.get("origin") == "direct":
+            return f"· {clean_line(payload.get('tool'))} — прямая команда, без модели"
         case EventKind.ACTION_PROPOSED:
             target = payload.get("tool") if payload.get("type") == "tool" else "ответ"
             decision = shorten(str(payload.get("decision")), 160)
@@ -166,6 +165,25 @@ def progress_line(event: TraceEvent) -> str | None:
             return "  проверка результата не пройдена"
         case _:
             return None
+
+
+def route_line(payload: Mapping[str, JsonValue]) -> str:
+    """Решение Router одной строкой: стратегия, намерение и сущность — `· маршрут: direct app.launch
+    «Telegram»`. Сущности — данные: управляющие символы экранируются."""
+    parts = [str(payload.get("strategy"))]
+    if payload.get("intent"):
+        parts.append(str(payload["intent"]))
+    if payload.get("level"):
+        parts.append(f"({payload['level']})")
+    entities = payload.get("entities")
+    labels = [
+        f"«{entity.get('label')}»"
+        for entity in (entities if isinstance(entities, list) else [])
+        if isinstance(entity, dict)
+    ]
+    if labels:
+        parts.append(" ".join(labels[:2]))
+    return f"· маршрут: {clean_line(' '.join(parts))}"
 
 
 def _ask(approval: ApprovalRequest) -> bool:

@@ -93,8 +93,9 @@ forbidden_modules = ["jarvis.core", "jarvis.app", "jarvis.config", "jarvis.evals
 name = "Адаптеры не зависят друг от друга"
 type = "independence"
 # Инструменты не видят хранилищ: трассу и аудит пишет только Tool Runtime; бэкенды моделей не видят
-# ни хранилищ, ни инструментов: модель ничего не исполняет сама.
+# ни хранилищ, ни инструментов: модель ничего не исполняет сама. Инструмент запуска видит инвентарь только
+# через порт.
 modules = [
   "jarvis.adapters.memory", "jarvis.adapters.sqlite", "jarvis.adapters.clock", "jarvis.adapters.tools",
-  "jarvis.adapters.models",
+  "jarvis.adapters.models", "jarvis.adapters.inventory",
 ]

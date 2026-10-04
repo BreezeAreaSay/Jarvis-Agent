@@ -10,7 +10,8 @@ from jarvis.adapters.memory import InMemoryStorage
 from jarvis.app.composition import App, build_app
 from jarvis.core.agent.actions import clean_schema
 from jarvis.core.agent.context import OMITTED, executor_prompt, system_rules
-from jarvis.core.agent.stages import OBSERVATION_BYTES, AnswerVerifier
+from jarvis.core.agent.observations import OBSERVATION_BYTES
+from jarvis.core.agent.stages import AnswerVerifier
 from jarvis.core.budget import BudgetMeter
 from jarvis.core.models.prompt import DATA_CLOSE, DATA_OPEN, estimate_tokens, render
 from jarvis.domain.agent import AgentState, AgentStep, FinishAction, Observation, ProposedAction, ToolAction
@@ -118,6 +119,7 @@ async def test_model_drives_a_tool_call_to_a_verified_answer() -> None:
     assert [
         kind for kind in agent.kinds() if kind not in (EventKind.TASK_TRANSITION, EventKind.TASK_CREATED)
     ] == [
+        EventKind.ROUTE_DECIDED,
         EventKind.MODEL_CALLED,
         EventKind.ACTION_PROPOSED,
         EventKind.TOOL_PREVIEWED,

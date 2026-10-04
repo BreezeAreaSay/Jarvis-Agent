@@ -1,9 +1,10 @@
-# Полный путь агента: каждый переход из главного сценария, расход бюджета виден в usage.
+# Полный путь агента: каждый переход из главного сценария, расход бюджета виден в usage. Маршрутизация
+# моделей не вызывает (ADR 0026): у фазы ROUTING бюджет вызовов модели нулевой.
 id: runtime.agent_path
 category: runtime
 input: "scripted: найди причину и ответь"
 script:
-  - {status: ROUTING, next: PLANNING, route: agent, charge: {model_calls: 1}, reason: "маршрут agent"}
+  - {status: ROUTING, next: PLANNING, route: agent, reason: "маршрут agent"}
   - {status: PLANNING, next: EXECUTING, charge: {model_calls: 1}, reason: "план из двух шагов принят"}
   - {status: EXECUTING, next: EXECUTING, charge: {steps: 1, model_calls: 1, tool_calls: 1}, reason: "шаг 1"}
   - {status: EXECUTING, next: VERIFYING, charge: {steps: 1, model_calls: 1}, reason: "действие finish"}

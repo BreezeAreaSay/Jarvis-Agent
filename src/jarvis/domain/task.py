@@ -15,19 +15,13 @@ from jarvis.domain.agent import AgentState
 from jarvis.domain.budget import Budget, BudgetUsage
 from jarvis.domain.errors import ErrorInfo, InvalidTransition
 from jarvis.domain.ids import TaskId
+from jarvis.domain.routing import Route, RouteDecision
 from jarvis.domain.states import TaskStatus, is_terminal
 
 
 class Origin(StrEnum):
     EVAL = "eval"
     CLI = "cli"  # `jarvis run`; другие источники (replay, голос) появятся со своими командами
-
-
-class Route(StrEnum):
-    DIRECT = "direct"
-    AGENT = "agent"
-    CHAT = "chat"
-    CLARIFY = "clarify"
 
 
 # Куда ведёт решение роутера (02-domain.md §3): из ROUTING стадия может уйти только так или в FAILED.
@@ -74,6 +68,7 @@ class Task(BaseModel, frozen=True, extra="forbid"):
     request: TaskRequest
     status: TaskStatus
     route: Route | None = None
+    routing: RouteDecision | None = None  # решение Router: стратегия, интент, причины
     budget: Budget  # бюджет текущей фазы: routing до решения роутера, затем бюджет маршрута
     usage: BudgetUsage  # расход в пределах `budget`
     outcome: TaskOutcome | None = None
@@ -94,6 +89,7 @@ class TaskChanges(BaseModel, frozen=True, extra="forbid"):
     """Что стадия просит изменить в задаче; None — не менять."""
 
     route: Route | None = None  # только из ROUTING: решение роутера
+    routing: RouteDecision | None = None  # только из ROUTING: подробности решения
     answer: str | None = None  # ответ пользователю, попадает в итог
     state: AgentState | None = None  # новая рабочая память агента
 
@@ -113,6 +109,7 @@ class TaskSnapshot(BaseModel, frozen=True, extra="forbid"):
     version: PositiveInt
     status: TaskStatus
     route: Route | None
+    routing: RouteDecision | None = None
     budget: Budget
     usage: BudgetUsage
     outcome: TaskOutcome | None
@@ -126,6 +123,7 @@ class TaskSnapshot(BaseModel, frozen=True, extra="forbid"):
             version=task.version,
             status=task.status,
             route=task.route,
+            routing=task.routing,
             budget=task.budget,
             usage=task.usage,
             outcome=task.outcome,

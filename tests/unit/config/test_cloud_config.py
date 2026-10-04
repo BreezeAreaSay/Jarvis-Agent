@@ -61,6 +61,34 @@ def test_a_real_key_in_the_config_is_rejected_without_repeating_it(tmp_path: Pat
 
 
 @pytest.mark.parametrize(
+    "text",
+    [
+        REMOTE.format(key="env:JARVIS_KEY").replace(
+            "https://api.provider.example/v1", f"https://api.provider.example/v1?key={REAL_LOOKING_KEY}"
+        ),
+        REMOTE.format(key="env:JARVIS_KEY")
+        .replace("https://api.provider.example/v1", f"https://api.provider.example/{REAL_LOOKING_KEY}/v1")
+        .replace("https://", "http://"),
+        REMOTE.format(key="env:JARVIS_KEY").replace(
+            'model = "smart-model"',
+            f'model = "smart-model"\nextra_body = {{ api_key = "{REAL_LOOKING_KEY}" }}',
+        ),
+        '[models.endpoints.main]\nbase_url = "http://127.0.0.1:8080/v1"\n'
+        f'extra_body = {{ token = "Bearer {REAL_LOOKING_KEY}" }}\n'
+        "[models.endpoints.main.capabilities]\nstructured_output = true\ncontext_window = 16384\n",
+    ],
+    ids=["url_query", "url_path", "remote_extra_body", "local_extra_body"],
+)
+def test_a_key_anywhere_in_the_endpoint_config_is_rejected_without_repeating_it(
+    tmp_path: Path, text: str
+) -> None:
+    with pytest.raises(ConfigError) as caught:
+        load(tmp_path, text)
+    assert REAL_LOOKING_KEY not in caught.value.message
+    assert REAL_LOOKING_KEY not in str(caught.value.details)
+
+
+@pytest.mark.parametrize(
     ("text", "fragment"),
     [
         (

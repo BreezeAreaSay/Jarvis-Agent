@@ -5,6 +5,7 @@
 """
 
 import ipaddress
+import json
 import re
 from typing import Literal, Self
 
@@ -21,6 +22,7 @@ from pydantic import (
 from jarvis.domain.budget import Budget
 from jarvis.domain.models import ModelCapabilities, ModelRole
 from jarvis.domain.routing import CloudMode, Route, RoutingLevel
+from jarvis.domain.secrets import find_secrets, mask_secrets
 
 
 class BudgetsSettings(BaseModel, frozen=True, extra="forbid"):
@@ -144,6 +146,23 @@ def _points_here(host: str) -> bool:
     return address.is_loopback or address.is_unspecified
 
 
+def _no_secret(value: JsonValue, field: str) -> None:
+    """Ключ в конфиге — ошибка: только ссылка `api_key = "env:ИМЯ"`. Значение не повторяется."""
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    found = find_secrets(text)
+    if found:
+        raise ValueError(
+            f"{field}: похоже на секрет ({', '.join(found)}) — ключ задаётся только ссылкой "
+            'api_key = "env:ИМЯ"; значение здесь не показывается'
+        )
+
+
+def _shown(url: str) -> str:
+    """Адрес для сообщения об ошибке: без параметров запроса (в них бывают ключи) и найденных секретов."""
+    base, query, _ = url.partition("?")
+    return mask_secrets(base) + ("?…" if query else "")
+
+
 class SamplingSettings(BaseModel, frozen=True, extra="forbid"):
     """Параметры генерации: их читает только адаптер. None — умолчание сервера."""
 
@@ -169,13 +188,20 @@ class EndpointSettings(BaseModel, frozen=True, extra="forbid"):
     @classmethod
     def _local(cls, value: str) -> str:
         # Промпт содержит файлы пользователя: он уходит только на этот компьютер (local-first).
+        _no_secret(value, "base_url")
         if _BASE_URL.fullmatch(value) is None:
-            raise ValueError(f"нужен адрес вида http://127.0.0.1:8080/v1, а не {value!r}")
+            raise ValueError(f"нужен адрес вида http://127.0.0.1:8080/v1, а не {_shown(value)!r}")
         if not is_loopback_url(value):
             raise ValueError(
-                f"сервер модели должен быть на этом компьютере (localhost, 127.0.0.1, [::1]): {value}"
+                f"сервер модели должен быть на этом компьютере (localhost, 127.0.0.1, [::1]): {_shown(value)}"
             )
         return value.rstrip("/")
+
+    @field_validator("extra_body")
+    @classmethod
+    def _extra_without_secrets(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        _no_secret(value, "extra_body")
+        return value
 
 
 # Ссылка на секрет: ключ лежит в переменной окружения, в конфиге — только её имя (ADR 0027).
@@ -208,13 +234,16 @@ class RemoteEndpointSettings(BaseModel, frozen=True, extra="forbid"):
     @field_validator("base_url")
     @classmethod
     def _https(cls, value: str) -> str:
+        _no_secret(value, "base_url")
         match = _BASE_URL.fullmatch(value)
         if match is None or match.group("scheme") != "https":
-            raise ValueError(f"удалённый провайдер — только https-адрес вида https://host/v1, а не {value!r}")
+            raise ValueError(
+                f"удалённый провайдер — только https-адрес вида https://host/v1, а не {_shown(value)!r}"
+            )
         if _points_here(match.group("host")):
             raise ValueError(
-                f"{value}: сервер на этом компьютере (или IP не в виде 1.2.3.4) — это локальный эндпоинт "
-                "([models.endpoints]), а не удалённый"
+                f"{_shown(value)}: сервер на этом компьютере (или IP не в виде 1.2.3.4) — это локальный "
+                "эндпоинт ([models.endpoints]), а не удалённый"
             )
         return value.rstrip("/")
 
@@ -223,6 +252,12 @@ class RemoteEndpointSettings(BaseModel, frozen=True, extra="forbid"):
     def _reference(cls, value: str) -> str:
         if SECRET_REF.fullmatch(value) is None:
             raise ValueError(_SECRET_REF_HINT)  # значение не повторяется: это может быть сам ключ
+        return value
+
+    @field_validator("extra_body")
+    @classmethod
+    def _extra_without_secrets(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        _no_secret(value, "extra_body")
         return value
 
     @property

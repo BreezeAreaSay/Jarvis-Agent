@@ -202,6 +202,20 @@ async def test_file_content_needs_consent_and_a_refusal_keeps_the_task_local() -
     assert set(checked[-1].payload["blocked"]) == {"file_content", "source_code"}  # type: ignore[arg-type]
 
 
+async def test_a_refused_class_is_not_asked_again_together_with_a_new_one() -> None:
+    # Отказ по коду, затем локальная модель читает личный файл: облаку код всё равно не уйдёт —
+    # спрашивать снова (код + личные данные) бессмысленно.
+    local = [read("/data/personal/notes.txt"), finish("локально")]
+    hybrid = Hybrid(local, {"cloud_a": [read("/data/main.py")]}, cloud={"personal_roots": ["/data/personal"]})
+    await hybrid.run("Проанализируй main.py", mode=CloudMode.SMART)
+    (approval,) = hybrid.app.tasks.approvals(hybrid.task_id)
+    hybrid.app.tasks.resolve_approval(approval.id, ApprovalDecision.DENY, via="test")
+    snapshot = await hybrid.run_resume()
+    assert snapshot.status is S.COMPLETED
+    assert [item.call.tool_id for item in hybrid.app.tasks.approvals(hybrid.task_id)] == ["cloud.share"]
+    assert hybrid.called() == ["cloud_a", "local", "local"]
+
+
 async def test_consent_is_asked_once_and_lasts_until_the_end_of_the_task() -> None:
     replies = [read("/data/main.py"), read("/data/util.py"), finish("облачный анализ")]
     hybrid = Hybrid([], {"cloud_a": replies})

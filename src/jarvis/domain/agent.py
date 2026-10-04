@@ -85,8 +85,12 @@ class AgentState(BaseModel, frozen=True, extra="forbid"):
         return frozenset(found)
 
     def asked(self, request: ConsentRequest) -> bool:
-        decided = {*self.grants, *self.refusals}
-        return all(grant in decided for grant in request.grants())
+        """Спрашивать не о чем: всё уже разрешено, или хотя бы один класс человек уже не разрешил этому
+        провайдеру — тогда облако недоступно при любом ответе, и отказ не переспрашивается."""
+        wanted = request.grants()
+        return any(grant in self.refusals for grant in wanted) or all(
+            grant in self.grants for grant in wanted
+        )
 
     @property
     def pending(self) -> AgentStep | None:

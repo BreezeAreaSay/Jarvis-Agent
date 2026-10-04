@@ -1,5 +1,7 @@
 """Граница приватности облака (ADR 0028): классы данных, поиск секретов, происхождение результата."""
 
+import json
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -80,6 +82,41 @@ def test_a_task_started_in_a_private_root_never_leaves() -> None:
     decision = check(META, working_directory="/work/private/repo")
     assert decision.verdict is PrivacyVerdict.DENY
     assert DataClass.PRIVATE in decision.found
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Проанализируй /work/private/plan-merger.md",
+        "что лежит в /work/private?",
+        '{"path": "/work/private/a.txt"}',
+    ],
+)
+def test_a_path_from_private_roots_in_the_text_never_leaves(text: str) -> None:
+    decision = check(META, text=text)
+    assert decision.verdict is PrivacyVerdict.DENY
+    assert DataClass.PRIVATE in decision.found
+    assert "privacy.private_path" in decision.rules
+
+
+@pytest.mark.parametrize("text", ["/work/private-2/a.txt", "/mnt/work/private/a.txt", "/work/privates"])
+def test_a_similar_but_different_path_is_not_private(text: str) -> None:
+    assert check(META, text=text).verdict is PrivacyVerdict.ALLOW
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "c:/users/u/private/notes.txt",
+        "C:\\Users\\U\\Private\\notes.txt",
+        json.dumps({"path": "C:\\Users\\u\\Private\\notes.txt"}),  # наблюдение: «\» удвоены
+        "смотри C:\\Users\\u\\Private",
+    ],
+)
+def test_windows_private_paths_match_regardless_of_case_and_separator(text: str) -> None:
+    policy = CloudPrivacyPolicy(ON, os_family="windows", private_roots=["C:\\Users\\u\\Private"])
+    assert policy.mentions_private(text)
+    assert not policy.mentions_private("C:\\Users\\u\\Private2\\notes.txt")
 
 
 def test_a_key_inside_otherwise_allowed_text_blocks_the_call() -> None:

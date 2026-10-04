@@ -275,6 +275,17 @@ async def test_a_key_in_the_request_keeps_the_task_local() -> None:
     assert "sk-abcdef" not in str(hybrid.app.tasks.trace(hybrid.task_id)[-1].payload)
 
 
+async def test_a_private_path_named_in_the_request_stays_local() -> None:
+    hybrid = Hybrid([finish("локально")], {"cloud_a": []}, cloud={"private_roots": ["/data/private"]})
+    snapshot = await hybrid.run("Проанализируй /data/private/plan-merger.md", mode=CloudMode.SMART)
+    assert snapshot.status is S.COMPLETED
+    assert hybrid.remotes["cloud_a"].requests == []
+    assert hybrid.called() == ["local"]
+    (checked,) = hybrid.events(EventKind.PRIVACY_CHECKED)
+    assert checked.payload["verdict"] == "deny"
+    assert "privacy.private_path" in checked.payload["rules"]  # type: ignore[operator]
+
+
 async def test_pasted_code_is_source_code_and_needs_consent() -> None:
     hybrid = Hybrid([finish("локально")], {"cloud_a": []})
     snapshot = await hybrid.run("Проанализируй:\n```\ndef f():\n    return 1\n```", mode=CloudMode.SMART)

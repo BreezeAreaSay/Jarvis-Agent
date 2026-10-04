@@ -7,8 +7,12 @@
 Порядок правил: облако выключено → секреты и private_roots (никогда) → поиск секретов по тексту
 (никогда) → объём промпта → классы, не разрешённые настройкой и не разрешённые человеком для этого
 провайдера (согласие). Модель в решении не участвует.
+
+private_roots — это и рабочая папка задачи, и любое упоминание пути из них в уходящем тексте (запрос
+человека, пересказ модели): имена файлов оттуда тоже не уходят.
 """
 
+import re
 from collections.abc import Collection, Sequence
 
 from jarvis.domain.paths import OsFamily, is_within
@@ -22,6 +26,8 @@ from jarvis.domain.privacy import (
 )
 from jarvis.domain.secrets import find_secrets
 from jarvis.domain.settings import CloudSettings
+
+_NAME_CHAR = re.compile(r"[\w.~-]")  # продолжение имени: «/data/private-2» — не «/data/private»
 
 
 class CloudPrivacyPolicy:
@@ -42,6 +48,24 @@ class CloudPrivacyPolicy:
             is_within(path, root, self._os_family) for root in self._private_roots
         )
 
+    def mentions_private(self, text: str) -> bool:
+        """В тексте есть путь из private_roots (сам корень или что-то внутри). В Windows — без учёта
+        регистра и вида разделителя, в том числе с удвоенными «\\» из JSON наблюдений."""
+        windows = self._os_family == "windows"
+        separator = "\\" if windows else "/"
+        haystack = text.replace("\\\\", "\\").replace("/", "\\").casefold() if windows else text
+        for root in self._private_roots:
+            needle = (root.replace("/", "\\").casefold() if windows else root).rstrip(separator)
+            start = haystack.find(needle) if needle else -1
+            while start != -1:
+                end = start + len(needle)
+                before = haystack[start - 1] if start else ""
+                after = haystack[end] if end < len(haystack) else ""
+                if not (before and _NAME_CHAR.match(before)) and not (after and _NAME_CHAR.match(after)):
+                    return True
+                start = haystack.find(needle, start + 1)
+        return False
+
     def check(
         self,
         *,
@@ -56,7 +80,8 @@ class CloudPrivacyPolicy:
         secrets_found = find_secrets(text)
         if secrets_found:
             found.add(DataClass.SECRETS)
-        if self.is_private(working_directory):
+        private_path = self.mentions_private(text)
+        if self.is_private(working_directory) or private_path:
             found.add(DataClass.PRIVATE)  # задача, начатая в private_roots, не уходит целиком
         listed = sorted(found)
 
@@ -80,6 +105,8 @@ class CloudPrivacyPolicy:
             rules = [f"privacy.never.{item.value}" for item in sorted(never)]
             if secrets_found:
                 rules.append("privacy.scanner")
+            if private_path:
+                rules.append("privacy.private_path")
             return decision(
                 PrivacyVerdict.DENY, rules, "секреты и private_roots не покидают компьютер", never
             )

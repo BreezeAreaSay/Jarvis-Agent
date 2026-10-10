@@ -230,10 +230,10 @@ uv run pytest -q -m "not live"
 
 ## Состояние
 - [x] S0 окружение, комплект, репозиторий
-- [ ] S1 скелет, settings, paths, policy, apps, CI
-- [ ] S2a pc: окна, звук, медиа, процессы, файлы, система
-- [ ] S2b подтверждения через pipe; MCP-сервер
-- [ ] S3 руки
+- [x] S1 скелет, settings, paths, policy, apps, CI (CI: Actions аккаунта заблокированы биллингом — см. notes)
+- [x] S2a pc: окна, звук, медиа, процессы, файлы, система (live — TODO)
+- [x] S2b подтверждения через pipe; MCP-сервер (live — TODO)
+- [x] S3 руки (live — TODO: точность, p95, prompt_n)
 - [ ] S4 грамматика, контекст, роутер, jarvis ask
 - [ ] S5 мозг
 - [ ] S6a приложение: старт, хоткей, трей, автозапуск
@@ -250,3 +250,11 @@ uv run pytest -q -m "not live"
   в GPT нет — факты задания 00 взяты из NIGHT-PROMPT §2. uv 0.11, Python 3.12, openai-codex 0.160.1, mcp 1.30.
 - S1 начат: каркас и контракты (docs/architecture.md); `[tool.uv] environments` — win32 и linux; mcp>=1.29,<2;
   PySide6-Essentials; эталонные scripts/brain_smoke.py и es_check.py исключены из ruff (держим как проверены).
+- Модули писали параллельные субагенты по контрактам docs/architecture.md; главный поток — интеграция, коммиты.
+- S1: paths (зоны, 8.3, junction, хвостовые точки, устройства), privacy, apps (resolve 0 промахов на 69 фразах,
+  0,1 мс). GitHub Actions: «account is locked due to a billing issue» — CI не стартует; Windows-проверка — Wine.
+- S2a: windows (лестница focus, Alt+Tab-фильтр), procs (own_pids из JARVIS_ROOT_PID), files (единственный startfile,
+  es.exe argv из спеки), system (type_text с проверкой окна перед каждой порцией), audio (COM-поток), media, _input.
+- S2b: ConfirmServer (рукопожатие в потоке соединения), клиент с проверкой адреса; FastMCP 18 инструментов, старт 0,7 с.
+- S3: руки (префикс байт-в-байт, ~1300 токенов по оценке; maxLength 80; правило kill; пример приветствия/папки),
+  execute (цель из текста или то же приложение инвентаря; тема для media/vol/win; open↔focus). Доводка — по live.

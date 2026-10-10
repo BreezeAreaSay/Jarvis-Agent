@@ -96,19 +96,24 @@ def load_cli() -> Context:
     """Контекст CLI из прошлого вызова; протухший или битый — пустой."""
     try:
         with open(cli_path(), encoding="utf-8") as f:
-            ctx = Context.from_json(json.load(f))
+            data = json.load(f)
     except (OSError, ValueError):
         return Context()
+    if not isinstance(data, dict):
+        return Context()
+    ctx = Context.from_json(data)
     return ctx if ctx.fresh() else Context()
 
 
 def save_cli(ctx: Context) -> None:
     """Атомарно: tmp + os.replace. Ошибка записи — только в лог."""
-    path = settings.data_file("cli_context.json")
-    tmp = path.with_name(f"cli_context.{os.getpid()}.tmp")
+    tmp = None
     try:
+        path = settings.data_file("cli_context.json")
+        tmp = path.with_name(f"cli_context.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(ctx.to_json(), ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)
     except OSError as e:
         log.warning("контекст CLI не сохранён: %s", e)
-        tmp.unlink(missing_ok=True)
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)

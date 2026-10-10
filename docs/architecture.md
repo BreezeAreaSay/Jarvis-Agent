@@ -79,9 +79,12 @@ delete_permanent, jarvis_self.
 - `enable_auto_refresh(True)` — включает обновление при промахе resolve (не чаще раза в 10 мин; только `jarvis run`).
 - `resolve(name) -> tuple[App | None, float]` — алиас → rapidfuzz по нормализованным именам; ниже порога — (None, score).
 - `top(name, n=5) -> list[tuple[App, float]]`.
-- `list_apps_result(query, caller) -> Result` (data: список имён).
+- `list_apps_result(query, caller) -> Result` (data: без query — `[{"name"}]`, с query — топ-5 `[{"name","score"}]`).
 - `run_sta(fn, *args) -> Any` — выполнить в выделенном потоке с CoInitialize (STA).
-- `set_inventory(apps: list[App]) -> None` — подменить инвентарь (тесты, `jarvis bench` с tests/fixtures/apps.json).
+- `set_inventory(apps: list[App | dict] | None) -> None` — подменить инвентарь (тесты, `jarvis bench`); None — снова кэш.
+- `lookup(name)` — как resolve, без автообновления (windows, procs, execute). Помощники: `normalize`, `latin`, `core`,
+  `name_variants(text) -> set[str]`, `app_exe(app) -> str | None`, `cache_path()`; `RefreshError` — refresh не удался,
+  кэш цел.
 
 ### pc.windows
 - `WindowInfo(hwnd: int, title: str, pid: int, exe: str)`; exe — имя файла (`chrome.exe`).
@@ -148,9 +151,12 @@ media{action}, kill{name}, open_found{index}, lock{}, clock{what: "time"|"date"}
 ask_gpt{}. open_found, lock и clock — только у грамматики.
 
 ### jarvis.hands
-`HandsDecision(kind: "tool"|"error", tool: str, args: dict, reason: str, timings: dict)`;
-`Hands(cfg: HandsConfig, job_hook=None)`: `.status: dict`, `ensure_server()`, `warmup()`,
-`decide(text, ctx) -> HandsDecision`, `stop()`, `close()`. `SYSTEM`, `TOOLS` — константы; `prefix_bytes()`.
+`HandsDecision(kind: "tool"|"error", tool: str, args: dict, reason: str, timings: dict)`; `HandsError`;
+`Hands(cfg, job_hook=None, *, transport=None)`: `.status` (server, prefix_tokens, prefix_cache, tps, vram, error,
+model), `ensure_server()` (HandsError), `warmup()`, `prefix_tokens()`, `decide(text, ctx) -> HandsDecision`, `stop()`,
+`close()`. `SYSTEM`, `TOOLS` — константы; `prefix_bytes()`, `build_body(user, max_tokens)`, `user_message(text, ctx)`,
+`parse_response(resp)`. execute: цель рук «из текста» — partial_ratio ≥ 80 или то же приложение инвентаря, что
+и 1–3 слова команды (`apps.lookup`); `from_text(value, text, kind)`.
 
 ### jarvis.execute
 `Outcome(kind: "done"|"reply"|"clarify"|"ask_gpt", ok: bool, text: str, items: list[str], autohide: bool,

@@ -59,7 +59,8 @@ delete_permanent, jarvis_self.
 - `canonical(path: str) -> str` — абсолютный путь Windows: нормализация (`..`, слеши), `_resolve()` (ссылки,
   junction, 8.3 → длинные имена). Ошибка — `PathDenied(reason)`.
 - `is_within(path, root) -> bool` — по частям, без учёта регистра, на `PureWindowsPath` (не зависит от ОС).
-- `check(path, caller, op) -> PathCheck(ok, path, reason, confirm)`; `op ∈ "open" | "read" | "trash" | "list"`.
+- `check(path, caller, op, is_dir=None) -> PathCheck(ok, path, reason, confirm)`; `op ∈ "open" | "read" | "trash" |
+  "list"`; `is_dir` (None — спросить ОС): для папки confirm не ставится.
   Отказ всем: UNC, `\\?\`, `\\.\`, ADS, системные зоны, private_paths. Для brain ещё: %APPDATA%, %LOCALAPPDATA%,
   `data_dir()`, `~\.*`, секретные файлы. `confirm=True` — исполняемый/«активный» тип при op="open".
 - `is_executable_type(path) -> bool`, `is_secret_file(path) -> bool`, `hidden_for_brain(path) -> bool`.

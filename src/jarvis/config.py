@@ -116,7 +116,7 @@ def load() -> Config:
         return cfg
 
 
-_MODE_LINE = re.compile(r"""^(\s*mode\s*=\s*)("[^"]*"|'[^']*')(.*)$""")
+_MODE_LINE = re.compile(r"""^(\s*mode\s*=\s*)("[^"]*"|'[^']*'|[^\s#]+)(.*)$""")
 
 
 def save_mode(mode: Mode) -> None:
@@ -128,24 +128,30 @@ def save_mode(mode: Mode) -> None:
         raise ValueError(f"неизвестный режим: {mode!r}")
     path = settings.config_path()
     if path.exists():
-        text = path.read_text(encoding="utf-8-sig")
+        text = path.read_bytes().decode("utf-8-sig")
     else:
         example = settings.app_root() / "jarvis.example.toml"
-        text = example.read_text(encoding="utf-8") if example.exists() else ""
+        text = example.read_bytes().decode("utf-8-sig") if example.exists() else ""
+    newline = "\r\n" if "\r\n" in text else "\n"
     lines = text.splitlines(keepends=True)
     replaced = False
     for i, line in enumerate(lines):
         if line.lstrip().startswith("["):
             break
-        m = _MODE_LINE.match(line.rstrip("\r\n"))
+        body = line.rstrip("\r\n")
+        m = _MODE_LINE.match(body)
         if m:
-            ending = line[len(line.rstrip("\r\n")) :]
-            lines[i] = f'{m.group(1)}"{mode}"{m.group(3)}{ending or chr(10)}'
+            lines[i] = f'{m.group(1)}"{mode}"{m.group(3)}{line[len(body) :] or newline}'
             replaced = True
             break
     if not replaced:
-        lines.insert(0, f'mode = "{mode}"\n')
+        lines.insert(0, f'mode = "{mode}"{newline}')
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text("".join(lines), encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write("".join(lines))
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise

@@ -110,8 +110,9 @@ def load_pc_settings() -> PcSettings:
     pc = data.get("pc") if isinstance(data.get("pc"), dict) else {}
     raw_aliases = data.get("aliases") if isinstance(data.get("aliases"), dict) else {}
     private = pc.get("private_paths", [])
+    es = pc.get("es_path", "")
     return PcSettings(
-        es_path=str(pc.get("es_path", "") or ""),
+        es_path=es if isinstance(es, str) else "",
         private_paths=tuple(str(p) for p in private if isinstance(p, str) and p.strip())
         if isinstance(private, list)
         else (),

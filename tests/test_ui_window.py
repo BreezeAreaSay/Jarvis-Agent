@@ -228,6 +228,7 @@ def test_overflow_text_width_matches_viewport(make: Any) -> None:
     assert view.document().textWidth() == pytest.approx(view.viewport().width(), abs=0.5)
     w.on_event(TextChunk("ещё " * 40))
     settle()
+    w._relayout()  # высота уже упёрлась в предел — после замера раскладки не будет
     assert view.document().textWidth() == pytest.approx(view.viewport().width(), abs=0.5)
 
 

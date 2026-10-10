@@ -832,7 +832,7 @@ class LauncherWindow(QWidget):
             bar = self._scroll.verticalScrollBar()
             scrolling = self._scroll.verticalScrollBarPolicy() != Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             if scrolling and not bar.isHidden():
-                pass
+                w -= bar.width()  # ответ уже прокручивается — мерить по ширине видимой области
             body = _hfw(self._body, w)
         return fixed, body
 

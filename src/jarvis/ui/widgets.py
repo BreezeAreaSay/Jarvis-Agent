@@ -234,7 +234,7 @@ class PlainView(QTextEdit):
         doc = self.document()
         if abs(doc.textWidth() - text_w) <= 0.5:
             h = doc.size().height()  # документ уже разложен на эту ширину — дёшево
-        elif not self._max_height:
+        elif not self._max_height and abs(self.viewport().width() - text_w) <= 1:
             doc.setTextWidth(text_w)  # та же ширина, что у видимой области: QTextEdit разложит так же
             h = doc.size().height()
         else:  # другая ширина — меряем на копии, видимый документ не трогаем
@@ -419,15 +419,9 @@ class StatusIcon(QWidget):
             rect = QRectF(c.x() - 5.6, c.y() - 5.6, 11.2, 11.2)
             p.drawArc(rect, int(-self._angle * 16), 100 * 16)
         elif self.kind in ("ok", "fail", "warn", "info"):
-            tone = {"ok": theme.SUCCESS, "fail": theme.ERROR, "warn": theme.WARN, "info": theme.ACCENT}[
-                self.kind
-            ]
-            col = (
-                QColor(self._color)
-                if self.kind == "warn" and self._color.name() != theme.ACCENT.lower()
-                else None
-            )
-            base = col or QColor(tone)
+            # «!» берёт цвет владельца (карточка подтверждения, тост), ✓ и ✗ — всегда успех и ошибка
+            tones = {"ok": theme.SUCCESS, "fail": theme.ERROR, "info": theme.ACCENT}
+            base = QColor(self._color) if self.kind == "warn" else QColor(tones[self.kind])
             bg = QColor(base)
             bg.setAlphaF(0.17)
             p.setPen(Qt.PenStyle.NoPen)
@@ -613,7 +607,7 @@ class ItemRow(QWidget):
         if self._dir and dir_w > 36:
             folder = fm_dir.elidedText(self._dir, Qt.TextElideMode.ElideMiddle, dir_w)
             p.setFont(self._f_dir)
-            p.setPen(theme.color(theme.TEXT_FAINT))
+            p.setPen(theme.color(theme.TEXT_MUTED if self.hovered else theme.TEXT_FAINT))
             p.drawText(QRectF(x + name_w + 12, 0, dir_w, h), Qt.AlignmentFlag.AlignVCenter, folder)
         if self.hovered:
             p.setFont(self._f_hint)
@@ -816,7 +810,7 @@ class Footer(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedHeight(theme.FOOTER_H)
-        self._f_key = theme.font(theme.FONT_TINY - 1, QFont.Weight.Medium)
+        self._f_key = theme.font(theme.FONT_TINY, QFont.Weight.Medium)
         self._f_text = theme.font(theme.FONT_TINY)
 
     def paintEvent(self, event: object) -> None:
@@ -843,7 +837,7 @@ class Footer(QWidget):
             p.drawText(QRectF(x, 0, tw + 2, h), Qt.AlignmentFlag.AlignVCenter, label)
             x += tw + 18
         p.setFont(self._f_text)
-        p.setPen(theme.color(theme.TEXT_FAINT, 0.85))
+        p.setPen(theme.color(theme.TEXT_FAINT))
         rest = QRectF(x, 0, w - x - theme.PAD_X, h)
         p.drawText(rest, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, self.PREFIXES)
         p.end()

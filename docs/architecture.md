@@ -194,9 +194,12 @@ stats (`jarvis.journal`), doctor (`jarvis.doctor`), autostart (`jarvis.winapp`),
 В exe: `Jarvis.exe` (windowed; без аргументов — `run`), `jarvis-cli.exe` (консольный, весь CLI).
 
 ### jarvis.winapp (без Qt)
-Job Object (KILL_ON_JOB_CLOSE), именованный mutex одного экземпляра, автозапуск HKCU\…\Run
-(`set_autostart(on) -> str`, `autostart_enabled() -> bool`, `autostart_command() -> str`), разбор хоткея
-(`parse_hotkey(s) -> (mods, vk)`, запасные сочетания), DWM (скругления, backdrop), AllowSetForegroundWindow.
+Job Object (`create_job()`, `add_to_job(job, popen|pid)`, `job_hook(job)`, `close_job(job)`, `own_descendants(exe)`),
+mutex одного экземпляра (`acquire_instance() -> int|None`, `release_instance(h)`, `signal_first_instance()` — окно-
+приёмник `RECEIVER_TITLE` + сообщение `show_message_id()`), автозапуск HKCU\…\Run (`set_autostart(on) -> str`,
+`autostart_enabled() -> bool`, `autostart_command() -> str`), хоткей (`parse_hotkey(s) -> (mods|MOD_NOREPEAT, vk)`,
+`format_hotkey(s)`, `register_with_fallback(hwnd, id, s) -> HotkeyResult(combo, message)`, `FALLBACK_HOTKEYS`),
+`allow_set_foreground_any()`, `set_foreground(hwnd)`, `available()`. DWM — в jarvis/ui/dwm.py.
 
 ### jarvis.app и jarvis.ui
 `app.main(argv=None) -> int` — `jarvis run`.
@@ -208,7 +211,8 @@ Job Object (KILL_ON_JOB_CLOSE), именованный mutex одного экз
   `begin_request(text)`, `on_event(ev)` (события из jarvis.events, вызывается в UI-потоке), `ask_confirm(req)`,
   `set_local_mode(on)`, `show_toast(text, kind="error")`.
 - ui/icon.py — `render_icon(state: "ready"|"busy"|"local"|"warn", size) -> QImage` (рисунок QPainter; тот же
-  рисунок — в трее и в .ico при сборке); ui/tray.py — трей и меню.
+  рисунок — в трее и в .ico при сборке); ui/tray.py — `Tray`: сигналы `open_requested`, `local_toggled(bool)`,
+  `new_conversation`, `restart_hands`, `unload_hands`, `open_logs`, `autostart_toggled(bool)`, `quit_requested`.
 
 ### jarvis.selftest
 `main() -> int` — проверка собранного бандла без сети и GPU (раздел 5 NIGHT-PROMPT).

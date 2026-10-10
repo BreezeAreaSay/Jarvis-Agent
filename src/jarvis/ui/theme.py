@@ -13,7 +13,7 @@ BORDER = "#FFFFFF"  # рамка панели — белый с малой пр�
 BORDER_ALPHA = 0.09
 TEXT = "#ECECF1"
 TEXT_MUTED = "#A3A3AE"
-TEXT_FAINT = "#6C6C78"
+TEXT_FAINT = "#7A7A86"  # контраст с BG ≥ 4,2:1
 ACCENT = "#7C9BFF"
 SUCCESS = "#4ADE80"
 ERROR = "#F87171"
@@ -77,7 +77,6 @@ def font(px: int, weight: QFont.Weight = QFont.Weight.Normal, display: bool = Fa
     f.setFamilies(DISPLAY_FAMILIES if display else TEXT_FAMILIES)
     f.setPixelSize(px)
     f.setWeight(weight)
-    f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
     return f
 
 

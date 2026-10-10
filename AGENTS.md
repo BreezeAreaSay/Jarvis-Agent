@@ -236,8 +236,8 @@ uv run pytest -q -m "not live"
 - [x] S3 руки (live — TODO: точность, p95, prompt_n)
 - [x] S4 грамматика, контекст, роутер, jarvis ask
 - [x] S5 мозг (live — TODO: вход, t_first_token)
-- [ ] S6a приложение: старт, хоткей, трей, автозапуск
-- [ ] S6b окно: поток ответа, результаты, подтверждения
+- [x] S6a приложение: старт, хоткей, трей, автозапуск (live — TODO)
+- [x] S6b окно: поток ответа, результаты, подтверждения (live — TODO)
 - [x] S7 журнал, bench, stats, doctor (live — TODO: doctor, bench --live)
 - [ ] S8 ревью
 - [ ] S9 голос
@@ -264,3 +264,7 @@ uv run pytest -q -m "not live"
   wire_api и ошибки конфига — в notes. Live-тесты в conftest пропускаются без явного `-m live`.
 - S7: журнал (фоновая запись), stats с бюджетами, bench (dry, корпус + фикстура инвентаря), doctor (17 проверок;
   в local codex не запускается).
+- S6a: app (хоткей через nativeEventFilter на окне-приёмнике, Job Object + потомки llama-server, mutex и показ первого
+  экземпляра, трей 4 состояния, Brain.close только в рабочем потоке), иконка кодом (QPainter), автозапуск HKCU Run.
+- S6b: окно-лаунчер (анимации 140/90/120 мс, покой без таймеров, PlainText везде, подтверждение 700 мс/Ctrl+Enter,
+  автоповтор Enter/Esc игнорируется), снимки — scripts/ui_screenshots.py (docs/screenshots/ в .gitignore).

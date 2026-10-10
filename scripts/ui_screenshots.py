@@ -195,13 +195,12 @@ def main(argv: list[str] | None = None) -> int:
     def local(w: LauncherWindow) -> None:
         w.set_local_mode(True)
         w.show_launcher()
+        # как в core: вопрос мозгу при «локально:» — без облака, только сообщение
         w.begin_request("локально: почему небо голубое")
-        w.on_event(Level("local", "prefix:local", "4b"))
+        w.on_event(Level("local", "local:needs_gpt"))
         w.on_event(
-            TextChunk("Из-за рэлеевского рассеяния: короткие (синие) волны солнечного света рассеиваются ")
+            Done(False, "Это нужно GPT, а включён локальный режим", level="local", reason="local:needs_gpt")
         )
-        w.on_event(TextChunk("в атмосфере сильнее длинных (красных), и небо светится синим со всех сторон."))
-        w.on_event(Done(True, "", level="local"))
 
     def local_idle(w: LauncherWindow) -> None:
         w.set_local_mode(True)

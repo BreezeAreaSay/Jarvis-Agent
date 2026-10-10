@@ -174,13 +174,18 @@ action: str)`; `run(tool, args, text, ctx, source: "grammar"|"hands", dry=False)
 `Brain(cfg: BrainConfig, confirm_address: str, process_hook=None)`: `start()` (в фоне), `close()`,
 `ask(text, ctx, deep=False) -> Iterator[Event]`, `cancel()`, `new_conversation()`, `.ready`, `.status`.
 Прокладка `subprocess` в `openai_codex.client` ставится до первого `Codex()`. Для doctor: `codex_bin() -> Path`
-(бинарь из SDK; в exe — из бандла), `codex_env(cfg) -> dict` (CODEX_HOME мозга и прокси), `codex_home() -> Path`.
+(бинарь из SDK; в exe — из бандла), `codex_env(cfg) -> dict` (CODEX_HOME мозга и прокси), `codex_home() -> Path`,
+`build_overrides(cfg, confirm_address) -> tuple[str, ...]`, `install_subprocess_shim(hook)`. `Done.reason` мозга:
+region | quota | auth | config | start | transport | network | cancelled | closed | busy | error. `close()` синхронный
+(до ~2,5 с) — вызывать не из UI-потока.
 
 ### jarvis.core
-`Core(cfg, hands, brain, journal=None)`: `handle(text, ctx, dry=False) -> Iterator[Event]`, `cancel()`.
+`Core(cfg, hands, brain, journal=None)`: `handle(text, ctx, dry=False, hotkey_ms=None) -> Iterator[Event]`, `cancel()`.
+Ответ рук ask_gpt/ошибка → второй `Level("brain"|"local", "hands→ask_gpt"|"hands→error")`.
 
 ### jarvis.journal
-`Journal()`: `write(record: dict)` (фоновый поток), `close()`; `read(days) -> list[dict]`; `stats(days)`.
+`Journal()`: `write(record: dict)` (фоновый поток), `close()`; модульные `read(days) -> list[dict]`,
+`stats(days, records=None)`, `format_stats(st, min_tokens_per_s)`, `percentile`, `fmt_ms`. CLI журнал не пишет.
 
 ### jarvis.cli
 `main(argv=None) -> int`. Подкоманды: run (`jarvis.app.main`), ask, route, apps, bench (`jarvis.bench`),

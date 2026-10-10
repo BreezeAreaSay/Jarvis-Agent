@@ -44,3 +44,13 @@ def config_file(tmp_path: Path):
 def apps_fixture() -> list[dict[str, str]]:
     """Общий инвентарь приложений для тестов S2–S7."""
     return json.loads((FIXTURES / "apps.json").read_text(encoding="utf-8"))
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """live-тесты трогают рабочий стол, GPU и облако: только при явном `-m live` (а не по пути к файлу)."""
+    if "live" in (config.option.markexpr or "").replace("not live", ""):
+        return
+    skip = pytest.mark.skip(reason="live: запускай явно с -m live")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip)

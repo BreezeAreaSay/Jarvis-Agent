@@ -1,0 +1,105 @@
+name: build
+
+# Сборка exe и установщика на Windows: тесты → иконка → PyInstaller (onedir) → selftest бандла → Inno Setup →
+# артефакт «Jarvis-Setup» (Jarvis-Setup-<версия>.exe и zip папки onedir). Локально то же делает scripts/build.ps1.
+on:
+  push:
+    branches: [jarvis-v1]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: "1"
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: uv sync (с группой build)
+        timeout-minutes: 15
+        run: uv sync --locked --group build
+
+      - name: pytest
+        timeout-minutes: 20
+        run: uv run --no-sync pytest -q -m "not live"
+
+      - name: Иконка
+        timeout-minutes: 5
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run --no-sync python packaging/make_icon.py
+
+      - name: PyInstaller
+        timeout-minutes: 30
+        run: uv run --no-sync pyinstaller packaging/jarvis.spec --noconfirm --distpath build/dist --workpath build/work
+
+      - name: selftest бандла
+        timeout-minutes: 10
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: build\dist\Jarvis\jarvis-cli.exe selftest
+
+      - name: Размер папки onedir
+        run: |
+          $files = Get-ChildItem -Recurse -File build\dist\Jarvis
+          $mb = [math]::Round(($files | Measure-Object -Sum Length).Sum / 1MB, 1)
+          $line = "onedir build\dist\Jarvis: $mb MB, $($files.Count) files"
+          Write-Host $line
+          $top = Get-ChildItem build\dist\Jarvis\_internal | ForEach-Object {
+            $size = if ($_.PSIsContainer) { (Get-ChildItem -Recurse -File $_.FullName | Measure-Object -Sum Length).Sum } else { $_.Length }
+            [pscustomobject]@{ Name = $_.Name; MB = [math]::Round($size / 1MB, 1) }
+          } | Sort-Object MB -Descending | Select-Object -First 12
+          $top | ForEach-Object { Write-Host ("{0,8} MB  {1}" -f $_.MB, $_.Name) }
+          "### Jarvis onedir`n`n$line`n" >> $env:GITHUB_STEP_SUMMARY
+          "| _internal | MB |`n|---|---|" >> $env:GITHUB_STEP_SUMMARY
+          $top | ForEach-Object { "| $($_.Name) | $($_.MB) |" >> $env:GITHUB_STEP_SUMMARY }
+
+      - name: Inno Setup
+        timeout-minutes: 30
+        run: |
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) {
+            $candidates = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe")
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "choco install innosetup: код $LASTEXITCODE" }
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          $version = uv run --no-sync python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          if ($LASTEXITCODE -ne 0) { throw "версия из pyproject.toml не прочитана" }
+          $version = $version.Trim()
+          & $iscc "/DVersion=$version" "/DSourceDir=$PWD\build\dist\Jarvis" "/DOutputDir=$PWD\build\installer" "/DIconFile=$PWD\build\jarvis.ico" packaging\jarvis.iss
+          if ($LASTEXITCODE -ne 0) { throw "iscc: код $LASTEXITCODE" }
+          $setup = "build\installer\Jarvis-Setup-$version.exe"
+          if (-not (Test-Path $setup)) { throw "нет $setup" }
+          Compress-Archive -Path build\dist\Jarvis -DestinationPath "build\installer\Jarvis-$version-onedir.zip" -CompressionLevel Optimal
+          Get-ChildItem build\installer | ForEach-Object { "$($_.Name): $([math]::Round($_.Length / 1MB, 1)) MB" } | Tee-Object -Variable sizes
+          "`n### Установщик`n" >> $env:GITHUB_STEP_SUMMARY
+          $sizes | ForEach-Object { "- $_" >> $env:GITHUB_STEP_SUMMARY }
+
+      - name: Артефакт Jarvis-Setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-Setup
+          path: |
+            build/installer/Jarvis-Setup-*.exe
+            build/installer/Jarvis-*-onedir.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

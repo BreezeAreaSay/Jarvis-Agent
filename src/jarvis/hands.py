@@ -168,7 +168,8 @@ def build_body(user: str, max_tokens: int) -> bytes:
             "stream": False,
         }
     )
-    return _PREFIX + _dumps(user).encode("utf-8") + b"}]," + tail[1:].encode("utf-8")
+    # errors="replace": непарный суррогат (заголовок окна, текст команды) не роняет руки
+    return _PREFIX + _dumps(user).encode("utf-8", errors="replace") + b"}]," + tail[1:].encode("utf-8")
 
 
 def _clean(text: str, limit: int) -> str:

@@ -38,6 +38,11 @@ SELF_TEXT = procs.SELF_TEXT
 ACTIONS = ("minimize", "maximize", "restore", "minimize_all")
 
 
+def clean_text(text: str) -> str:
+    """Непарные суррогаты (GetWindowTextW их сохраняет) → «�»: иначе UTF-8 кодирование дальше падает."""
+    return text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+
+
 @dataclass(frozen=True)
 class WindowInfo:
     hwnd: int
@@ -484,7 +489,7 @@ class _Api:
             return ""
         buf = self._c.create_unicode_buffer(n + 1)
         got = self._GetWindowTextW(hwnd, buf, n + 1)
-        return buf.value[:got] if got > 0 else ""
+        return clean_text(buf.value[:got]) if got > 0 else ""
 
     def class_name(self, hwnd: int) -> str:
         buf = self._c.create_unicode_buffer(256)

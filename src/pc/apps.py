@@ -809,7 +809,34 @@ class _Api:
     def shell_app_names(self) -> list[tuple[str, str]]:
         if sys.platform != "win32":
             return []
-        return run_sta(_shell_app_names)
+        # свой STA-поток, а не общий run_sta: запуск приложений (files._start) не ждёт перечисления AppsFolder
+        return _run_own_sta(_shell_app_names)
+
+
+def _run_own_sta(fn: Callable[[], Any]) -> Any:
+    """fn() в отдельном коротком STA-потоке (CoInitializeEx/CoUninitialize), не дольше STA_TIMEOUT_S."""
+    fut: Future[Any] = Future()
+
+    def run() -> None:
+        com: Any = None
+        if sys.platform == "win32":
+            try:
+                import pythoncom
+
+                pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
+                com = pythoncom
+            except Exception:
+                log.exception("CoInitializeEx в STA-потоке не удался")
+        try:
+            fut.set_result(fn())
+        except BaseException as e:
+            fut.set_exception(e)
+        finally:
+            if com is not None:
+                com.CoUninitialize()
+
+    threading.Thread(target=run, name="jarvis-apps-shell", daemon=True).start()
+    return fut.result(timeout=STA_TIMEOUT_S)
 
 
 _api: Any = None

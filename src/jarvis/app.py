@@ -135,6 +135,13 @@ def _check_started(result: Any, default: str) -> None:
         raise RuntimeError(getattr(result, "text", "") or default)
 
 
+def _warm_audio() -> None:
+    """Поток звука и импорт pycaw — заранее (pc.audio.warmup), а не на первой команде громкости."""
+    from pc import audio
+
+    audio.warmup()
+
+
 def _safe(fn: Callable[[], Any], what: str) -> None:
     try:
         fn()
@@ -327,6 +334,7 @@ class JarvisApp(QObject):
         if self.core is None or self._stop.is_set():
             return
         threading.Thread(target=self._start_hands, name="jarvis-hands", daemon=True).start()
+        _safe(_warm_audio, "звук не прогрет")
         self._start_brain()
 
     def _log_process_start(self, tray_wall: float) -> None:

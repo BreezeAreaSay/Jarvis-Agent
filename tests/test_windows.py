@@ -430,3 +430,11 @@ def test_real_windows_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
     if wins:
         found = windows.find_window(wins[0].hwnd)
         assert found is None or found.hwnd == wins[0].hwnd  # окно могло закрыться между вызовами
+
+
+def test_clean_text_replaces_lone_surrogates() -> None:
+    """S8: GetWindowTextW отдаёт непарные суррогаты — дальше UTF-8 (руки, журнал, мозг) падал."""
+    from pc.windows import clean_text
+
+    assert clean_text("Чат \ud83d — Telegram") == "Чат � — Telegram"
+    assert clean_text("эмодзи 😀 ок").encode("utf-8")

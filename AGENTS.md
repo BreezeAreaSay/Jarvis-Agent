@@ -146,6 +146,9 @@ mode = "normal"                      # normal | local
 [ui]
 hotkey = "ctrl+alt+space"
 autohide_s = 1.2
+width = 720                          # ширина окна, px
+backdrop = "solid"                   # solid | acrylic (Windows 11; не вышло — сплошной фон)
+animations = true                    # false — без анимаций
 
 [hands]
 url = "http://127.0.0.1:8081"
@@ -240,3 +243,10 @@ uv run pytest -q -m "not live"
 - [ ] S9 голос
 
 ## Заметки
+Подробности, длинные списки и таблицы — в docs/notes.md; контракты модулей — в docs/architecture.md.
+
+### Журнал сессии
+- S0 (облако, NIGHT-PROMPT): Linux-контейнер, ветка jarvis-v1 от 66dc61d; scratch\, сервера рук, Everything и входа
+  в GPT нет — факты задания 00 взяты из NIGHT-PROMPT §2. uv 0.11, Python 3.12, openai-codex 0.160.1, mcp 1.30.
+- S1 начат: каркас и контракты (docs/architecture.md); `[tool.uv] environments` — win32 и linux; mcp>=1.29,<2;
+  PySide6-Essentials; эталонные scripts/brain_smoke.py и es_check.py исключены из ruff (держим как проверены).

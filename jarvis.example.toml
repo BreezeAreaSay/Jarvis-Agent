@@ -1,0 +1,35 @@
+mode = "normal"                      # normal | local
+
+[ui]
+hotkey = "ctrl+alt+space"
+autohide_s = 1.2
+width = 720                          # ширина окна, px
+backdrop = "solid"                   # solid | acrylic (Windows 11; не вышло — сплошной фон)
+animations = true                    # false — без анимаций
+
+[hands]
+url = "http://127.0.0.1:8081"
+model = "4b"                         # 4b | 8b — передаётся аргументом в server_cmd
+server_cmd = ['C:\Jarvis\scripts\start_hands.cmd']
+max_tokens = 128
+timeout_s = 4
+min_tokens_per_s = { "4b" = 60, "8b" = 35 }   # ниже — VRAM переполнена, предупреждение
+
+[brain]
+model_quick = "gpt-6-luna"           # имена из Codex().models() (отчёт 00, scratch\codex-models.txt)
+model_deep = "gpt-6.1-sol"
+service_tier = ""                    # "fast" — быстрее, но больше расход квоты
+proxy = ""                           # "http://127.0.0.1:7890", если GPT только через прокси
+fallback_provider = ""               # пусто; DeepSeek через Responses API не проверен (см. S5)
+idle_new_thread_min = 20
+
+[pc]
+es_path = 'C:\Jarvis\bin\es.exe'
+private_paths = []
+
+[aliases]
+"телега" = "Telegram"
+"хром" = "Google Chrome"
+
+[journal]
+store_text = true

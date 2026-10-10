@@ -58,11 +58,16 @@ datas += cb_datas
 datas += collect_data_files("openai_codex") + copy_metadata("openai-codex")
 # mcp.server.fastmcp при импорте читает importlib.metadata.version("mcp")
 datas += copy_metadata("mcp")
-# версия Jarvis для selftest/doctor (importlib.metadata.version("jarvis")); не установлен как пакет — без неё
+# Версия Jarvis для selftest/doctor (importlib.metadata.version("jarvis")) — только METADATA: в dist-info
+# editable-установки ещё direct_url.json с путём к дереву сборки, его в бандл не берём.
 try:
-    datas += copy_metadata("jarvis")
-except Exception as e:  # PackageNotFoundError: сборка из дерева без `uv sync`
-    _warn(f"no jarvis package metadata ({e}); version will be '?'")
+    from importlib.metadata import distribution
+
+    _dist = distribution("jarvis")
+    _meta = next(f for f in (_dist.files or []) if f.name == "METADATA" and f.parent.name.endswith(".dist-info"))
+    datas.append((str(_dist.locate_file(_meta)), str(_meta.parent)))
+except Exception as e:  # PackageNotFoundError/StopIteration: сборка из дерева без `uv sync`
+    _warn(f"no jarvis package metadata ({e!r}); version will be '?'")
 
 hiddenimports = [
     *collect_submodules("jarvis"),
@@ -141,11 +146,14 @@ PY_EXCLUDES = [
 ]
 
 # Файлы Qt, которые хуки берут «на всякий случай»: программный OpenGL (окно рисуется растром), плагины
-# картинок/иконок, тянущие Qt6Pdf/Qt6Svg, и переводы Qt (кроме русских).
+# картинок/иконок, тянущие Qt6Pdf/Qt6Svg, и переводы Qt (кроме русских). PyInstaller сам добавляет dist-info
+# пакетов, чью версию читает код (importlib.metadata.version("jarvis") в selftest), — из них убираем пути сборки.
 DROP_BASENAMES = {"opengl32sw.dll", "d3dcompiler_47.dll"}
 DROP_PLUGIN_PREFIXES = ("qpdf", "qsvg", "qtiff", "qwebp", "qicns", "qtga", "qwbmp", "libqpdf", "libqsvg")
 DROP_PLUGIN_PREFIXES += ("libqtiff", "libqwebp", "libqicns", "libqtga", "libqwbmp")
 DROP_LIB_PREFIXES = ("qt6pdf", "qt6svg", "libqt6pdf", "libqt6svg")
+# служебные файлы установщиков пакетов: в direct_url.json editable-установки — путь к дереву сборки
+DROP_DIST_INFO = {"direct_url.json", "uv_cache.json", "uv_build.json"}
 
 
 def _keep(dest: str) -> bool:
@@ -159,6 +167,8 @@ def _keep(dest: str) -> bool:
         return False
     if "translations" in parts and base.endswith(".qm"):
         return base.endswith("_ru.qm")
+    if len(parts) > 1 and parts[-2].endswith(".dist-info") and base in DROP_DIST_INFO:
+        return False
     return True
 
 

@@ -89,6 +89,8 @@ def test_spec_collects_codex_and_mcp() -> None:
     assert 'collect_all("codex_cli_bin")' in text
     assert 'copy_metadata("mcp")' in text  # mcp.server.fastmcp читает версию при импорте
     assert 'copy_metadata("openai-codex")' in text
+    assert 'copy_metadata("jarvis")' not in text  # direct_url.json с путём дерева сборки — не в бандл
+    assert 'distribution("jarvis")' in text
     for name in ('"jarvis"', '"pc"', '"openai_codex"', '"mcp"', '"pycaw"', '"comtypes"'):
         assert f"collect_submodules({name}" in text, name
     for module in ("win32job", "pythoncom", "win32com.shell.shell", "send2trash.win.modern"):
@@ -167,6 +169,10 @@ def _keep_fn():
         ("PySide6/Qt6Svg.dll", False),
         ("PySide6/translations/qtbase_de.qm", False),
         ("PySide6/Qt/lib/libQt6Svg.so.6", False),
+        ("jarvis-1.0.0.dist-info/METADATA", True),
+        ("jarvis-1.0.0.dist-info/direct_url.json", False),
+        ("jarvis-1.0.0.dist-info/uv_cache.json", False),
+        ("mcp-1.30.0.dist-info/METADATA", True),
     ],
 )
 def test_spec_drops_unused_qt_files(dest: str, kept: bool) -> None:

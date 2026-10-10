@@ -379,6 +379,12 @@ class LauncherWindow(QWidget):
             self.show_launcher()
         self._render_confirm()
 
+    def deny_confirms(self, caller: str) -> None:
+        """Снять «нет» вопросы источника caller (локальный режим — вопросы мозга)."""
+        if self._confirms.deny_caller(caller):  # type: ignore[arg-type]
+            self._confirms.prune()
+            self._render_confirm()
+
     def set_local_mode(self, on: bool) -> None:
         """Локальный режим: спокойный бейдж «локально» в строке ввода."""
         self._local = bool(on)

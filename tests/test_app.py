@@ -108,6 +108,9 @@ class FakeWindow(QWidget):
     def set_local_mode(self, on: bool) -> None:
         self.local = on
 
+    def deny_confirms(self, caller: str) -> None:
+        pass
+
     def show_toast(self, text: str, kind: str = "error") -> None:
         pass
 

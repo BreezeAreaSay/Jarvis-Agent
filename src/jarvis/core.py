@@ -42,6 +42,7 @@ class _Run:
     tool: str = ""
     args: dict[str, Any] = field(default_factory=dict)
     timings: dict[str, Any] = field(default_factory=dict)
+    cancel: threading.Event = field(default_factory=threading.Event)
 
 
 class Core:
@@ -70,8 +71,9 @@ class Core:
         self, text: str, ctx: Any, dry: bool = False, hotkey_ms: float | None = None
     ) -> Iterator[Event]:
         """События одного запроса. dry — решение без действия ПК; hotkey_ms — «хоткей → окно» для журнала."""
-        self._cancel.clear()
         run = _Run(text=text, t0=time.perf_counter(), hotkey_ms=hotkey_ms)
+        # свой флаг у каждого запроса: новый handle() не снимает отмену с ещё не закончившегося старого
+        self._cancel = run.cancel
         steps = self._steps(run, text, ctx, dry)
         error = ""
         try:
@@ -117,7 +119,7 @@ class Core:
         yield Level("grammar", route.reason)
         run.tool, run.args = hit.action, dict(hit.args)
         run.timings["grammar"] = _ms(run.t0)  # до начала действия
-        if self._cancel.is_set():
+        if run.cancel.is_set():
             yield _cancelled()
             return
         yield from self._execute(run, route, ctx, "grammar", dry)
@@ -139,7 +141,7 @@ class Core:
         if starting:  # спиннер строки → ✓/✗
             up = _hands_starting(self.hands) == "" and decision is not None
             yield Status(starting, done=True, ok=up, key="hands-start")
-        if self._cancel.is_set():
+        if run.cancel.is_set():
             yield _cancelled()
             return
         if decision is None or decision.kind == "error":
@@ -179,7 +181,7 @@ class Core:
         deep = bool(route.deep)
         model = self.cfg.brain.model_deep if deep else self.cfg.brain.model_quick
         yield Level("brain", reason, model=model)
-        if self._cancel.is_set():
+        if run.cancel.is_set():
             yield _cancelled()
             return
         for ev in self.brain.ask(route.text, ctx, deep=deep):
@@ -207,7 +209,7 @@ class Core:
                 level=run.level,
                 reason=run.reason,
                 timings=timings,
-                cancelled=done.cancelled or self._cancel.is_set(),
+                cancelled=done.cancelled or run.cancel.is_set(),
             )
         except Exception:
             log.exception("core: итог не собран")

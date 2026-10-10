@@ -209,6 +209,14 @@ class ConfirmQueue:
         self.shown_at = None
         return count
 
+    def deny_caller(self, caller: Caller) -> int:
+        """«Нет» на все вопросы этого источника (мозг выключен — его вопросы больше не к месту)."""
+        count = 0
+        for req in self._items:
+            if req.caller == caller:
+                count += req.resolve(False)
+        return count
+
     def _answer(self, approved: bool, now: float | None) -> bool | None:
         req = self.current
         if req is None or self.guarded(now):

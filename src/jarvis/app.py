@@ -28,7 +28,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from jarvis import config, winapp
 from jarvis import log as jlog
 from jarvis.context import Context
-from jarvis.events import Done
+from jarvis.events import Done, Level
 from jarvis.ui.icon import IconState
 from jarvis.ui.tray import Tray
 from pc import confirm_client
@@ -208,6 +208,8 @@ class JarvisApp(QObject):
         self._hands_lock = threading.Lock()
         self._brain_lock = threading.Lock()
         self._rid = 0
+        self._cancel_rid = 0  # номер запроса, который человек отменил Esc
+        self._next_active: tuple[Any] | None = None  # окно хоткея для следующей команды (пока идёт текущая)
         self._worker: threading.Thread | None = None
         self._canceller: threading.Thread | None = None
         self._hotkey_ms: float | None = None
@@ -474,6 +476,7 @@ class JarvisApp(QObject):
         self.health.mode = "local" if on else "normal"
         if on:
             self.health.brain = "off"
+            self.window.deny_confirms("brain")  # ход мозга прерывается — его вопросы снимаются «нет»
         if self.tray is not None:
             self.tray.set_local(on)
         self.window.set_local_mode(on)
@@ -594,10 +597,11 @@ class JarvisApp(QObject):
                 w.hide_launcher()
             return
         try:
-            self.ctx.active_window = pc_windows.foreground()
+            active = pc_windows.foreground()
         except Exception as e:
             log.debug("активное окно не снято: %s", e)
-            self.ctx.active_window = None
+            active = None
+        self._set_active(active)
         w.show_launcher()
         if winapp.available():
             winapp.set_foreground(int(w.winId()))  # HWND — заново: Qt мог пересоздать окно
@@ -609,11 +613,19 @@ class JarvisApp(QObject):
         """Показать окно из трея или по просьбе второго запуска: активного окна «до Jarvis» здесь нет."""
         w = self.window
         if not w.isVisible():
-            self.ctx.active_window = None
+            self._set_active(None)
         self._hotkey_ms = None
         w.show_launcher()
         if winapp.available():
             winapp.set_foreground(int(w.winId()))  # HWND — заново: Qt мог пересоздать окно
+
+    def _set_active(self, active: Any) -> None:
+        """Окно «до Jarvis». Идёт команда — она держит своё «@cur»; новое окно — для следующей команды."""
+        if self._worker is not None and self._worker.is_alive():
+            self._next_active = (active,)
+        else:
+            self._next_active = None
+            self.ctx.active_window = active
 
     @Slot()
     def _on_hidden(self) -> None:
@@ -633,6 +645,7 @@ class JarvisApp(QObject):
 
     @Slot()
     def _on_cancel(self) -> None:
+        self._cancel_rid = self._rid  # Esc относится к запросу на экране, даже если он ещё не начался
         core = self.core
         if core is not None and self._worker is not None and self._worker.is_alive():
             self._canceller = self._bg(_safe, core.cancel, "отмена запроса", name="jarvis-cancel")
@@ -643,6 +656,8 @@ class JarvisApp(QObject):
         self._rid += 1
         rid = self._rid
         hotkey_ms, self._hotkey_ms = self._hotkey_ms, None
+        if self._next_active is not None:
+            self.ctx.active_window, self._next_active = self._next_active[0], None
         self.window.begin_request(text)
         self._worker = self._bg(self._run_request, rid, text, hotkey_ms, prev, name=f"jarvis-request-{rid}")
 
@@ -666,9 +681,14 @@ class JarvisApp(QObject):
                 rid, Done(ok=False, text=f"Jarvis не готов: {reason}", reason="app:not_ready")
             )
             return
+        if self._stale(rid):  # заменён новым запросом или отменён Esc, пока ждал старый
+            self.event_ready.emit(rid, Done(ok=False, text="Отменено", reason="cancelled", cancelled=True))
+            return
         finished = False
         try:
             for ev in self.core.handle(text, self.ctx, hotkey_ms=hotkey_ms):
+                if isinstance(ev, Level) and self._stale(rid):
+                    _safe(self.core.cancel, "отмена запроса")  # Esc между проверкой и началом handle()
                 self.event_ready.emit(rid, ev)
                 finished = finished or isinstance(ev, Done)
         except Exception as e:
@@ -680,6 +700,9 @@ class JarvisApp(QObject):
             self.event_ready.emit(
                 rid, Done(ok=False, text="Запрос завершился без ответа", reason="app:no_done")
             )
+
+    def _stale(self, rid: int) -> bool:
+        return rid != self._rid or rid == self._cancel_rid
 
     @Slot(int, object)
     def _on_event(self, rid: int, ev: Any) -> None:
@@ -712,7 +735,7 @@ class JarvisApp(QObject):
 
     def _confirm(self, summary: str, details: str, caller: Caller) -> bool:
         """Обработчик confirm_client и ConfirmServer (рабочий поток или поток канала): одна очередь в окне."""
-        if self._closed:
+        if self._closed or (caller == "brain" and self.health.mode == "local"):
             return False
         if threading.current_thread() is threading.main_thread():
             log.error("подтверждение запрошено из UI-потока — отказ (иначе окно зависнет)")
@@ -780,16 +803,17 @@ class JarvisApp(QObject):
     def _stop_children(self) -> None:
         if self.core is not None:
             _safe(self.core.cancel, "отмена запроса")
-        if self.hands is not None:
-            _safe(self.hands.stop, "руки не остановлены")
-            if hasattr(self.hands, "close"):
-                _safe(self.hands.close, "руки не закрыты")
         if self.brain is not None:
             _safe(self.brain.close, "мозг не остановлен")
         if self.confirm_server is not None:
             _safe(self.confirm_server.close, "канал подтверждений не закрыт")
         if self.journal is not None:
             _safe(self.journal.close, "журнал не закрыт")
+        # последним: Hands.stop() ждёт замок, который ensure_server держит всю загрузку модели (до 60 с)
+        if self.hands is not None:
+            _safe(self.hands.stop, "руки не остановлены")
+            if hasattr(self.hands, "close"):
+                _safe(self.hands.close, "руки не закрыты")
 
 
 def scrub_child_env(environ: Any, meipass: str | None) -> None:

@@ -222,7 +222,7 @@ class CurHands(FakeHands):
     """Руки грузят модель (ensure_server внутри decide), потом решают «можешь закрыть его» → close @cur."""
 
     gate = threading.Event()
-    seen: list[Any] = []
+    seen: ClassVar[list[Any]] = []
 
     def decide(self, text: str, ctx: Any = None) -> Any:
         CurHands.seen.append(ctx.active_window.hwnd if ctx and ctx.active_window else None)

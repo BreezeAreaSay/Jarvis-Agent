@@ -116,7 +116,7 @@ def load() -> Config:
         return cfg
 
 
-_MODE_LINE = re.compile(r"""^(\s*mode\s*=\s*)("[^"]*"|'[^']*'|[^\s#]+)(.*)$""")
+_MODE_LINE = re.compile(r"""^(\s*(?:mode|"mode"|'mode')\s*=\s*)("[^"]*"|'[^']*'|[^\s#]+)(.*)$""")
 
 
 def save_mode(mode: Mode) -> None:

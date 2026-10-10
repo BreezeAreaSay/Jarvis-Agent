@@ -45,7 +45,7 @@ Enter — отправить; Esc — отменить запрос, второ�
 
 ## Конфиг
 
-`C:\Jarvis\jarvis.toml` (или `JARVIS_CONFIG`; у установленного exe без папки C:\Jarvis — `<data>\jarvis.toml`).
+`C:\Jarvis\jarvis.toml` (или `JARVIS_CONFIG`; у установленного exe, если файла C:\Jarvis\jarvis.toml нет, — `<data>\jarvis.toml`).
 Пример со всеми ключами — [jarvis.example.toml](jarvis.example.toml).
 
 ## Командная строка

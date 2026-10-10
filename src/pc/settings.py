@@ -57,11 +57,14 @@ def data_file(*parts: str) -> Path:
 
 
 def config_path() -> Path:
-    """JARVIS_CONFIG, иначе C:\\Jarvis\\jarvis.toml; у exe без папки C:\\Jarvis — <data>\\jarvis.toml."""
+    """JARVIS_CONFIG, иначе C:\\Jarvis\\jarvis.toml; у exe без этого файла — <data>\\jarvis.toml.
+
+    Критерий — файл, а не папка: start_hands.cmd создаёт C:\\Jarvis\\logs, конфиг exe от этого не переезжает.
+    """
     env = os.environ.get("JARVIS_CONFIG", "").strip()
     if env:
         return Path(env)
-    if is_frozen() and not DEV_CONFIG.parent.is_dir():
+    if is_frozen() and not DEV_CONFIG.is_file():
         return data_dir() / "jarvis.toml"
     return DEV_CONFIG
 

@@ -62,7 +62,10 @@ def test_config_path_frozen_without_jarvis_dir(
     monkeypatch.setattr(settings, "DEV_CONFIG", tmp_path / "Jarvis" / "jarvis.toml")
     assert settings.is_frozen()
     assert settings.config_path() == _isolated_data / "jarvis.toml"
-    (tmp_path / "Jarvis").mkdir()
+    # start_hands.cmd создаёт C:\Jarvis\logs — конфиг не переезжает
+    (tmp_path / "Jarvis" / "logs").mkdir(parents=True)
+    assert settings.config_path() == _isolated_data / "jarvis.toml"
+    (tmp_path / "Jarvis" / "jarvis.toml").write_text("", encoding="utf-8")
     assert settings.config_path() == tmp_path / "Jarvis" / "jarvis.toml"
 
 

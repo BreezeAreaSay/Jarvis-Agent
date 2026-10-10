@@ -207,7 +207,7 @@ def _app(x: str) -> tuple[str, float] | None:
         if cand in seen:
             continue
         seen.add(cand)
-        app, score = apps.resolve(cand)
+        app, score = apps.lookup(cand)  # без обновления инвентаря: промах грамматики — дело рук
         if app is not None and score >= apps.THRESHOLD:
             return app.name, float(score)
     return None

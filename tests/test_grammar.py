@@ -65,6 +65,7 @@ def make_fake_resolve(items: list[dict[str, str]]) -> Callable[[str], tuple[apps
 @pytest.fixture
 def fake_apps(monkeypatch: pytest.MonkeyPatch, apps_fixture: list[dict[str, str]]) -> None:
     monkeypatch.setattr(apps, "resolve", make_fake_resolve(apps_fixture))
+    monkeypatch.setattr(apps, "lookup", apps.resolve)
     monkeypatch.setattr(apps, "THRESHOLD", 85.0)
 
 
@@ -75,6 +76,7 @@ def any_apps(
     """Фейк resolve или настоящий pc.apps.resolve на том же инвентаре."""
     if request.param == "fake":
         monkeypatch.setattr(apps, "resolve", make_fake_resolve(apps_fixture))
+        monkeypatch.setattr(apps, "lookup", apps.resolve)
         monkeypatch.setattr(apps, "THRESHOLD", 85.0)
         yield
         return
@@ -369,6 +371,7 @@ GREEDY = [
 def test_not_greedy_even_if_resolve_matches_anything(monkeypatch: pytest.MonkeyPatch, text: str) -> None:
     """Служебные слова, «процесс», несколько шагов, общие слова — None, даже если resolve узнаёт всё."""
     monkeypatch.setattr(apps, "resolve", lambda name: (apps.App("Steam", "steam"), 100.0))
+    monkeypatch.setattr(apps, "lookup", apps.resolve)
     check(text, with_window(), None)
 
 

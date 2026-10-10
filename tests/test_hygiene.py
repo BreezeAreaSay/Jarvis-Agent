@@ -10,10 +10,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 FORBIDDEN_NAMES = {"jarvis.toml", "auth.json", ".env", ".git-credentials", "pipe.key"}
-FORBIDDEN_SUFFIXES = {
-    *(".log", ".exe", ".gguf", ".onnx", ".bin", ".dll", ".pyd", ".ico", ".png", ".zip", ".key", ".msi")
-}
-FORBIDDEN_DIRS = {"journal", "scratch", "logs", ".venv"}
+FORBIDDEN_SUFFIXES = {".log", ".exe", ".gguf", ".onnx", ".bin", ".dll", ".pyd", ".pyc"}
+FORBIDDEN_SUFFIXES |= {".ico", ".png", ".zip", ".key", ".msi"}
+FORBIDDEN_DIRS = {"journal", "scratch", "logs", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache"}
 
 SECRETS = [
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
@@ -24,18 +23,21 @@ SECRETS = [
 ]
 # выдуманные имена профилей в тестах и документации; «meow» — ловушка сравнения по префиксу
 ALLOWED_PROFILES = {"me", "meow", "public", "default", "runner~1", "runneradmin", "<имя>", "<user>"}
-PROFILE_PATH = re.compile(r"[A-Za-z]:\\{1,2}Users\\{1,2}([^\\/\s\"'`),.;:]+)", re.IGNORECASE)
+PROFILE_PATH = re.compile(r"[A-Za-z]:(?:\\{1,2}|/)Users(?:\\{1,2}|/)([^\\/\s\"'`),.;:]+)", re.IGNORECASE)
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})")
+ALLOWED_EMAIL_DOMAINS = ("example", "example.com", "example.org", "example.net", "invalid", "test")
 ALLOWED_USERNAMES = {"me", "runner", "runneradmin", ""}
 
 
 def _files() -> list[str]:
     out = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+        # quotepath=off и -z: иначе имена с кириллицей приходят в кавычках с \320… и не находятся на диске
+        ["git", "-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=ROOT,
         capture_output=True,
         check=True,
     ).stdout.decode("utf-8")
-    return [line for line in out.splitlines() if line and (ROOT / line).is_file()]
+    return [line for line in out.split("\0") if line and (ROOT / line).is_file()]
 
 
 def _texts() -> list[tuple[str, str]]:
@@ -89,3 +91,15 @@ def test_no_current_username() -> None:
     rx = re.compile(rf"(?<![\w]){re.escape(user)}(?![\w])", re.IGNORECASE)
     bad = [name for name, text in _texts() if rx.search(text)]
     assert not bad, f"имя текущего пользователя в файлах: {bad}"
+
+
+def test_no_emails() -> None:
+    bad = []
+    for name, text in _texts():
+        if name.startswith("prompts/"):
+            continue
+        for m in EMAIL.finditer(text):
+            domain = m.group(1).casefold()
+            if not any(domain == d or domain.endswith("." + d) for d in ALLOWED_EMAIL_DOMAINS):
+                bad.append(f"{name}: {m.group(0)}")
+    assert not bad, f"e-mail в файлах: {bad}"

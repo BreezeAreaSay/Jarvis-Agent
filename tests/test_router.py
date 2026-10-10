@@ -23,6 +23,7 @@ def _fake_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
         return (apps.App(_KNOWN[key], "id"), 100.0) if key in _KNOWN else (None, 10.0)
 
     monkeypatch.setattr(apps, "resolve", resolve)
+    monkeypatch.setattr(apps, "lookup", resolve)
     monkeypatch.setattr(apps, "THRESHOLD", 85.0)
 
 

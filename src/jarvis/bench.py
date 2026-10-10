@@ -292,7 +292,9 @@ def run_case(item: dict[str, Any], level: str, live: bool, hands: Any) -> CaseRe
                 r.tool, r.args = d.tool, dict(d.args)
                 if d.tool == "ask_gpt":
                     r.level, r.reason = "brain", "hands→ask_gpt"
-        r.level_ok = r.level == exp_level
+        # «руки → ask_gpt» — верный ответ рук для hands-фразы с tool "ask_gpt": уровень роутера совпал
+        handed_over = r.reason == "hands→ask_gpt" and exp_level == "hands" and item.get("tool") == "ask_gpt"
+        r.level_ok = r.level == exp_level or handed_over
     if r.level_ok:
         _check_tool(r)
     r.hint = hint(r) if not r.ok else ""

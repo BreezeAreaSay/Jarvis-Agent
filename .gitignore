@@ -1,12 +1,20 @@
-__pycache__/
-*.py[cod]
 .venv/
+__pycache__/
+*.pyc
 .pytest_cache/
 .ruff_cache/
-.hypothesis/
+*.egg-info/
 build/
 dist/
-*.egg-info/
-evals/reports/
-# Бенчмарк: логи сервера (полные пути, сотни КБ); отчёты коммитятся после просмотра.
-benchmarks/results/**/*.log
+scratch/
+bin/
+logs/
+journal/
+bench/results/
+jarvis.toml
+.env
+auth.json
+*.key
+*.log
+*.gguf
+*.onnx

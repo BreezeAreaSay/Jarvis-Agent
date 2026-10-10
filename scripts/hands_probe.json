@@ -1,0 +1,250 @@
+{
+ "model": "hands",
+ "messages": [
+  {
+   "role": "system",
+   "content": "Ты — руки помощника Jarvis на Windows. На каждую команду вызывай ровно один инструмент.\nПравила:\n- Вопрос, объяснение, совет, написать или перевести текст, несколько действий сразу — ask_gpt.\n- Непонятно, что сделать, — clarify с коротким вопросом.\n- Приветствие и болтовня — reply.\n- «его», «её», «это», «туда», «окно» без названия — target \"@cur\".\n- Название приложения, файла или папки пиши так, как сказал пользователь.\nПримеры:\nоткрой телегу → open {\"target\":\"телегу\"}\nзакрой его → close {\"target\":\"@cur\"}\nпереключись на хром → focus {\"target\":\"хром\"}\nсверни все окна → win {\"action\":\"minimize_all\"}\nгромкость 30 → vol {\"set\":30}\nсделай потише → vol {\"delta\":-10}\nвыключи звук → vol {\"mute\":true}\nследующий трек → media {\"action\":\"next\"}\nнайди файл отчёт → find {\"query\":\"отчёт\",\"kind\":\"file\"}\nубей процесс хрома → kill {\"name\":\"хром\"}\nпочему комп тормозит → ask_gpt {}\nсделай что-нибудь → clarify {\"question\":\"Что именно сделать?\"}"
+  },
+  {
+   "role": "user",
+   "content": "[окно: YouTube — chrome.exe] __CMD__"
+  }
+ ],
+ "tools": [
+  {
+   "type": "function",
+   "function": {
+    "name": "open",
+    "description": "Открыть приложение, папку, файл или сайт",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "target": {
+       "type": "string"
+      },
+      "kind": {
+       "type": "string",
+       "enum": [
+        "app",
+        "folder",
+        "file",
+        "url"
+       ]
+      }
+     },
+     "required": [
+      "target"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "close",
+    "description": "Закрыть окно или приложение",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "target": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "target"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "focus",
+    "description": "Переключиться на окно или приложение",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "target": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "target"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "win",
+    "description": "Свернуть, развернуть или восстановить окно",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "action": {
+       "type": "string",
+       "enum": [
+        "minimize",
+        "maximize",
+        "restore",
+        "minimize_all"
+       ]
+      },
+      "target": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "action"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "find",
+    "description": "Найти файл или папку на компьютере",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string"
+      },
+      "kind": {
+       "type": "string",
+       "enum": [
+        "file",
+        "folder",
+        "any"
+       ]
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "vol",
+    "description": "Громкость: set 0-100, delta -100..100 или mute",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "set": {
+       "type": "integer"
+      },
+      "delta": {
+       "type": "integer"
+      },
+      "mute": {
+       "type": "boolean"
+      }
+     },
+     "required": []
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "media",
+    "description": "Управление воспроизведением",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "action": {
+       "type": "string",
+       "enum": [
+        "play_pause",
+        "next",
+        "prev"
+       ]
+      }
+     },
+     "required": [
+      "action"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "kill",
+    "description": "Завершить процесс программы",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "reply",
+    "description": "Ответить текстом без действия",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "text"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "clarify",
+    "description": "Переспросить пользователя",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "question": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "question"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "ask_gpt",
+    "description": "Передать запрос GPT: вопросы, тексты, сложные задачи",
+    "parameters": {
+     "type": "object",
+     "properties": {},
+     "required": []
+    }
+   }
+  }
+ ],
+ "tool_choice": "required",
+ "parallel_tool_calls": false,
+ "chat_template_kwargs": {
+  "enable_thinking": false
+ },
+ "cache_prompt": true,
+ "temperature": 0,
+ "max_tokens": 128
+}

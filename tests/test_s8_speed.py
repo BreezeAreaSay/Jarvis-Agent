@@ -216,9 +216,9 @@ from test_app import fakes, make_app, qapp, ready, wait_for  # noqa: E402, F401
 
 
 def test_finding_jarvis_run_does_not_warm_audio(
-    qapp: Any,  # noqa: F811 — фикстуры из tests/test_app.py
-    make_app: Any,  # noqa: F811
-    fakes: Any,  # noqa: F811
+    qapp: Any,
+    make_app: Any,
+    fakes: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from pc import audio

@@ -83,7 +83,8 @@ Jarvis по спецификации AGENTS.md: этапы S1 → S2a → S2b �
   - команды PowerShell из этого файла запускай как `pwsh -NoProfile -Command "…"`;
   - переменную для ручного запуска задавай как `JARVIS_DATA_DIR='C:\Jarvis\scratch\data' uv run …`;
   - песочницы Codex у тебя нет — правила про повышенные права и writable_roots пропускай;
-  - «Кто что запускает» и «Публичный репозиторий» действуют полностью: не трогай %LOCALAPPDATA%\Jarvis, HKCU,
+  - «Кто что запускает» и «Публичный репозиторий» действуют полностью: не трогай C:\JarvisData,
+    %LOCALAPPDATA%\Jarvis, HKCU,
     ~\.codex, не запускай live-тесты и резидентные процессы.
 - **Если сессия прервётся,** новая начнётся словами «Прочитай AGENTS.md (Состояние, Журнал сессии) и продолжи
   prompts/FULL-PROMPT.md с первого незакрытого этапа» — веди журнал так, чтобы этого хватило.
@@ -136,7 +137,7 @@ Jarvis по спецификации AGENTS.md: этапы S1 → S2a → S2b �
      длиной тела (sk-[A-Za-z0-9_-]{20,}, ghp_[A-Za-z0-9]{36}, github_pat_[A-Za-z0-9_]{22,}, xox[abprs]-[A-Za-z0-9-]{10,},
      eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,}; в prompts/ эти префиксы встречаются как примеры — их не ловить);
      нет имени текущего пользователя Windows (USERNAME, кроме me/runner/runneradmin) и путей `C:\Users\<не me>\`;
-     пути окружения из AGENTS.md (C:\llama, C:\models, D:\Jarvis-model-cache, C:\Jarvis) разрешены.
+     пути окружения из AGENTS.md (C:\llama, C:\models, D:\Jarvis-model-cache, C:\Jarvis, C:\JarvisData) разрешены.
    - src/pc/settings.py: data_dir() (JARVIS_DATA_DIR или %LOCALAPPDATA%\Jarvis), config_path() (JARVIS_CONFIG или
      C:\Jarvis\jarvis.toml), load_pc_settings() — секции [pc] и [aliases] (tomllib → dataclass с дефолтами; файла нет —
      дефолты); перечитывать при смене mtime файла.
@@ -305,6 +306,21 @@ GET http://127.0.0.1:8081/health = 200 — используй его для по
 и не останавливай. Не запущен — всё, что требует сервера, оформи live-тестом и TODO(live) и иди дальше. Отправная точка для SYSTEM и TOOLS — scripts/hands_probe.json; мои замеры из задания 00 —
 scratch\hands-4b.txt и scratch\hands-8b.txt (только числа — в репозиторий их не копировать).
 
+Что показал замер 00 (16 фраз × 2, 4B и 8B; учти в п.2, 3, 5 и 7):
+- Скорость и кэш в норме: tg 73–75 т/с у 4B и 47 т/с у 8B, prompt_n 10–24, cache_n 1183. Руки — 4B: 11/16,
+  p50 352 мс. 8B (12/16, p50 565 мс) сама отвечает на «почему…» и «переведи…» через reply вместо ask_gpt.
+- «привет как дела» → обрезано по max_tokens: 128 токенов, 2,0 с, оба раза. Только эта фраза и даёт p95 2,0 с,
+  остальные ≤0,82 с. Нужно: пример на приветствие с коротким reply в SYSTEM; правило «reply и clarify — одна короткая
+  фраза, текста вне инструмента нет»; в TOOLS у reply.text и clarify.question — "maxLength": 80.
+- «открой загрузки» → focus, «покажи дискорд» → open. В execute.py для приложений и папок open и focus
+  взаимозаменяемы: focus без подходящего окна → open, open уже открытого приложения или папки → focus. В live-тесте
+  и в bench (S7) open↔focus для app/folder считать совпадением. В SYSTEM — пример на открытие папки.
+- «закрой процесс стима» → close вместо kill. Правило: «процесс», «убей», «заверши» → kill.
+- «ну сделай там это» → media next вместо clarify. В execute.py media, vol и win без target исполнять, только если
+  в тексте есть слово их темы (трек, песня, музыка, пауза…; громкость, звук, тише, громче…; окно, сверни,
+  разверни…), иначе — clarify без действия. Unit-тест на эту фразу.
+- Примеры в SYSTEM не повторяют дословно фразы из hands_probe.json и live-корпуса, иначе замер завышен.
+
 Журнала и doctor ещё нет (S7): предупреждения пиши через logging (логгер "jarvis", log.py из S1) и сохраняй
 в Hands.status (dict) — doctor в S7 прочитает его оттуда.
 
@@ -369,7 +385,10 @@ scratch\hands-4b.txt и scratch\hands-8b.txt (только числа — в р�
    в bench/results/hands-live-<дата>.txt.
 
 Готово, когда: проверки зелёные; в live на моём ПК точность ≥90 %, p95 ≤1,2 с, у тёплых запросов prompt_n <100.
-Доводку SYSTEM/примеров по моему live-замеру сделаем отдельной сессией позже — сейчас не жди.
+Сервер рук запущен — до коммита S3 прогони 25 фраз live-корпуса пробными запросами к нему (это разрешено:
+«пробные запросы рукам» в AGENTS.md; сам `pytest -m live` не запускай) и доведи SYSTEM, примеры и TOOLS до
+≥90 % и p95 ≤1,2 с. Числа до и после — в журнал, фразы и ответы модели в репозиторий не копируй.
+Доводку по моему live-замеру сделаем отдельной сессией позже — сейчас не жди.
 Мне на потом (впиши в docs/manual-checks.md, раздел «S3»):
 1) `Start-Process C:\Jarvis\scripts\start_hands.cmd -ArgumentList 4b -WindowStyle Minimized`;
 2) `uv run jarvis ask --level hands --dry --window "Telegram" "закрой его"`;
@@ -437,14 +456,16 @@ codex.exe). Особенно важны «Контракты», «Пути, це
   workhorse) и запиши выбор в «Заметки»; файла нет — оставь значения примера и внеси проверку имён в docs/manual-checks.md (раздел «S5»).
   jarvis.toml не коммитится.
 - У мозга свой CODEX_HOME: <data>\codex-home (см. «Контракты»). Вход в него я сделал в задании 00 (шаг 4.6);
-  если doctor/probe говорит «Not logged in» — внеси в docs/manual-checks.md (раздел «S5»): `New-Item -ItemType Directory -Force
-  "$env:LOCALAPPDATA\Jarvis\codex-home" | Out-Null; $env:CODEX_HOME = "$env:LOCALAPPDATA\Jarvis\codex-home";
-  codex login; Remove-Item Env:CODEX_HOME`.
+  если doctor/probe говорит «Not logged in» — внеси в docs/manual-checks.md (раздел «S5»): `$d = if ($env:JARVIS_DATA_DIR) { $env:JARVIS_DATA_DIR }
+  else { "$env:LOCALAPPDATA\Jarvis" }; New-Item -ItemType Directory -Force "$d\codex-home" | Out-Null;
+  $env:CODEX_HOME = "$d\codex-home"; codex login; Remove-Item Env:CODEX_HOME`.
 - Разведка: scripts/brain_probe.py — старт Codex с теми же overrides, что у Brain, и CODEX_HOME =
-  %LOCALAPPDATA%\Jarvis\codex-home (там мой вход из задания 00), thread_start, один ход с печатью repr каждого события
-  и один ход «какие окна сейчас открыты?» (должен вызвать инструмент pc). Отправная точка —
-  C:\Jarvis\scripts\brain_smoke.py (на этом ПК уже работал; мой вывод — scratch\brain-smoke.txt). Probe сам не
-  запускай: он пишет в %LOCALAPPDATA%\Jarvis, отправляет в облако мои реальные окна и тратит квоту. Напиши скрипт,
+  <data>\codex-home (там мой вход из задания 00; у меня JARVIS_DATA_DIR=C:\JarvisData), thread_start, один ход
+  с печатью repr каждого события и один ход «какие окна сейчас открыты?» (должен вызвать инструмент pc); затем
+  второй тред в том же процессе и t_first_token его первого хода. Замер 00: первый ход 6,3 с, тёплые 1,2–1,9 с, но
+  он шёл с моим ~/.codex и его MCP-серверами; probe покажет, медленный ли первый ход процесса или каждого треда.
+  Отправная точка — C:\Jarvis\scripts\brain_smoke.py (на этом ПК уже работал; мой вывод — scratch\brain-smoke.txt). Probe сам не
+  запускай: он пишет в каталог данных, отправляет в облако мои реальные окна и тратит квоту. Напиши скрипт,
   проверь ruff, API бери из раздела ниже и из исходников openai_codex в .venv; запуск
   `uv run python scripts\brain_probe.py` — первым пунктом в docs/manual-checks.md (раздел «S5»). Реальный вывод (заголовки окон, пути)
   не копируй ни в репозиторий, ни в тесты, ни в «Заметки» — Notification в тестах только синтетические.
@@ -630,6 +651,8 @@ Esc срабатывает) → «закрой процесс хром»: Enter 
      «режим папок: поиск только в проиндексированных папках»; оба 0 → ✗ (служба Everything или индексы папок);
      поиск файла с кириллицей в имени возвращает точный путь;
    - кэш приложений (сколько, возраст), автозапуск, режим, хоткей зарегистрирован;
+   - путь data_dir() только из ASCII-символов, иначе ⚠ «в пути данных не-ASCII символы: codex 0.160.1 с таким
+     CODEX_HOME не работает — задай JARVIS_DATA_DIR, например C:\JarvisData, и войди заново (команда из S5)»;
    - мозг (только если режим не local — в local codex не запускать вообще, `--brain` → отказ с пояснением):
      `codex login status` с CODEX_HOME мозга — бинарь из SDK; результат он пишет в stderr: код 0 и «Logged in using
      ChatGPT» → ✓; код 1 — показать stderr: «Not logged in» → подсказать вход (команда из S5), «Error loading

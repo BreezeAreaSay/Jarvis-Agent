@@ -10,14 +10,16 @@
   workhorse) и запиши выбор в «Заметки»; файла нет — оставь значения примера и внеси проверку имён в «Проверка руками».
   jarvis.toml не коммитится.
 - У мозга свой CODEX_HOME: <data>\codex-home (см. «Контракты»). Вход в него я сделал в задании 00 (шаг 4.6);
-  если doctor/probe говорит «Not logged in» — внеси в «Проверка руками»: `New-Item -ItemType Directory -Force
-  "$env:LOCALAPPDATA\Jarvis\codex-home" | Out-Null; $env:CODEX_HOME = "$env:LOCALAPPDATA\Jarvis\codex-home";
-  codex login; Remove-Item Env:CODEX_HOME`.
+  если doctor/probe говорит «Not logged in» — внеси в «Проверка руками»: `$d = if ($env:JARVIS_DATA_DIR) { $env:JARVIS_DATA_DIR }
+  else { "$env:LOCALAPPDATA\Jarvis" }; New-Item -ItemType Directory -Force "$d\codex-home" | Out-Null;
+  $env:CODEX_HOME = "$d\codex-home"; codex login; Remove-Item Env:CODEX_HOME`.
 - Разведка: scripts/brain_probe.py — старт Codex с теми же overrides, что у Brain, и CODEX_HOME =
-  %LOCALAPPDATA%\Jarvis\codex-home (там мой вход из задания 00), thread_start, один ход с печатью repr каждого события
-  и один ход «какие окна сейчас открыты?» (должен вызвать инструмент pc). Отправная точка —
-  C:\Jarvis\scripts\brain_smoke.py (на этом ПК уже работал; мой вывод — scratch\brain-smoke.txt). Probe сам не
-  запускай: он пишет в %LOCALAPPDATA%\Jarvis, отправляет в облако мои реальные окна и тратит квоту. Напиши скрипт,
+  <data>\codex-home (там мой вход из задания 00; у меня JARVIS_DATA_DIR=C:\JarvisData), thread_start, один ход
+  с печатью repr каждого события и один ход «какие окна сейчас открыты?» (должен вызвать инструмент pc); затем
+  второй тред в том же процессе и t_first_token его первого хода. Замер 00: первый ход 6,3 с, тёплые 1,2–1,9 с, но
+  он шёл с моим ~/.codex и его MCP-серверами; probe покажет, медленный ли первый ход процесса или каждого треда.
+  Отправная точка — C:\Jarvis\scripts\brain_smoke.py (на этом ПК уже работал; мой вывод — scratch\brain-smoke.txt). Probe сам не
+  запускай: он пишет в каталог данных, отправляет в облако мои реальные окна и тратит квоту. Напиши скрипт,
   проверь ruff, API бери из раздела ниже и из исходников openai_codex в .venv; запуск
   `uv run python scripts\brain_probe.py` — первым пунктом в «Проверка руками». Реальный вывод (заголовки окон, пути)
   не копируй ни в репозиторий, ни в тесты, ни в «Заметки» — Notification в тестах только синтетические.

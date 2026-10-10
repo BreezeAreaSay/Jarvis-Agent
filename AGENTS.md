@@ -26,8 +26,11 @@
 - Модели (хэши совпадают с официальными файлами):
   C:\models\Qwen3-4B-Instruct-2507-Q4_K_M.gguf — unsloth/Qwen3-4B-Instruct-2507-GGUF, генерация ~86 т/с;
   D:\Jarvis-model-cache\Qwen3-8B-Q4_K_M.gguf — Qwen/Qwen3-8B-GGUF, генерация ~52 т/с, промпт ~790 т/с.
-  Оценка одного вызова рук: 4B ≈ 0,3–0,45 с, 8B ≈ 0,45–0,7 с (проверяется замером).
+  Замер задания 00 (16 фраз × 2): 4B — 11/16, p50 352 мс; 8B — 12/16, p50 565 мс, сама отвечает на вопросы
+  вместо ask_gpt. Руки — 4B.
 - Codex CLI; SDK openai-codex 0.160.1; вход через ChatGPT. У мозга Jarvis свой CODEX_HOME (см. «Контракты»).
+- В пути профиля пользователя есть кириллица, а SDK 0.160.1 с CODEX_HOME по такому пути не заработал
+  (задание 00). Поэтому каталог данных Jarvis — C:\JarvisData (переменная пользователя JARVIS_DATA_DIR).
 - Everything (автозапуск) и C:\Jarvis\bin\es.exe (ES ≥ 1.1.0.37).
 - Python 3.12 через uv; PowerShell 7 (pwsh) установлен.
 
@@ -71,8 +74,8 @@ PySide6 (окно и трей), pytest, ruff. Позже для голоса: sh
   по имени процесса не искать (у Ollama процесс модели тоже llama-server.exe).
 - Под `jarvis run` дочерние процессы (llama-server, codex.exe) — в Job Object с KILL_ON_JOB_CLOSE: если Jarvis
   упал, Windows их завершит и освободит VRAM.
-- Мозг: свой CODEX_HOME (%LOCALAPPDATA%\Jarvis\codex-home, вход один раз), чтобы не наследовать ~/.codex
-  пользователя (его MCP-серверы, AGENTS.md, notify); cwd — пустая папка %LOCALAPPDATA%\Jarvis\brain;
+- Мозг: свой CODEX_HOME (<data>\codex-home, вход один раз), чтобы не наследовать ~/.codex
+  пользователя (его MCP-серверы, AGENTS.md, notify); cwd — пустая папка <data>\brain (<data> — pc.settings.data_dir());
   `project_doc_max_bytes=0`; встроенного shell нет (`features.shell_tool=false`). apply_patch выключить нельзя —
   запись файлов мозгом блокируют только `sandbox=read_only` и `approval_mode=deny_all`: эти значения не менять.
 
@@ -106,7 +109,8 @@ PySide6 (окно и трей), pytest, ruff. Позже для голоса: sh
 - Отказ всем: UNC, \\?\ и \\.\, двоеточие после буквы диска (потоки NTFS), системные зоны (C:\Windows,
   Program Files, Program Files (x86), ProgramData, %APPDATA%\Microsoft, ~\.ssh, ~\.codex), private_paths из конфига.
 - Для brain дополнительно отказ (не «спросить»), и такие пути скрыты в поиске и списках: %APPDATA% и %LOCALAPPDATA%
-  целиком (профили браузеров, данные Telegram, каталог данных Jarvis с журналом и pipe.key), скрытые папки ~\.*,
+  целиком (профили браузеров, данные Telegram), каталог данных Jarvis data_dir() — где бы он ни лежал (журнал,
+  pipe.key, codex-home мозга), скрытые папки ~\.*,
   файлы .env, *.kdbx, *.pem, *.pfx, *.key, auth.json, .git-credentials. В запросе поиска от brain функции
   Everything content:, utf8content:, regex: — отказ.
 - os.startfile никогда не получает сырую строку от модели: приложение — только `shell:AppsFolder\<AppID>` из
@@ -188,9 +192,9 @@ uv run pytest -q -m "not live"
 ## Кто что запускает
 - Live-тесты и все команды из «Проверка руками» запускает только человек на своём ПК: они меняют рабочий стол
   (громкость, окна, процессы, автозапуск), отправляют в облако реальные файлы и окна, тратят квоту.
-- Сессия не запускает резидентные процессы (`jarvis run`, scripts\start_hands.cmd) и не трогает настоящие
-  %LOCALAPPDATA%\Jarvis, HKCU и ~\.codex. Читать уже запущенный владельцем llama-server (GET /health, /props,
-  POST /v1/chat/completions/input_tokens, пробные запросы рукам) — можно.
+- Сессия не запускает резидентные процессы (`jarvis run`, scripts\start_hands.cmd) и не трогает настоящий
+  каталог данных (C:\JarvisData, %LOCALAPPDATA%\Jarvis), HKCU и ~\.codex. Читать уже запущенный владельцем
+  llama-server (GET /health, /props, POST /v1/chat/completions/input_tokens, пробные запросы рукам) — можно.
 - Итог live-прогона печатается (`pytest -s`) и пишется в bench/results/ — владелец пришлёт его в сессию.
 
 ## Песочница сессии (Codex, workspace-write)

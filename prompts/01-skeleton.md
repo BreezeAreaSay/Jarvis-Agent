@@ -25,7 +25,7 @@
      длиной тела (sk-[A-Za-z0-9_-]{20,}, ghp_[A-Za-z0-9]{36}, github_pat_[A-Za-z0-9_]{22,}, xox[abprs]-[A-Za-z0-9-]{10,},
      eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,}; в prompts/ эти префиксы встречаются как примеры — их не ловить);
      нет имени текущего пользователя Windows (USERNAME, кроме me/runner/runneradmin) и путей `C:\Users\<не me>\`;
-     пути окружения из AGENTS.md (C:\llama, C:\models, D:\Jarvis-model-cache, C:\Jarvis) разрешены.
+     пути окружения из AGENTS.md (C:\llama, C:\models, D:\Jarvis-model-cache, C:\Jarvis, C:\JarvisData) разрешены.
    - src/pc/settings.py: data_dir() (JARVIS_DATA_DIR или %LOCALAPPDATA%\Jarvis), config_path() (JARVIS_CONFIG или
      C:\Jarvis\jarvis.toml), load_pc_settings() — секции [pc] и [aliases] (tomllib → dataclass с дефолтами; файла нет —
      дефолты); перечитывать при смене mtime файла.

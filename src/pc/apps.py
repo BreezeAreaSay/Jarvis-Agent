@@ -46,6 +46,7 @@ PS_COMMAND = (
 )
 REFRESH_ARGV = [POWERSHELL, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", PS_COMMAND]
 REFRESH_TIMEOUT_S = 30
+APPS_FOLDER_CLSID = "shell:::{4234d49b-0245-4df3-b780-3893943456e1}"
 
 
 @dataclass(frozen=True)
@@ -236,6 +237,7 @@ _GROUP_TABLE: list[_Group] = []
 
 
 def _groups() -> list[_Group]:
+    global _GROUP_TABLE
     if not _GROUP_TABLE:
         table = []
         for group in GROUPS:
@@ -252,7 +254,7 @@ def _groups() -> list[_Group]:
             if exe:
                 variants.add(latin(exe.removesuffix(".exe")))
             table.append(_Group(exe, frozenset(keys), frozenset(variants)))
-        _GROUP_TABLE.extend(table)
+        _GROUP_TABLE = table  # целиком, одним присваиванием: параллельный вызов не увидит половину
     return _GROUP_TABLE
 
 
@@ -791,7 +793,7 @@ def _shell_app_names() -> list[tuple[str, str]]:
     import win32com.client
 
     shell = win32com.client.Dispatch("Shell.Application")
-    folder = shell.NameSpace("shell:AppsFolder")
+    folder = shell.NameSpace("shell:AppsFolder") or shell.NameSpace(APPS_FOLDER_CLSID)
     if folder is None:
         return []
     items = folder.Items()

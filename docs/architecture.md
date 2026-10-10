@@ -108,11 +108,12 @@ delete_permanent, jarvis_self.
 - `trash(path, caller) -> Result`, `read_text(path, caller, max_bytes=65536) -> Result`.
 
 ### pc._input
-`send_key(vk, up=False) -> bool`, `send_text(text) -> int` — SendInput (KEYEVENTF_UNICODE, суррогатные пары,
+`send_key(vk, up=False) -> bool`, `send_text(text) -> int`, `text_inputs(text) -> list[INPUT]` — SendInput (KEYEVENTF_UNICODE, суррогатные пары,
 перевод строки — VK_RETURN). Общий для windows.focus (отпускание Alt), media и system.type_text.
 
 ### pc.audio / pc.media / pc.system
-- `audio.volume_get(caller) -> Result` (data: {"level": int, "muted": bool});
+- `audio.volume_get(caller) -> Result` (data: {"level": int, "muted": bool}); `audio.warmup()` — фоновый прогрев
+  потока звука и импорта pycaw при старте `jarvis run`;
   `audio.volume(set=None, delta=None, mute=None, caller="user") -> Result`. Вся работа с COM — в одном потоке.
 - `media.media(action: "play_pause"|"next"|"prev", caller) -> Result`.
 - `system.lock(caller)`, `system.power(action: "sleep"|"shutdown"|"restart", caller)`, `system.clipboard_get(caller)`,

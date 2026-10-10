@@ -389,7 +389,7 @@ def test_dispatch_run_mcp_selftest_autostart(
     calls: list[Any] = []
     install(monkeypatch, "jarvis.app", main=lambda argv=None: calls.append(("run", argv)) or 0)
     install(monkeypatch, "pc.mcp", main=lambda: calls.append(("mcp",)))
-    install(monkeypatch, "jarvis.selftest", main=lambda: calls.append(("selftest",)) or 1)
+    install(monkeypatch, "jarvis.selftest", main=lambda argv=None: calls.append(("selftest",)) or 1)
     install(
         monkeypatch, "jarvis.winapp", set_autostart=lambda on: calls.append(("autostart", on)) or "включён"
     )

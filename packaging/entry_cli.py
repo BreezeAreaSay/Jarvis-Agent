@@ -7,10 +7,16 @@
 import os
 import sys
 
+# Qt нужен только этим подкомандам; остальным (mcp — сервер мозга, ask, doctor…) переменную не ставим:
+# её унаследуют программы, которые они открывают, и чужой Qt загрузит наши плагины.
+QT_COMMANDS = {"selftest", "run"}
+
 
 def _qt_env() -> None:
     meipass = getattr(sys, "_MEIPASS", None)
     if not getattr(sys, "frozen", False) or not meipass:
+        return
+    if not QT_COMMANDS.intersection(sys.argv[1:2]):
         return
     qt_dir = (
         os.path.join(meipass, "PySide6")

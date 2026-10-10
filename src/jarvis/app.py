@@ -784,6 +784,26 @@ class JarvisApp(QObject):
             _safe(self.journal.close, "журнал не закрыт")
 
 
+def scrub_child_env(environ: Any, meipass: str | None) -> None:
+    """Убрать из окружения то, что рантайм-хук PyInstaller ставит для нашего Qt.
+
+    QT_PLUGIN_PATH, QML2_IMPORT_PATH и папку бандла в PATH наследуют программы, которые открывает Jarvis,
+    и чужой Qt (OBS и т.п.) иначе грузит наши плагины. Вызывать после QCoreApplication.libraryPaths().
+    """
+    environ.pop("QT_PLUGIN_PATH", None)
+    environ.pop("QML2_IMPORT_PATH", None)
+    if not meipass:
+        return
+    parts = [p for p in environ.get("PATH", "").split(os.pathsep) if p]
+    keep = [
+        p
+        for p in parts
+        if os.path.normcase(os.path.normpath(p)) != os.path.normcase(os.path.normpath(meipass))
+    ]
+    if len(keep) != len(parts):
+        environ["PATH"] = os.pathsep.join(keep)
+
+
 def _qapp() -> QApplication:
     existing = QApplication.instance()
     qapp = (
@@ -796,6 +816,9 @@ def _qapp() -> QApplication:
     font = QFont(qapp.font())
     font.setFamilies(["Segoe UI Variable Text", "Segoe UI"])
     qapp.setFont(font)
+    if getattr(sys, "frozen", False):
+        qapp.libraryPaths()  # Qt запоминает пути к плагинам до очистки окружения
+        scrub_child_env(os.environ, getattr(sys, "_MEIPASS", None))
     return qapp
 
 

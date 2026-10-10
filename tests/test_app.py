@@ -919,3 +919,18 @@ def test_real_window_contract(qapp: QApplication, fakes: FakeWinApi, monkeypatch
         assert FakeCore.last.handled[0][0] == "закрой процесс хром"
     finally:
         dispose(qapp, a)
+
+
+def test_scrub_child_env_removes_bundle_qt_paths() -> None:
+    """Программы, открытые Jarvis, не наследуют плагины Qt и папку бандла в PATH."""
+    from jarvis.app import scrub_child_env
+
+    meipass = os.path.join(os.sep, "opt", "Jarvis", "_internal")
+    env = {
+        "QT_PLUGIN_PATH": os.path.join(meipass, "PySide6", "plugins"),
+        "QML2_IMPORT_PATH": os.path.join(meipass, "PySide6", "qml"),
+        "PATH": os.pathsep.join([meipass, os.path.join(os.sep, "usr", "bin")]),
+    }
+    scrub_child_env(env, meipass)
+    assert "QT_PLUGIN_PATH" not in env and "QML2_IMPORT_PATH" not in env
+    assert env["PATH"] == os.path.join(os.sep, "usr", "bin")

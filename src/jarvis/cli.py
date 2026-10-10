@@ -85,7 +85,8 @@ def _parser() -> argparse.ArgumentParser:
     autostart = sub.add_parser("autostart", help="автозапуск при входе в Windows")
     autostart.add_argument("state", choices=("on", "off"))
 
-    sub.add_parser("selftest", help="проверка собранного бандла без сети и GPU")
+    st = sub.add_parser("selftest", help="проверка собранного бандла без сети и GPU")
+    st.add_argument("--offscreen", action="store_true", help="Qt без экрана")
     sub.add_parser("mcp")  # скрытая: сервер pc для мозга (stdio); без help — не видна в списке
     return p
 
@@ -136,7 +137,7 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
 def _cmd_selftest(args: argparse.Namespace) -> int:
     from jarvis import selftest
 
-    return int(selftest.main() or 0)
+    return int(selftest.main(["--offscreen"] if args.offscreen else []) or 0)
 
 
 def _cmd_autostart(args: argparse.Namespace) -> int:

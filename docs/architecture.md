@@ -49,9 +49,11 @@ delete_permanent, jarvis_self.
 ### pc.confirm_client
 - `set_confirm_handler(handler: Callable[[str, str, Caller], bool] | None)`.
 - `confirm(summary, details, caller) -> bool`: обработчик процесса; иначе pipe из `JARVIS_CONFIRM_PIPE`; иначе False.
-- `ConfirmServer(callback: Callable[[str, str, Caller], bool])`: `.start()`, `.address`, `.close()`. Запросы из
-  pipe всегда от мозга (caller="brain", в окне — «просит GPT»).
-- `load_key(create=False)`, `pipe_address(pid=None)`.
+  Через pipe: summary > 1000 или details > 16000 символов — отказ (без обрезки).
+- `ConfirmServer(callback: Callable[[str, str, Caller], bool])`: `.start()` (нет/повреждён ключ — RuntimeError),
+  `.address`, `.close()`. Запросы из pipe всегда от мозга (caller="brain", в окне — «просит GPT»). Второй сервер
+  в том же процессе — адрес `…-<PID>-<n>`.
+- `load_key(create=False)`, `key_path()`, `pipe_address(pid=None)`; `TIMEOUT_S`, `PIPE_ENV`.
 
 ### pc.paths
 - `canonical(path: str) -> str` — абсолютный путь Windows: нормализация (`..`, слеши), `_resolve()` (ссылки,
@@ -119,7 +121,8 @@ delete_permanent, jarvis_self.
 FastMCP stdio, `python -m pc.mcp` (в exe — `jarvis-cli.exe mcp`), caller="brain". 18 инструментов: list_windows,
 list_apps, find_files, open, focus, close, window, volume, media, processes, kill_process, clipboard_get,
 clipboard_set, read_text_file, move_to_trash, type_text, lock, power. `TOOL_ACTIONS: dict[str, list[str]]` —
-инструмент → строки policy. `main()` — запуск сервера.
+инструмент → строки policy; `TOOLS: dict[str, Callable]` — имя → функция инструмента; `build_server() -> FastMCP`
+(mcp импортируется только здесь); `main()` — запуск сервера по stdio.
 
 ## jarvis — приложение
 

@@ -1,0 +1,150 @@
+{"text": "который час", "level": "grammar", "tool": "clock", "args": {"what": "time"}}
+{"text": "сколько щас времени", "level": "grammar", "tool": "clock", "args": {"what": "time"}}
+{"text": "какое сегодня число", "level": "grammar", "tool": "clock", "args": {"what": "date"}}
+{"text": "какой сегодня день недели", "level": "grammar", "tool": "clock", "args": {"what": "date"}}
+{"text": "заблокируй комп", "level": "grammar", "tool": "lock", "args": {}}
+{"text": "заблокируй экран", "level": "grammar", "tool": "lock", "args": {}}
+{"text": "заблакируй пк", "level": "grammar", "tool": "lock", "args": {}}
+{"text": "громкость 30", "level": "grammar", "tool": "vol", "args": {"set": 30}}
+{"text": "громкость на 75 процентов", "level": "grammar", "tool": "vol", "args": {"set": 75}}
+{"text": "звук на 15", "level": "grammar", "tool": "vol", "args": {"set": 15}}
+{"text": "громкасть 20", "level": "grammar", "tool": "vol", "args": {"set": 20}}
+{"text": "громкость тридцать пять", "level": "grammar", "tool": "vol", "args": {"set": 35}}
+{"text": "погромче", "level": "grammar", "tool": "vol", "args": {"delta": 10}}
+{"text": "сделай потише пожалуйста", "level": "grammar", "tool": "vol", "args": {"delta": -10}}
+{"text": "громче на 20", "level": "grammar", "tool": "vol", "args": {"delta": 20}}
+{"text": "убавь звук", "level": "grammar", "tool": "vol", "args": {"delta": -10}}
+{"text": "выключи звук", "level": "grammar", "tool": "vol", "args": {"mute": true}}
+{"text": "включи звук", "level": "grammar", "tool": "vol", "args": {"mute": false}}
+{"text": "пауза", "level": "grammar", "tool": "media", "args": {"action": "play_pause"}}
+{"text": "продолжи", "level": "grammar", "tool": "media", "args": {"action": "play_pause"}}
+{"text": "стоп музыка", "level": "grammar", "tool": "media", "args": {"action": "play_pause"}}
+{"text": "следующий трек", "level": "grammar", "tool": "media", "args": {"action": "next"}}
+{"text": "дальше", "level": "grammar", "tool": "media", "args": {"action": "next"}}
+{"text": "прошлый трек", "level": "grammar", "tool": "media", "args": {"action": "prev"}}
+{"text": "предыдущий трэк", "level": "grammar", "tool": "media", "args": {"action": "prev"}}
+{"text": "открой папку загрузок", "level": "grammar", "tool": "open", "args": {"target": "загрузки", "kind": "folder"}}
+{"text": "открой документы", "level": "grammar", "tool": "open", "args": {"target": "документы", "kind": "folder"}}
+{"text": "открой рабочий стол", "level": "grammar", "tool": "open", "args": {"target": "рабочий стол", "kind": "folder"}}
+{"text": "открой картинки", "level": "grammar", "tool": "open", "args": {"target": "изображения", "kind": "folder"}}
+{"text": "открой музыку", "level": "grammar", "tool": "open", "args": {"target": "музыка", "kind": "folder"}}
+{"text": "открой папку видео", "level": "grammar", "tool": "open", "args": {"target": "видео", "kind": "folder"}}
+{"text": "сверни все окна", "level": "grammar", "tool": "win", "args": {"action": "minimize_all"}}
+{"text": "покажи рабочий стол", "level": "grammar", "tool": "win", "args": {"action": "minimize_all"}}
+{"text": "сверни его", "level": "grammar", "tool": "win", "args": {"action": "minimize", "target": "@cur"}, "ctx": {"window": {"title": "Telegram", "exe": "Telegram.exe"}}}
+{"text": "разверни на весь экран", "level": "grammar", "tool": "win", "args": {"action": "maximize", "target": "@cur"}, "ctx": {"window": {"title": "смета.xlsx - Excel", "exe": "EXCEL.EXE"}}}
+{"text": "восстанови окно", "level": "grammar", "tool": "win", "args": {"action": "restore", "target": "@cur"}, "ctx": {"window": {"title": "Безымянный - Блокнот", "exe": "Notepad.exe"}}}
+{"text": "сверни телегу", "level": "grammar", "tool": "win", "args": {"action": "minimize", "target": "Telegram"}}
+{"text": "разверни хром", "level": "grammar", "tool": "win", "args": {"action": "maximize", "target": "Google Chrome"}}
+{"text": "закрой его", "level": "grammar", "tool": "close", "args": {"target": "@cur"}, "ctx": {"window": {"title": "Telegram", "exe": "Telegram.exe"}}}
+{"text": "закрой это", "level": "grammar", "tool": "close", "args": {"target": "@cur"}, "ctx": {"window": {"title": "Безымянный - Блокнот", "exe": "Notepad.exe"}, "last": "Блокнот"}}
+{"text": "закрой блокнот", "level": "grammar", "tool": "close", "args": {"target": "Блокнот"}}
+{"text": "закрой окно хрома", "level": "grammar", "tool": "close", "args": {"target": "Google Chrome"}}
+{"text": "закрои дискорд", "level": "grammar", "tool": "close", "args": {"target": "Discord"}}
+{"text": "открой телегу", "level": "grammar", "tool": "open", "args": {"target": "Telegram", "kind": "app"}}
+{"text": "запусти стим", "level": "grammar", "tool": "open", "args": {"target": "Steam", "kind": "app"}}
+{"text": "джарвис открой калькулятор", "level": "grammar", "tool": "open", "args": {"target": "Калькулятор", "kind": "app"}}
+{"text": "запусти обс студио", "level": "grammar", "tool": "open", "args": {"target": "OBS Studio", "kind": "app"}}
+{"text": "открой ворд", "level": "grammar", "tool": "open", "args": {"target": "Word", "kind": "app"}}
+{"text": "отрой проводник", "level": "grammar", "tool": "open", "args": {"target": "Проводник", "kind": "app"}}
+{"text": "открой настройки", "level": "grammar", "tool": "open", "args": {"target": "Параметры", "kind": "app"}}
+{"text": "запусти вскод", "level": "grammar", "tool": "open", "args": {"target": "Visual Studio Code", "kind": "app"}}
+{"text": "переключись на телеграм", "level": "grammar", "tool": "focus", "args": {"target": "Telegram"}}
+{"text": "перейди в дискорд", "level": "grammar", "tool": "focus", "args": {"target": "Discord"}}
+{"text": "покажи блокнот", "level": "grammar", "tool": "focus", "args": {"target": "Блокнот"}}
+{"text": "найди файл смета", "level": "grammar", "tool": "find", "args": {"query": "смета", "kind": "file"}}
+{"text": "найди папку проекты", "level": "grammar", "tool": "find", "args": {"query": "проекты", "kind": "folder"}}
+{"text": "поищи файл договор аренды", "level": "grammar", "tool": "find", "args": {"query": "договор аренды", "kind": "file"}}
+{"text": "открой второй", "level": "grammar", "tool": "open_found", "args": {"index": 2}, "ctx": {"found": ["C:\\Users\\me\\Documents\\смета.xlsx", "C:\\Users\\me\\Desktop\\смета-старая.xlsx", "C:\\Users\\me\\Downloads\\смета (1).xlsx"]}}
+{"text": "открой последний", "level": "grammar", "tool": "open_found", "args": {"index": -1}, "ctx": {"found": ["C:\\Users\\me\\Documents\\Проекты", "C:\\Users\\me\\Desktop\\проекты 2025"]}}
+{"text": "открой первый файл", "level": "grammar", "tool": "open_found", "args": {"index": 1}, "ctx": {"found": ["C:\\Users\\me\\Documents\\договор аренды.pdf", "C:\\Users\\me\\Downloads\\договор аренды (скан).pdf"]}}
+{"text": "открой фотошоп", "level": "hands", "tool": "open"}
+{"text": "запусти майнкрафт", "level": "hands", "tool": "open"}
+{"text": "открой ютуб", "level": "hands", "tool": "open"}
+{"text": "открой хром в режиме инкогнито", "level": "hands", "tool": "open"}
+{"text": "запусти игру", "level": "hands", "tool": "clarify"}
+{"text": "открой то что я вчера качал", "level": "hands", "tool": "clarify"}
+{"text": "открой его", "level": "hands", "tool": "open", "ctx": {"last": "отчёт.docx"}}
+{"text": "открой сайт авито", "level": "hands", "tool": "open"}
+{"text": "открой папку с проектами на диске д", "level": "hands", "tool": "open"}
+{"text": "запусти тимс", "level": "hands", "tool": "open"}
+{"text": "заверши процесс дискорда", "level": "hands", "tool": "kill"}
+{"text": "убей хром", "level": "hands", "tool": "kill"}
+{"text": "закрой процесс телеги", "level": "hands", "tool": "kill"}
+{"text": "останови процесс обс", "level": "hands", "tool": "kill"}
+{"text": "заверши стим", "level": "hands", "tool": "kill"}
+{"text": "выключи телегу", "level": "hands", "tool": "close"}
+{"text": "выйди из стима", "level": "hands", "tool": "close"}
+{"text": "закрой ту программу которую я открыл", "level": "hands", "tool": "close", "ctx": {"last": "Telegram"}}
+{"text": "вернись в браузер", "level": "hands", "tool": "focus"}
+{"text": "переключись на окно с почтой", "level": "hands", "tool": "focus"}
+{"text": "покажи загрузки", "level": "hands", "tool": "open"}
+{"text": "переключись на фотошоп", "level": "hands", "tool": "focus"}
+{"text": "спрячь телегу", "level": "hands", "tool": "win"}
+{"text": "убери это окно вниз", "level": "hands", "tool": "win", "ctx": {"window": {"title": "Безымянный - Блокнот", "exe": "Notepad.exe"}}}
+{"text": "сделай окно поменьше", "level": "hands", "tool": "win", "ctx": {"window": {"title": "Google Chrome", "exe": "chrome.exe"}}}
+{"text": "сверни браузер", "level": "hands", "tool": "win"}
+{"text": "найди презентацию для понедельника", "level": "hands", "tool": "find"}
+{"text": "где лежит мой диплом", "level": "hands", "tool": "find"}
+{"text": "поищи фотки с моря", "level": "hands", "tool": "find"}
+{"text": "найди все pdf за прошлую неделю", "level": "hands", "tool": "find"}
+{"text": "найди файл который я вчера скачал", "level": "hands", "tool": "find"}
+{"text": "найди скриншоты", "level": "hands", "tool": "find"}
+{"text": "приглуши немного", "level": "hands", "tool": "vol"}
+{"text": "громкость побольше", "level": "hands", "tool": "vol"}
+{"text": "выруби звук", "level": "hands", "tool": "vol"}
+{"text": "сделай так чтобы было слышно", "level": "hands", "tool": "vol"}
+{"text": "включи музыку", "level": "hands", "tool": "media"}
+{"text": "перемотай на следующую", "level": "hands", "tool": "media"}
+{"text": "верни песню которая была до этого", "level": "hands", "tool": "media"}
+{"text": "останови видос", "level": "hands", "tool": "media"}
+{"text": "пропусти эту песню", "level": "hands", "tool": "media"}
+{"text": "приветик джарвис", "level": "hands", "tool": "reply"}
+{"text": "спасибо большое", "level": "hands", "tool": "reply"}
+{"text": "как у тебя дела", "level": "hands", "tool": "reply"}
+{"text": "доброе утро", "level": "hands", "tool": "reply"}
+{"text": "ты молодец", "level": "hands", "tool": "reply"}
+{"text": "ты тут", "level": "hands", "tool": "reply"}
+{"text": "ну давай это самое", "level": "hands", "tool": "clarify"}
+{"text": "открой второй", "level": "hands", "tool": "clarify"}
+{"text": "закрой его", "level": "hands", "tool": "clarify"}
+{"text": "сделай как вчера", "level": "hands", "tool": "clarify"}
+{"text": "убери это", "level": "hands", "tool": "clarify"}
+{"text": "поменяй", "level": "hands", "tool": "clarify"}
+{"text": "какая погода будет завтра", "level": "hands", "tool": "ask_gpt"}
+{"text": "сколько будет 17 умножить на 23", "level": "hands", "tool": "ask_gpt"}
+{"text": "курс доллара на сегодня", "level": "hands", "tool": "ask_gpt"}
+{"text": "кто выиграл чемпионат мира по футболу в 2018", "level": "hands", "tool": "ask_gpt"}
+{"text": "найди и открой последний pdf", "level": "hands", "tool": "ask_gpt"}
+{"text": "открой хром и включи музыку", "level": "hands", "tool": "ask_gpt"}
+{"text": "закрой телегу и выключи звук", "level": "hands", "tool": "ask_gpt"}
+{"text": "почему комп долго включается", "level": "brain"}
+{"text": "зачем нужен файл подкачки", "level": "brain"}
+{"text": "как сделать скриншот части экрана", "level": "brain"}
+{"text": "как мне ускорить загрузку винды", "level": "brain"}
+{"text": "что такое dns простыми словами", "level": "brain"}
+{"text": "кто такой алан тьюринг", "level": "brain"}
+{"text": "объясни разницу между ssd и hdd", "level": "brain"}
+{"text": "сравни ryzen 5 7600 и core i5 13400", "level": "brain"}
+{"text": "посоветуй фильм на вечер", "level": "brain"}
+{"text": "расскажи анекдот про программистов", "level": "brain"}
+{"text": "напиши письмо коллеге что встреча переносится на пятницу", "level": "brain"}
+{"text": "переведи на английский я буду через десять минут", "level": "brain"}
+{"text": "сочини стишок маме на день рождения", "level": "brain"}
+{"text": "посчитай сколько дней до нового года", "level": "brain"}
+{"text": "придумай название для канала про котов", "level": "brain"}
+{"text": "перескажи коротко сюжет войны и мира", "level": "brain"}
+{"text": "составь план тренировок на неделю", "level": "brain"}
+{"text": "какой ноутбук лучше взять для учебы до 60 тысяч?", "level": "brain"}
+{"text": "можно ли мыть видеокарту водой?", "level": "brain"}
+{"text": "сколько весит самый большой кит в мире?", "level": "brain"}
+{"text": "чем заменить сахар в выпечке?", "level": "brain"}
+{"text": "у меня пропал звук после обновления драйверов и я не понимаю что делать с этим дальше", "level": "brain"}
+{"text": "хочу поставить линукс второй системой рядом с виндой на тот же диск но боюсь потерять данные", "level": "brain"}
+{"text": "думай: стоит ли переходить с windows на linux", "level": "brain"}
+{"text": "gpt: какие новости в мире", "level": "brain"}
+{"text": "объясни как работает vpn", "level": "brain"}
+{"text": "напиши скрипт на питоне который переименует фотки по дате", "level": "brain"}
+{"text": "почему не работает микрофон в дискорде", "level": "brain"}
+{"text": "посчитай 15 процентов от 2400", "level": "brain"}
+{"text": "как мне настроить два монитора", "level": "brain"}

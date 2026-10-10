@@ -158,6 +158,9 @@ action: str)`; `run(tool, args, text, ctx, source: "grammar"|"hands", dry=False)
 `GrammarHit(action, args, confidence)`; `match(text, ctx) -> GrammarHit | None`.
 `Route(level: "grammar"|"hands"|"brain"|"local", reason, text, deep=False, hit=None, local_only=False)`;
 `route(text, ctx, mode) -> Route` (снимает префиксы «локально:», «gpt:», «думай:»).
+Цели грамматики: приложение — `App.name` из инвентаря (kind="app"), папка — имя для `files.known_folder`
+(kind="folder"), «его/это/окно» — "@cur" (только если `ctx.cur_target()` не None); open_found{index} — с 1, -1 =
+последний. `local_only=True` — и при mode == "local". После рук (ask_gpt/ошибка) → мозг решает core.
 
 ### jarvis.brain
 `Brain(cfg: BrainConfig, confirm_address: str, process_hook=None)`: `start()` (в фоне), `close()`,

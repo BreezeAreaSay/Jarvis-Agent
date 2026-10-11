@@ -28,8 +28,8 @@
 - `jarvis-cli doctor` — проверка всего по пунктам с подсказками
   (`& "$env:LOCALAPPDATA\Programs\Jarvis\jarvis-cli.exe" doctor`).
 - Вход мозга (один раз), если doctor пишет «Not logged in» — команда в docs/manual-checks.md.
-- Руки: llama.cpp (`C:\llama\llama-server.exe`) и модель Qwen3-4B; сервер поднимается сам при первой команде
-  (`scripts\start_hands.cmd 4b`).
+- Руки: llama.cpp (`C:\llama\llama-server.exe`) и модель Qwen3-4B. Jarvis сам поднимает сервер в фоне при старте
+  (`scripts\start_hands.cmd 4b`, в exe — из папки установки); после «Выгрузить руки» его поднимет следующая команда.
 - Everything (поиск файлов) и `es.exe` (путь — `[pc] es_path` в конфиге).
 
 ## Окно
@@ -45,7 +45,8 @@ Enter — отправить; Esc — отменить запрос, второ�
 
 ## Конфиг
 
-`C:\Jarvis\jarvis.toml` (или `JARVIS_CONFIG`; у установленного exe, если файла C:\Jarvis\jarvis.toml нет, — `<data>\jarvis.toml`).
+`C:\Jarvis\jarvis.toml` (или `JARVIS_CONFIG`); у установленного exe, если файла `C:\Jarvis\jarvis.toml` нет, —
+`<data>\jarvis.toml`. Без конфига всё работает на значениях по умолчанию.
 Пример со всеми ключами — [jarvis.example.toml](jarvis.example.toml).
 
 ## Командная строка
@@ -69,7 +70,9 @@ uv sync                           # Python 3.12, зависимости из uv.
 uv run ruff check . ; uv run ruff format --check . ; uv run pytest -q -m "not live"
 pwsh -File scripts\build.ps1      # PyInstaller (onedir) + selftest + Inno Setup → Jarvis-Setup-<версия>.exe
 ```
-На Linux тот же установщик собирается под Wine: `scripts/wine_build.sh all` (см. docs/wine-build.md).
+На Linux тот же установщик собирается под Wine (Windows-Python 3.12 из NuGet, PyInstaller и Inno Setup под Wine):
+`scripts/wine_build.sh all` — см. docs/wine-build.md. CI: `.github/workflows/ci.yml` (проверки) и `build.yml`
+(сборка установщика, артефакт «Jarvis-Setup») на windows-latest.
 
 Документы: [AGENTS.md](AGENTS.md) — спецификация и состояние; [docs/architecture.md](docs/architecture.md) —
 контракты модулей; [docs/manual-checks.md](docs/manual-checks.md) — что проверить руками; [docs/notes.md](docs/notes.md)

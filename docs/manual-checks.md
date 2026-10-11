@@ -9,9 +9,53 @@
 
 ## Порядок для владельца
 
-<!-- ORDER -->
+Всё по порядку; в скобках — что прислать в следующую сессию (только числа и ✓/✗, без заголовков окон и путей).
+
+**A. Установленный exe (NIGHT-PROMPT §9)**
+1. Установка: `Jarvis-Setup-1.0.0.exe` → без UAC, в `%LOCALAPPDATA%\Programs\Jarvis`, флажок «Запускать при входе
+   в Windows», «Запустить Jarvis» (ошибки или скриншот). Подробности — раздел «Установщик и exe» ниже.
+2. Первый запуск: значок «J» в трее ≤1,5 с, Ctrl+Alt+Space → окно с фокусом в строке ввода ≤100 мс (две строки из
+   `C:\JarvisData\logs\jarvis.log`: «значок в трее через N мс», «хоткей → окно: X мс»).
+3. `& "$env:LOCALAPPDATA\Programs\Jarvis\jarvis-cli.exe" doctor` (вывод целиком, без путей профиля) и
+   `… jarvis-cli.exe selftest` (8/8 ✓?).
+4. Вход мозга, только если doctor пишет «Not logged in»: раздел S5, п.1 (вариант для exe). Вход из задания 00 лежит в
+   `C:\JarvisData\codex-home` и должен подхватиться сам.
+5. Сервер рук: команда, которую не берёт грамматика (например «покажи дискорд»), поднимает llama-server сама; или
+   заранее `Start-Process C:\Jarvis\scripts\start_hands.cmd -ArgumentList 4b -WindowStyle Minimized` (подсказка трея
+   «Руки: готовы»; предупреждения prefix_cache/VRAM, если есть).
+
+**B. Из исходников (FULL-PROMPT, «Финал сессии»)**
+1. После переноса ветки в C:\Jarvis (команды — в итоговом сообщении сессии): `uv sync`;
+   `uv run jarvis apps --refresh`; Everything запущен (число приложений).
+2. Сервер рук: `Start-Process C:\Jarvis\scripts\start_hands.cmd -ArgumentList 4b -WindowStyle Minimized` (status — S3, п.2).
+3. Вход мозга, если не сделан (S5, п.1), и `uv run python scripts\brain_probe.py` (блок «итог»).
+4. `$env:JARVIS_DATA_DIR='C:\Jarvis\scratch\data'; uv run python scripts\mcp_smoke.py` (18 инструментов? время).
+5. Live-тесты: `uv run pytest -q -s -m live tests\test_pc_live.py`, `…\test_hands_live.py`, `…\test_brain_live.py`
+   и `uv run jarvis bench --live` (файлы из `bench\results\`; для bench — список ошибок).
+6. CLI-проверки S3–S5 (разделы ниже).
+7. Сценарии S6a и S6b (разделы ниже) — на exe или `uv run jarvis run` (одновременно не запустятся: один экземпляр).
+8. `uv run jarvis doctor` (вывод).
+9. Голос — этап S9 не начат (см. раздел S9).
+
+Если что-то пошло не так — `C:\JarvisData\logs\jarvis.log` (приложение), `pc-mcp.log` (инструменты мозга),
+`jarvis-cli.log` (CLI), `C:\Jarvis\logs\hands.log` (сервер рук): прислать последние строки с ошибкой.
 
 ## Разделы по этапам
+
+### Установщик и exe (NIGHT-PROMPT §5)
+1. Запустить `Jarvis-Setup-1.0.0.exe` → без UAC, папка `%LOCALAPPDATA%\Programs\Jarvis`, флажок «Запускать при входе
+   в Windows», «Запустить Jarvis». Прислать ошибки или скриншот.
+2. Первый запуск: значок в трее ≤1,5 с, иконка в «Пуск»; Ctrl+Alt+Space → окно ≤100 мс (по логу
+   `<data>\logs\jarvis.log`). Прислать оба времени.
+3. `& "$env:LOCALAPPDATA\Programs\Jarvis\jarvis-cli.exe" selftest` → 8/8 ✓ (окно на настоящем qwindows). Прислать вывод.
+4. `jarvis-cli.exe doctor` → прислать вывод. «Not logged in» — вход мозга (раздел S5, п.1).
+5. «gpt: какие окна открыты» → первые слова ≤3 с, инструменты pc работают через `jarvis-cli.exe mcp`.
+6. Команда рукам поднимает llama-server через `_internal\scripts\start_hands.cmd`; лог — `C:\Jarvis\logs\hands.log`.
+7. Открыть через Jarvis программу на Qt (например, OBS, если есть) → она запускается нормально (Jarvis не передаёт
+   ей свои QT_PLUGIN_PATH/PATH).
+8. Переустановить поверх запущенного Jarvis → Jarvis закрылся, установка прошла, Блокнот, открытый через Jarvis, жив.
+9. Удалить через «Параметры → Приложения» → файлов, ярлыка и HKCU Run "Jarvis" нет; `C:\JarvisData` цел.
+10. Локальная сборка: `pwsh -File C:\Jarvis\scripts\build.ps1` → `build\installer\Jarvis-Setup-1.0.0.exe`.
 
 ### S1 — скелет, settings, paths, policy, apps
 1. `uv sync`; `uv run jarvis apps --refresh` → число приложений; `uv run jarvis apps телега`, `uv run jarvis apps ворд`
@@ -154,3 +198,19 @@
    (это вход для доводки SYSTEM/примеров/порогов).
 4. Через день использования — `uv run jarvis stats` (или `jarvis-cli stats`) → прислать.
 5. `es.exe -cp 65001 -version` печатает версию (порядок ключей `-cp` и `-version` как в doctor).
+
+### S8 — ревью (проверки по находкам)
+1. `uv run pytest -q -s -m live` целиком (вывод) и `uv run jarvis doctor` (вывод).
+2. Job Object без наследования: «gpt: открой <какой-нибудь .docx/.txt>» → документ открылся; трей → «Выход» →
+   документ (Word/Блокнот) остался открыт. Затем убить Jarvis в Диспетчере задач → llama-server.exe и codex.exe
+   завершились, программы, открытые через Jarvis, — нет (да/нет по каждому).
+3. «Свои» процессы: «открой хром» через Jarvis → «закрой хром» и «сверни хром» работают (не «Это сам Jarvis»);
+   «gpt: заверши процесс jarvis» → отказ «Это сам Jarvis — выйти можно из трея».
+4. Зависшее окно (если попадётся «Не отвечает»): «сверни его» → «Окно … не отвечает», Jarvis не зависает.
+5. Программа на Qt (OBS и т.п.), открытая через Jarvis, запускается нормально.
+6. Два запроса подряд: «закрой хром» сразу после старта рук (модель грузится) и тут же «громкость 30» → закрытие
+   хрома НЕ выполняется (заменённый запрос), громкость меняется.
+
+### S9 — голос
+Не начат: по NIGHT-PROMPT §8 голос делается, только если всё остальное готово и CI зелёный, а GitHub Actions
+аккаунта заблокированы биллингом (docs/notes.md) — CI не может быть зелёным. Задача на следующую сессию.

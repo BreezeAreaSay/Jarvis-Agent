@@ -7,7 +7,8 @@ NuGet) и собирает **настоящий установщик** `Jarvis-S
 ```
 scripts/wine_build.sh setup        # один раз (~1 мин при скачанных пакетах): Wine, префикс, Python, колёса, Inno Setup
 scripts/wine_build.sh test         # pytest -m "not live" под Windows-Python (~6 мин); аргументы → pytest
-scripts/wine_build.sh build        # иконка → PyInstaller onedir (~5 мин) → jarvis-cli.exe selftest → zip
+scripts/wine_build.sh build        # иконка → словарь ударений (build/voice/ru_dict, сеть) → PyInstaller onedir
+                                   # (~5 мин) → jarvis-cli.exe selftest → zip
 scripts/wine_build.sh installer    # ISCC (~6 мин) → тихая установка, selftest, переустановка, удаление
 scripts/wine_build.sh all          # всё подряд; падения тестов не останавливают сборку, код выхода — от pytest
 scripts/wine_build.sh py -c "..."  # Windows-Python с тем же окружением (отладка)

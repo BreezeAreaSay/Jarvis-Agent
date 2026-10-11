@@ -420,7 +420,7 @@ run_value() {
 }
 
 check_installer() {
-    local setup="$1" la_w la app data start log
+    local setup="$1" la_w la app data start startup log
     la_w="$(w cmd /c 'echo %LOCALAPPDATA%' | tr -d '\r')"
     la="$(winepath -u "$la_w" 2>/dev/null)"
     app="$la/Programs/Jarvis"
@@ -447,7 +447,9 @@ check_installer() {
     ok "файлы: $(find "$app" -type f | wc -l), $(human_size "$app")"
     [[ -f "$start/Jarvis.lnk" ]] || die "нет ярлыка $start/Jarvis.lnk"
     ok "ярлык в «Пуск»: Jarvis.lnk"
-    [[ -f "$start/Startup/Jarvis.lnk" ]] || die "нет ярлыка автозапуска $start/Startup/Jarvis.lnk"
+    # папка «Автозагрузка»: в Wine — StartUp, в Windows — Startup (регистр там не важен, в Linux — важен)
+    startup="$(find "$start" -maxdepth 1 -type d -iname startup -print -quit)"
+    [[ -n "$startup" && -f "$startup/Jarvis.lnk" ]] || die "нет ярлыка автозапуска в $start/StartUp"
     [[ -z "$(run_value)" ]] || die "старое значение Run не убрано: $(run_value)"
     ok "автозапуск: ярлык в «Автозагрузке», старое значение Run убрано"
     WINEQT_QPA_PLATFORM=offscreen w "$(wpath "$app/jarvis-cli.exe")" selftest | tee "$OUT/selftest-installed.log" ||
@@ -457,9 +459,9 @@ check_installer() {
     w "$(wpath "$setup")" /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER /NORESTART '/MERGETASKS=!autostart' \
         "/LOG=$log\\reinstall.log" || die "повторная установка: код $?"
     wineserver -w
-    [[ ! -e "$start/Startup/Jarvis.lnk" ]] || die "флажок снят, а ярлык автозапуска остался"
+    [[ ! -e "$startup/Jarvis.lnk" ]] || die "флажок снят, а ярлык автозапуска остался"
     ok "ярлык автозапуска убран"
-    cp "$start/Jarvis.lnk" "$start/Startup/Jarvis.lnk" # как будто включили автозапуск в трее
+    cp "$start/Jarvis.lnk" "$startup/Jarvis.lnk" # как будто включили автозапуск в трее
 
     step "Тихое удаление"
     w "$(wpath "$app/unins000.exe")" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/LOG=$log\\uninstall.log" ||
@@ -467,7 +469,7 @@ check_installer() {
     wineserver -w # деинсталлятор перезапускает себя из %TEMP% и сразу выходит
     [[ ! -e "$app" ]] || die "после удаления осталось: $(find "$app" | head -5)"
     [[ ! -e "$start/Jarvis.lnk" ]] || die "после удаления остался ярлык"
-    [[ ! -e "$start/Startup/Jarvis.lnk" ]] || die "после удаления остался ярлык автозапуска"
+    [[ ! -e "$startup/Jarvis.lnk" ]] || die "после удаления остался ярлык автозапуска"
     [[ -f "$data/wine-check.txt" ]] || die "удаление задело каталог данных $data"
     ok "папка установки и ярлык удалены, каталог данных на месте"
 }

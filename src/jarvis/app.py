@@ -46,6 +46,7 @@ BRAIN_READY_WAIT_S = 90.0
 APPS_FIRST_REFRESH_S = 15.0  # не мешать прогреву рук и мозга при старте
 APPS_REFRESH_S = 24 * 3600.0
 STOP_TIMEOUT_S = 8.0
+REMINDERS_SHOWN = 3  # напоминаний в одном уведомлении трея; остальные — «…и ещё N»
 LLAMA_SERVER_EXE = "llama-server.exe"
 
 _MSG_MESSAGE_OFFSET = wintypes.MSG.message.offset
@@ -193,6 +194,7 @@ class JarvisApp(QObject):
         self.orb_model: Any = None  # ui.logic.OrbModel: её ведёт окно, рисуют сфера в окне и на рабочем столе
         self.orb: Any = None  # ui.orb.OrbWindow (нет при [ui] orb = "off")
         self._fg_watch: Any = None  # хук смены переднего окна (полноэкранное — сфера прячется)
+        self.reminders: Any = None  # ui.reminder_watch.ReminderWatch: срабатывание напоминаний → трей
         self.tray: Tray | None = None
         self.receiver: QWidget | None = None
         self.hands: Any = None
@@ -238,6 +240,7 @@ class JarvisApp(QObject):
         self._create_window()
         self._create_tray()
         self._create_orb()
+        self._create_reminders()
         self._setup_hotkey()
         self._refresh_tray()
         tray_ms = (time.perf_counter() - self.started) * 1000
@@ -323,6 +326,31 @@ class JarvisApp(QObject):
             self._fg_watch = winapp.watch_foreground(self._on_foreground)
             orb.set_suppressed(winapp.foreground_fullscreen())
         orb.start()
+
+    def _create_reminders(self) -> None:
+        """Напоминания («напомни через 10 минут …»): таймер до ближайшего, уведомление в трее.
+
+        Пропущенные, пока Jarvis не работал, приходят сразу после старта — с временем «было …».
+        """
+        from jarvis.ui.reminder_watch import ReminderWatch
+
+        watch = ReminderWatch(self)
+        watch.fired.connect(self._on_reminders)
+        self.reminders = watch
+        watch.start()
+
+    @Slot(list)
+    def _on_reminders(self, items: list[Any]) -> None:
+        from jarvis.ui.reminder_watch import notification_text
+
+        if not items or self._closed:
+            return
+        log.info("напоминаний сработало: %d", len(items))
+        lines = [notification_text(r) for r in items[:REMINDERS_SHOWN]]
+        if len(items) > REMINDERS_SHOWN:
+            lines.append(f"…и ещё {len(items) - REMINDERS_SHOWN}")
+        if self.tray is not None:
+            self.tray.notify("\n".join(lines), "info")  # одно уведомление: Windows показывает их по одному
 
     def _setup_hotkey(self) -> None:
         """Скрытое окно-приёмник (top-level, не показывается): на его HWND — RegisterHotKey и «покажись»."""
@@ -761,6 +789,8 @@ class JarvisApp(QObject):
             self.window.on_event(ev)
         if isinstance(ev, Done):
             self._sync_health()
+            if self.reminders is not None:
+                self.reminders.refresh()  # запрос мог добавить или отменить напоминание
 
     def _sync_health(self) -> None:
         """После запроса: руки могли подняться сами («Выгрузить руки» → команда), мозг — упасть или ожить."""
@@ -834,6 +864,8 @@ class JarvisApp(QObject):
             self.tray.hide()
         winapp.unwatch_foreground(self._fg_watch)
         self._fg_watch = None
+        if self.reminders is not None:
+            self.reminders.stop()
         if self.orb is not None:
             self.orb.close_orb()
         if self.window is not None and self.window.isVisible():

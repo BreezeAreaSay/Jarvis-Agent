@@ -1110,3 +1110,62 @@ def test_scrub_child_env_removes_bundle_qt_paths() -> None:
     scrub_child_env(env, meipass)
     assert "QT_PLUGIN_PATH" not in env and "QML2_IMPORT_PATH" not in env
     assert env["PATH"] == os.path.join(os.sep, "usr", "bin")
+
+
+# --- напоминания ---------------------------------------------------------------------------------------
+
+
+def test_missed_reminder_notified_after_start(qapp: QApplication, make_app: Any, fakes: FakeWinApi) -> None:
+    """Пропущенное, пока Jarvis не работал, — уведомление в трее сразу после старта, с временем «было …»."""
+    from jarvis import reminders
+
+    reminders._fired.clear()
+    now = time.time()
+    reminders.add("полить цветы", now - 3600, now=now - 7200)
+    a = make_app()
+    assert wait_for(qapp, lambda: bool(RecTray.notes))
+    text, kind = RecTray.notes[-1]
+    assert text.startswith("Напоминание (было ") and text.endswith("полить цветы") and kind == "info"
+    assert reminders.pending() == []
+    assert a.reminders is not None
+
+
+def test_reminders_refresh_after_request_and_stop_on_exit(
+    qapp: QApplication, make_app: Any, fakes: FakeWinApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis import reminders
+
+    a = make_app()
+    assert wait_for(qapp, ready(a))
+    refreshed: list[int] = []
+    original = a.reminders.refresh
+
+    def spy() -> None:
+        refreshed.append(1)
+        original()
+
+    monkeypatch.setattr(a.reminders, "refresh", spy)
+    a._on_event(a._rid, Done(ok=True, text="Напомню в 18:30"))
+    assert refreshed == [1]
+    reminders._fired.clear()
+    reminders.add("позвонить", time.time() + 600)
+    a.reminders.check()
+    assert wait_for(qapp, a.reminders.timer.isActive)
+    a.shutdown()
+    assert not a.reminders.timer.isActive()
+
+
+def test_many_reminders_one_notification(qapp: QApplication, make_app: Any, fakes: FakeWinApi) -> None:
+    from jarvis import reminders
+    from jarvis.reminders import Reminder
+
+    a = make_app()
+    assert wait_for(qapp, ready(a))
+    RecTray.notes = []
+    now = time.time()
+    items = [Reminder(str(i), f"дело {i}", now, now) for i in range(5)]
+    a._on_reminders(items)
+    assert len(RecTray.notes) == 1
+    text = RecTray.notes[0][0]
+    assert text.count("Напоминание: дело") == app_mod.REMINDERS_SHOWN and text.endswith("…и ещё 2")
+    reminders._fired.clear()

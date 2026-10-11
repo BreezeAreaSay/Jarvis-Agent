@@ -63,6 +63,13 @@ DEVELOPER_INSTRUCTIONS = (
     "«напомни завтра в 9 …», «запомни, что …»."
 )
 MEMORY_CHARS = 600  # сколько памяти о пользователе уходит в начале запроса
+# [brain] persona = "jarvis": манера речи поверх правил (правила важнее — это сказано в самом тексте)
+PERSONA_JARVIS = (
+    "Манера речи: ты — J.A.R.V.I.S. из «Железного человека»: спокойный, учтивый ИИ-дворецкий с лёгкой "
+    "сухой британской иронией. Обращайся к человеку «{address}». Говори коротко, уверенно и по делу, "
+    "без подобострастия и восклицательных знаков; шутка — изредка и к месту. Это только стиль: всё сказанное "
+    "выше важнее."
+)
 SUBAGENT_TEXT = "GPT попытался запустить под-агента — ход прерван"
 # ответы на запросы codex к клиенту (схемы — `codex app-server generate-json-schema`, 0.160.1): всё — отказ
 SERVER_DECISIONS: dict[str, dict[str, Any]] = {
@@ -302,6 +309,14 @@ def _one_line(text: str, limit: int = 200) -> str:
     clean = "".join(" " if ord(c) < 0x20 or ord(c) == 0x7F else c for c in text)
     clean = clean.replace("[", "(").replace("]", ")")
     return " ".join(clean.split())[:limit]
+
+
+def developer_instructions(cfg: BrainConfig) -> str:
+    """DEVELOPER_INSTRUCTIONS и манера речи ([brain] persona, address) — для каждого нового треда."""
+    if cfg.persona != "jarvis":
+        return DEVELOPER_INSTRUCTIONS
+    address = _one_line(cfg.address, 30) or "сэр"
+    return f"{DEVELOPER_INSTRUCTIONS} {PERSONA_JARVIS.format(address=address)}"
 
 
 def _about_user() -> str:
@@ -857,7 +872,7 @@ class Brain:
             approval_mode=ApprovalMode.deny_all,
             sandbox=Sandbox.read_only,
             ephemeral=True,
-            developer_instructions=DEVELOPER_INSTRUCTIONS,
+            developer_instructions=developer_instructions(self._cfg),
             model=self._cfg.model_quick,
         )
         now = self._clock()

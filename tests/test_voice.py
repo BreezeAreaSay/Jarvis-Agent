@@ -402,7 +402,7 @@ def test_config_voice_defaults(config_file: Any) -> None:
     config_file('mode = "normal"\n')
     v = config.load().voice
     assert v.ptt_key == "right ctrl" and v.min_hold_ms == 250 and v.max_record_s == 30.0
-    assert v.model == "gigaam-v3" and v.tts == "voice" and v.tts_voice == "denis" and v.vad is True
+    assert v.model == "gigaam-v3" and v.tts == "voice" and v.tts_voice == "ruslan" and v.vad is True
 
 
 def test_config_voice_values_and_fixes(config_file: Any) -> None:
@@ -419,7 +419,7 @@ def test_config_voice_values_and_fixes(config_file: Any) -> None:
     )
     # вне пределов и неизвестное — умолчания
     assert v.min_hold_ms == 250 and v.max_record_s == 30.0 and v.model == "gigaam-v3"
-    assert v.tts == "voice" and v.tts_voice == "denis"
+    assert v.tts == "voice" and v.tts_voice == "ruslan"
 
 
 def test_config_voice_bad_key_and_tts_bool(config_file: Any) -> None:
@@ -556,9 +556,9 @@ def test_doctor_voice_tts(monkeypatch: pytest.MonkeyPatch, _isolated_data: Any) 
     res = doctor.check_voice_tts(doc())
     assert res.status == "warn" and "скачаны: нет" in res.text
 
-    folder = tts.voice_dir("denis")
+    folder = tts.voice_dir("ruslan")
     (folder / "espeak-ng-data").mkdir(parents=True)
-    (folder / "ru_RU-denis-medium.onnx").write_bytes(b"x")
+    (folder / "ru_RU-ruslan-medium.onnx").write_bytes(b"x")
     (folder / "tokens.txt").write_text("a 0")
 
     class Engine:
@@ -577,7 +577,11 @@ def test_doctor_voice_tts(monkeypatch: pytest.MonkeyPatch, _isolated_data: Any) 
     fake.OfflineTts = Engine  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "sherpa_onnx", fake)
     res = doctor.check_voice_tts(doc())
-    assert res.status == "ok" and "голос denis" in res.text
+    assert res.status == "ok" and "голос ruslan" in res.text
+    # нужного голоса нет — Jarvis говорит скачанным, doctor предупреждает
+    res = doctor.check_voice_tts(doc(tts_voice="irina"))
+    assert res.status == "warn" and "голос ruslan" in res.text and "голоса irina" in res.text
+    assert "-Voice irina" in res.hint
 
 
 # --- упаковка и скрипт моделей -------------------------------------------------------------------
@@ -634,7 +638,7 @@ def test_voice_example_block_in_agents() -> None:
     example = (ROOT / "jarvis.example.toml").read_text(encoding="utf-8")
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     block = example[example.index("[voice]") :].split("\n\n")[0].splitlines()
-    assert len(block) == 11
+    assert len(block) == 13
     for line in block:
         assert line in agents, line
     assert config._voice(tomllib.loads(example)["voice"]) == config.VoiceConfig()

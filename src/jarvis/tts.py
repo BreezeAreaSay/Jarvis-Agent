@@ -33,7 +33,8 @@ from pc import settings
 
 log = logging.getLogger("jarvis")
 
-DEFAULT_VOICE = "denis"
+DEFAULT_VOICE = "ruslan"
+VOICE_ORDER = ("ruslan", "denis", "dmitri", "irina")  # нужного голоса нет — первый скачанный отсюда
 TTS_MODES = ("voice", "always", "off")
 SPEAK_LIMIT = 600  # больше знаков ответа мозга вслух не читаем
 SHORT_LIMIT = 200  # итог грамматики/рук длиннее — только первое предложение
@@ -62,6 +63,14 @@ def available_voices() -> list[str]:
         )
     except OSError:
         return []
+
+
+def pick_voice(wanted: str) -> str:
+    """Голос для озвучки: wanted, если скачан; иначе первый скачанный (VOICE_ORDER, потом любой); нет — ""."""
+    have = available_voices()
+    if wanted in have:
+        return wanted
+    return next((name for name in (*VOICE_ORDER, *have) if name in have), "")
 
 
 class TtsError(RuntimeError):
@@ -259,6 +268,22 @@ def short_text(text: str, limit: int = SHORT_LIMIT) -> str:
 # --- движок и воспроизведение -------------------------------------------------------------------
 
 
+def addressed(text: str, ok: bool, address: str, lead: bool = False) -> str:
+    """Короткая фраза в манере Джарвиса: «Открыл Telegram, сэр.», «Какой файл открыть, сэр?»; ошибка
+    и вопрос подтверждения — «Сэр, нет устройства вывода звука».
+
+    address "" — без изменений. Только для озвучки: в окне текст остаётся как есть.
+    """
+    text = text.strip()
+    if not address or not text:
+        return text
+    if lead or not ok:
+        head = text[:1].lower() + text[1:] if text[1:2].islower() else text  # «GPT …» не трогаем
+        return f"{address[:1].upper()}{address[1:]}, {head}"
+    body = text.rstrip(".!?… ")
+    return f"{body}, {address}{text[len(body) :].strip() or '.'}"
+
+
 class Speaker:
     """Синтез и воспроизведение. say() не блокирует; stop() глушит сразу (из любого потока).
 
@@ -266,9 +291,18 @@ class Speaker:
     поколения отзвучали (зовёт поток вывода). first_sound — time.monotonic() начала звука в текущем поколении.
     """
 
-    def __init__(self, voice: str = DEFAULT_VOICE, speed: float = 1.0, threads: int = 2) -> None:
+    def __init__(
+        self,
+        voice: str = DEFAULT_VOICE,
+        speed: float = 1.0,
+        threads: int = 2,
+        pitch: float = 1.0,
+        effect: float = 0.0,
+    ) -> None:
         self.voice = voice
         self.speed = speed
+        self.pitch = min(1.2, max(0.8, float(pitch)))  # < 1 — ниже: синтез быстрее, вывод на меньшей частоте
+        self.effect = min(1.0, max(0.0, float(effect)))  # «электроника» (jarvis.voicefx)
         self.threads = max(1, int(threads))
         self.ready = False
         self.error = ""
@@ -319,9 +353,19 @@ class Speaker:
         log.info("голос: озвучка %s загружена за %.0f мс", self.voice, self.load_ms)
 
     def _synth(self, text: str) -> tuple[bytes, int]:
-        """Текст → PCM float32 (байты) и частота."""
-        audio = self._engine.generate(text, sid=0, speed=self.speed)
-        return array.array("f", audio.samples).tobytes(), int(audio.sample_rate)
+        """Текст → PCM float32 (байты) и частота вывода.
+
+        Тон ниже (pitch < 1): синтез быстрее в 1/pitch раза, а вывод на частоте ×pitch — длительность та же,
+        голос ниже. «Электроника» — jarvis.voicefx.electronic, десятки миллисекунд на фразу.
+        """
+        audio = self._engine.generate(text, sid=0, speed=self.speed / self.pitch)
+        rate = int(audio.sample_rate)
+        samples = audio.samples
+        if self.effect > 0:
+            from jarvis.voicefx import electronic
+
+            samples = electronic(samples, rate, self.effect)
+        return array.array("f", samples).tobytes(), max(8000, round(rate * self.pitch))
 
     # --- управление
 
@@ -496,10 +540,12 @@ class _Request:
 class Narrator:
     """Решает, что сказать по событиям запроса; говорит через Speaker. Методы быстрые (UI-поток)."""
 
-    def __init__(self, speaker: Speaker, mode: str = "voice", journal: Any = None) -> None:
+    def __init__(self, speaker: Speaker, mode: str = "voice", journal: Any = None, address: str = "") -> None:
         self.speaker = speaker
         self.mode = mode if mode in TTS_MODES else "voice"
         self.journal = journal
+        # манера Джарвиса ([brain] persona): «Открыл Telegram, сэр.»; "" — без обращения
+        self.address = address
         self._req = _Request(0, False, 0.0)
         self._lock = threading.Lock()
         speaker.on_idle = self._idle
@@ -530,7 +576,7 @@ class Narrator:
     def say(self, text: str) -> None:
         """Сказать вне запроса (напоминание) — при tts != "off"."""
         if self.mode != "off":
-            self.speaker.say(short_text(text))
+            self.speaker.say(addressed(short_text(text), True, self.address, lead=True))
 
     def confirm(self, summary: str) -> None:
         """Вопрос подтверждения — вслух (ответ — только клавишами окна: голосом «да» нельзя)."""
@@ -539,7 +585,7 @@ class Narrator:
             if not req.active:
                 return
             self._cancel_timer()
-            phrases = [short_text(summary)]
+            phrases = [addressed(short_text(summary), True, self.address, lead=True)]
         self._say(req, phrases)
 
     def on_event(self, rid: int, ev: Any) -> None:
@@ -571,7 +617,7 @@ class Narrator:
                 elif req.level == "brain" and req.got_text:
                     phrases = req.splitter.flush()
                 else:
-                    phrases = [short_text(ev.text)]
+                    phrases = [addressed(short_text(ev.text), ev.ok, self.address)]
             else:
                 return
         if isinstance(ev, Done) and ev.cancelled:

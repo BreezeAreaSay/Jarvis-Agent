@@ -18,7 +18,7 @@
     Speech recognition model: gigaam-v3 (default), gigaam-v3-punct, gigaam-v2, vosk-small or none.
 
 .PARAMETER Voice
-    Voice for spoken answers: denis (default, male), dmitri, ruslan (male), irina (female) or none.
+    Voice for spoken answers: ruslan (default, male), denis (male), dmitri, irina (female) or none.
 
 .PARAMETER NoVad
     Do not download Silero VAD.
@@ -45,7 +45,7 @@ param(
     [ValidateSet('gigaam-v3', 'gigaam-v3-punct', 'gigaam-v2', 'vosk-small', 'none')]
     [string]$Asr = 'gigaam-v3',
     [ValidateSet('denis', 'dmitri', 'ruslan', 'irina', 'none')]
-    [string]$Voice = 'denis',
+    [string]$Voice = 'ruslan',
     [switch]$NoVad,
     [ValidateSet('github', 'hf')]
     [string]$Source = 'github',

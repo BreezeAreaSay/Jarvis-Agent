@@ -39,7 +39,7 @@
   context.py, hands.py, execute.py, brain.py, journal.py, log.py, config.py, cli.py,
   vision.py (зрение: «посмотри на экран» → снимок и вопрос мозгу), голос (S9, локально, sherpa-onnx):
   ptt.py (клавиша push-to-talk, хук WH_KEYBOARD_LL), mic.py (запись и вывод звука), asr.py (распознавание),
-  voice.py (PTT → запись → текст), tts.py (озвучка ответов)
+  voice.py (PTT → запись → текст), tts.py (озвучка ответов), voicefx.py («электроника» в голосе)
 - src/pc/ — библиотека действий Windows, без UI и без моделей: settings.py (пути и секции [pc]/[aliases]),
   subproc.py (запуск внешних процессов), result.py, paths.py, policy.py, privacy.py, apps.py, windows.py,
   audio.py, media.py, procs.py (список и завершение процессов), files.py, system.py, confirm_client.py,
@@ -172,6 +172,8 @@ model_quick = "gpt-6-luna"           # вопросы и «gpt: …» (имен�
 model_deep = "gpt-6-luna"            # «думай: …» — та же модель, дольше думает
 effort_quick = "low"                 # уровень размышления: minimal | low | medium | high | xhigh | max
 effort_deep = "high"                 # для «думай: …»; xhigh/max — ещё дольше и дороже по квоте
+persona = "jarvis"                   # манера речи: jarvis — как Джарвис из «Железного человека»; plain — нейтрально
+address = "сэр"                      # как обращаться к вам (persona = jarvis)
 service_tier = ""                    # "fast" — быстрее, но больше расход квоты
 proxy = ""                           # "http://127.0.0.1:7890", если GPT только через прокси
 fallback_provider = ""               # пусто; DeepSeek через Responses API не проверен (см. S5)
@@ -204,8 +206,10 @@ model = "gigaam-v3"                  # gigaam-v3 | gigaam-v3-punct | gigaam-v2 |
 threads = 2                          # потоков CPU на распознавание и синтез (1..8)
 vad = true                           # обрезать тишину по краям (Silero VAD)
 tts = "voice"                        # ответ голосом: voice — на сказанное голосом, always — на всё, off — молча
-tts_voice = "denis"                  # голос: denis | dmitri | ruslan | irina (папка <data>\models\tts-<имя>)
+tts_voice = "ruslan"                 # голос: ruslan | denis | dmitri | irina (папка <data>\models\tts-<имя>)
 tts_speed = 1.0                      # скорость речи (0.5..2.0)
+tts_pitch = 1.0                      # тон: меньше 1 — ниже (0.8..1.2)
+tts_effect = 0.35                    # «электроника» в голосе: 0 — без эффекта, 1 — сильно
 ```
 
 ## Стиль
@@ -286,3 +290,4 @@ uv run pytest -q -m "not live"
 - Сверх плана (просьбы владельца): отмена, напоминания, память, справка; сфера; зрение (снимок → GPT по команде).
 - S9: голос локально (sherpa-onnx, GigaAM v3, piper denis): синтез → распознавание 18/20, p95 ≈0,3 с (Linux).
   Codex для голоса не годится: realtime-транскрипция только с ключом API, модели Codex не принимают звук.
+- Голос и манера Джарвиса (просьба владельца): ruslan + «электроника» (voicefx, ~10 мс на фразу), persona «сэр».

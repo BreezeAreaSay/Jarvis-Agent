@@ -62,14 +62,28 @@ class BrainConfig:
     idle_new_thread_min: float = 20.0
     effort_quick: str = "low"  # уровень размышления: minimal | low | medium | high | xhigh | max
     effort_deep: str = "high"
+    persona: str = "jarvis"  # манера речи: jarvis — как Джарвис из «Железного человека»; plain — нейтрально
+    address: str = "сэр"  # как обращаться к человеку (persona = jarvis)
 
 
 EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")  # что поддерживает модель — каталог Codex
 
 
+def _clean_address(text: str) -> str:
+    """Обращение одной строкой до 30 знаков, без управляющих символов и [ ]; пусто — умолчание («сэр»)."""
+    clean = "".join(c if c.isprintable() else " " for c in text if c not in "[]")
+    return " ".join(clean.split())[:30].strip() or BrainConfig.address
+
+
 def _fix_brain(b: BrainConfig) -> BrainConfig:
-    """Неизвестный уровень размышления — умолчание (low / high)."""
+    """Неизвестный уровень размышления — умолчание (low / high); persona — jarvis | plain; обращение —
+    _clean_address."""
     fixes: dict[str, Any] = {}
+    if b.persona not in ("jarvis", "plain"):
+        fixes["persona"] = BrainConfig.persona
+    address = _clean_address(str(b.address))
+    if address != b.address:
+        fixes["address"] = address
     for name in ("effort_quick", "effort_deep"):
         value = str(getattr(b, name)).strip().casefold()
         if value not in EFFORTS:
@@ -128,8 +142,10 @@ class VoiceConfig:
     threads: int = 2  # потоков CPU для распознавания и синтеза (1..8)
     vad: bool = True  # обрезка тишины по краям (Silero VAD)
     tts: TtsMode = "voice"  # озвучка ответов: voice — на голосовые запросы, always — на все, off — молча
-    tts_voice: str = "denis"  # голос: папка <data>\models\tts-<имя>
+    tts_voice: str = "ruslan"  # голос: папка <data>\models\tts-<имя>
     tts_speed: float = 1.0  # скорость речи (0.5..2.0)
+    tts_pitch: float = 1.0  # тон: меньше 1 — ниже (0.8..1.2)
+    tts_effect: float = 0.35  # «электроника» в голосе: 0 — без эффекта, 1 — сильно (jarvis.voicefx)
 
 
 def _voice(raw: dict[str, Any]) -> VoiceConfig:
@@ -160,6 +176,10 @@ def _voice(raw: dict[str, Any]) -> VoiceConfig:
         fixes["tts_voice"] = d.tts_voice
     if not 0.5 <= v.tts_speed <= 2.0:
         fixes["tts_speed"] = d.tts_speed
+    if not 0.8 <= v.tts_pitch <= 1.2:
+        fixes["tts_pitch"] = d.tts_pitch
+    if not 0.0 <= v.tts_effect <= 1.0:
+        fixes["tts_effect"] = d.tts_effect
     return dataclasses.replace(v, **fixes) if fixes else v
 
 

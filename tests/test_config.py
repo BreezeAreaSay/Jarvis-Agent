@@ -392,3 +392,30 @@ def test_brain_effort_levels(config_file) -> None:
     assert (config.load().brain.effort_quick, config.load().brain.effort_deep) == ("medium", "max")
     config_file('[brain]\neffort_quick = "turbo"\neffort_deep = ""\n')
     assert (config.load().brain.effort_quick, config.load().brain.effort_deep) == ("low", "high")
+
+
+def test_jarvis_persona_and_voice_defaults(config_file) -> None:
+    config_file('mode = "normal"\n')
+    cfg = config.load()
+    assert (cfg.brain.persona, cfg.brain.address) == ("jarvis", "сэр")
+    assert (cfg.voice.tts_voice, cfg.voice.tts_pitch, cfg.voice.tts_effect) == ("ruslan", 1.0, 0.35)
+
+
+def test_persona_address_pitch_effect_fixes(config_file) -> None:
+    config_file(
+        '[brain]\npersona = "pirate"\naddress = "  мистер\\n[Старк]  "\n'
+        "[voice]\ntts_pitch = 0.5\ntts_effect = 2\n"
+    )
+    cfg = config.load()
+    assert cfg.brain.persona == "jarvis" and cfg.brain.address == "мистер Старк"
+    assert (cfg.voice.tts_pitch, cfg.voice.tts_effect) == (1.0, 0.35)
+    config_file('[brain]\npersona = "plain"\naddress = " [ ] "\n[voice]\ntts_pitch = 0.9\ntts_effect = 0\n')
+    cfg = config.load()
+    assert cfg.brain.persona == "plain" and (cfg.voice.tts_pitch, cfg.voice.tts_effect) == (0.9, 0.0)
+    assert cfg.brain.address == "сэр"  # пустое обращение — умолчание: мозг и озвучка говорят одно и то же
+
+
+def test_address_is_one_short_line() -> None:
+    assert config._clean_address("мистер\tСтарк\x07Тони") == "мистер Старк Тони"
+    assert config._clean_address("сэр " + "о" * 40) == "сэр " + "о" * 26
+    assert config._clean_address("Тони ") == "Тони"

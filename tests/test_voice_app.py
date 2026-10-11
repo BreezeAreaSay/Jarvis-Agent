@@ -166,9 +166,9 @@ def test_start_voice_with_models(request: pytest.FixtureRequest, monkeypatch: py
     folder.mkdir(parents=True)
     for name in ("encoder.int8.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt"):
         (folder / name).write_bytes(b"x")
-    voice_folder = tts.voice_dir("denis")
+    voice_folder = tts.voice_dir("ruslan")
     (voice_folder / "espeak-ng-data").mkdir(parents=True)
-    (voice_folder / "ru_RU-denis-medium.onnx").write_bytes(b"x")
+    (voice_folder / "ru_RU-ruslan-medium.onnx").write_bytes(b"x")
     (voice_folder / "tokens.txt").write_text("a 0", encoding="utf-8")
     request.getfixturevalue("fakes")
     hooks: list[Any] = []
@@ -198,6 +198,20 @@ def test_start_voice_with_models(request: pytest.FixtureRequest, monkeypatch: py
     assert wait_for(q(), lambda: a.voice.status == "error", 10)  # модель-пустышка не грузится — честно error
     a.shutdown()
     assert getattr(hooks[0], "stopped", False)
+
+
+def test_start_voice_falls_back_to_downloaded_voice(request: pytest.FixtureRequest) -> None:
+    """[voice] tts_voice по умолчанию — ruslan, а скачан только прежний denis: Jarvis говорит голосом denis
+    (с обращением «сэр» — persona по умолчанию jarvis); модели распознавания нет — голосового ввода нет."""
+    voice_folder = tts.voice_dir("denis")
+    (voice_folder / "espeak-ng-data").mkdir(parents=True)
+    (voice_folder / "ru_RU-denis-medium.onnx").write_bytes(b"x")
+    (voice_folder / "tokens.txt").write_text("a 0", encoding="utf-8")
+    request.getfixturevalue("fakes")
+    a = request.getfixturevalue("make_app")()
+    assert wait_for(q(), lambda: a.narrator is not None)
+    assert a.narrator.speaker.voice == "denis" and a.narrator.address == "сэр"
+    assert a.voice is None
 
 
 def test_no_models_no_voice(app: Any) -> None:

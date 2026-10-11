@@ -418,9 +418,14 @@ class JarvisApp(QObject):
         try:
             from jarvis import tts, voice
 
-            if vcfg.tts != "off" and vcfg.tts_voice in tts.available_voices():
-                speaker = tts.Speaker(vcfg.tts_voice, vcfg.tts_speed, vcfg.threads)
-                self.narrator = tts.Narrator(speaker, vcfg.tts, journal)
+            name = tts.pick_voice(vcfg.tts_voice) if vcfg.tts != "off" else ""
+            if name:
+                if name != vcfg.tts_voice:  # голос по умолчанию сменился, а скачан прежний — говорим им
+                    log.info("голос: %s не скачан — озвучка голосом %s", vcfg.tts_voice, name)
+                speaker = tts.Speaker(name, vcfg.tts_speed, vcfg.threads, vcfg.tts_pitch, vcfg.tts_effect)
+                bcfg = self.cfg.brain
+                address = bcfg.address if bcfg.persona == "jarvis" else ""
+                self.narrator = tts.Narrator(speaker, vcfg.tts, journal, address)
                 self._bg(_safe, speaker.load, "озвучка не загружена", name="jarvis-tts-load")
             if not voice.enabled(vcfg):
                 log.info("голос: голосовой ввод выключен или модели нет (scripts\\get_voice_models.ps1)")

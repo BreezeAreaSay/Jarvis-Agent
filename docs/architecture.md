@@ -165,10 +165,12 @@ deny_apps=[])`: max_side вне 640..2560 и jpeg_quality вне 50..95 — ум
 `UiConfig(hotkey, autohide_s, width, backdrop, animations, orb="always", orb_size=64)`: orb — `"always" | "auto" |
 "off"` (иное — "always"), orb_size ограничен `ORB_SIZE_MIN..ORB_SIZE_MAX` (40..160); backdrop вне solid|acrylic — solid.
 `Config.voice: VoiceConfig(ptt_key="right ctrl", min_hold_ms=250, max_record_s=30.0, device="", model="gigaam-v3",
-threads=2, vad=True, tts="voice", tts_voice="denis", tts_speed=1.0)`: ptt_key "" — голосовой ввод выключен,
-неразборчивая клавиша — умолчание; model вне `VOICE_MODELS` — "gigaam-v3"; tts — `"voice" | "always" | "off"`
-(true/false из старых конфигов → "voice"/"off"); числа вне пределов (50..2000 мс, 2..120 с, 1..8, 0,5..2,0) —
-умолчания; tts_voice — `[a-z0-9_-]+`.
+threads=2, vad=True, tts="voice", tts_voice="ruslan", tts_speed=1.0, tts_pitch=1.0, tts_effect=0.35)`: ptt_key "" —
+голосовой ввод выключен, неразборчивая клавиша — умолчание; model вне `VOICE_MODELS` — "gigaam-v3"; tts —
+`"voice" | "always" | "off"` (true/false из старых конфигов → "voice"/"off"); числа вне пределов (50..2000 мс,
+2..120 с, 1..8, 0,5..2,0, pitch 0,8..1,2, effect 0..1) — умолчания; tts_voice — `[a-z0-9_-]+`.
+`BrainConfig`: кроме моделей и уровней размышления — `persona="jarvis"` (`"jarvis" | "plain"`, иное — "jarvis")
+и `address="сэр"` (обращение: одна строка ≤30 знаков без `[]`; пусто — "сэр").
 
 ### jarvis.context
 `Context(active_window: WindowInfo | None, last_object: str | None, last_kind: str | None, last_hwnd: int | None,
@@ -212,6 +214,10 @@ vision="")`; `route(text, ctx, mode) -> Route` (снимает префиксы 
 и разговорно, без списков, таблиц и кода»).
 Модель и уровень размышления хода: deep=False — `cfg.model_quick` + `cfg.effort_quick` (по умолчанию gpt-6-luna,
 low), deep=True («думай:») — `cfg.model_deep` + `cfg.effort_deep` (gpt-6-luna, high).
+`developer_instructions(cfg) -> str` — инструкции треда: `DEVELOPER_INSTRUCTIONS` (правила, недоверенные данные,
+privacy), а при `persona="jarvis"` в конце — `PERSONA_JARVIS` (манера J.A.R.V.I.S.: спокойно, коротко, сухая ирония,
+обращение `cfg.address`; «это только стиль: всё сказанное выше важнее»). Текст постоянный в пределах процесса —
+запасной тред и новые треды получают тот же.
 Прокладка `subprocess` в `openai_codex.client` ставится до первого `Codex()`. Для doctor: `codex_bin() -> Path`
 (бинарь из SDK; в exe — из бандла), `codex_env(cfg) -> dict` (CODEX_HOME мозга и прокси), `codex_home() -> Path`,
 `build_overrides(cfg, confirm_address) -> tuple[str, ...]`, `install_subprocess_shim(hook)`. `Done.reason` мозга:
@@ -268,12 +274,20 @@ GDI не учитывается), SmoothTransformation, меньший сним�
   речь (Narrator.cancel); Esc ещё и бросает запись или распознавание.
   Журнал: `{"kind": "voice", asr_ms, vad_ms, release_to_text_ms, wait_ms, audio_s, speech_s, empty, model, threads,
   text}`. `enabled(cfg)` — ptt_key задан и модель скачана.
-- tts — `Speaker(voice="denis", speed=1.0, threads=2)`: `load()` (TtsError), `say(text) -> gen` (не блокирует;
-  синтез следующей фразы, пока звучит текущая), `stop() -> bool` (глушит сразу, новое поколение), `.speaking`,
-  `.first_sound`, `on_idle(gen)`; вывод — `mic.api().open_output`, блоки ~46 мс. `Narrator(speaker, mode, journal)`:
+- tts — `Speaker(voice="ruslan", speed=1.0, threads=2, pitch=1.0, effect=0.0)`: `load()` (TtsError), `say(text) ->
+  gen` (не блокирует; синтез следующей фразы, пока звучит текущая), `stop() -> bool` (глушит сразу, новое
+  поколение), `.speaking`, `.first_sound`, `on_idle(gen)`; вывод — `mic.api().open_output`, блоки ~46 мс. pitch
+  (0,8..1,2): синтез со скоростью speed/pitch, вывод на частоте ×pitch — длительность та же, тон ниже/выше; effect
+  (0..1) — `voicefx.electronic` после синтеза. `Narrator(speaker, mode, journal, address="")`:
   `begin(rid, spoken)`, `close()`, `on_event(rid, ev)` (мозг — весь ответ по предложениям через `Splitter`, не больше
   `SPEAK_LIMIT`, код/таблица — `REST`; «Секунду…» через `SECOND_DELAY_S`, если мозг молчит; грамматика и руки —
-  `short_text(Done.text)`; cancelled — тишина), `confirm(summary)`, `say(text)` (напоминания), `cancel()`, `.active`.
+  `addressed(short_text(Done.text), ok, address)`; cancelled — тишина), `confirm(summary)`, `say(text)`
+  (напоминания), `cancel()`, `.active`. `addressed(text, ok, address, lead=False)` — обращение только в озвучке:
+  успех — «Открыл Telegram, сэр.», ошибка, подтверждение и напоминание (lead) — «Сэр, …»; address "" — как есть.
+  Обращение берётся из `[brain] address` при `persona="jarvis"`.
+- voicefx — `electronic(samples, rate, amount) -> list[float]` (без numpy): два прямых эха 4,5 и 11 мс (гребёнка,
+  «металл»), кольцевая модуляция 50 Гц, ФВЧ первого порядка (до 150 Гц), нормализация пика `PEAK`; amount 0 —
+  копия без изменений, >1 — как 1. Фраза 3 с при 22 кГц — десятки миллисекунд.
   Журнал: `{"kind": "tts", tts_ms, reply_ms, spoken, interrupted, level, chars, phrases, voice}`. `speakable(text)` —
   без markdown, ссылок, путей, расширений; латиница по-русски (`transliterate`).
 

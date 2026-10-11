@@ -117,6 +117,24 @@ def test_voice_files_and_available(_isolated_data: Any) -> None:
     assert tts.available_voices() == ["denis"]
 
 
+def fake_voice(name: str) -> None:
+    folder = tts.voice_dir(name)
+    (folder / "espeak-ng-data").mkdir(parents=True)
+    (folder / f"ru_RU-{name}-medium.onnx").write_bytes(b"x")
+    (folder / "tokens.txt").write_text("a 0")
+
+
+def test_pick_voice_falls_back_to_downloaded(_isolated_data: Any) -> None:
+    """Голос по умолчанию сменился на ruslan, а скачан прежний denis — говорим denis, а не молчим."""
+    assert tts.pick_voice("ruslan") == ""
+    fake_voice("zed")
+    assert tts.pick_voice("ruslan") == "zed"  # не из VOICE_ORDER — тоже годится
+    fake_voice("denis")
+    assert tts.pick_voice("ruslan") == "denis" and tts.pick_voice("zed") == "zed"
+    fake_voice("ruslan")
+    assert tts.pick_voice("ruslan") == "ruslan" and tts.pick_voice("irina") == "ruslan"
+
+
 # --- Speaker -------------------------------------------------------------------------------------
 
 
@@ -477,3 +495,68 @@ def test_narrator_close_stops_speaker() -> None:
     n.begin(1, spoken=True)
     n.close()
     assert closed == [True] and not n.active
+
+
+# --- голос Джарвиса: тон, «электроника», обращение -------------------------------------------------
+
+
+class RecordingEngine(FakeEngine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.speeds: list[float] = []
+
+    def generate(self, text: str, sid: int = 0, speed: float = 1.0) -> Any:
+        self.speeds.append(speed)
+        return super().generate(text, sid, speed)
+
+
+def test_pitch_lowers_tone_keeping_length() -> None:
+    sp = tts.Speaker("ruslan", speed=1.0, pitch=0.88)
+    engine = RecordingEngine()
+    sp._engine = engine
+    pcm, rate = sp._synth("привет")
+    assert engine.speeds == [1.0 / 0.88]  # синтез быстрее…
+    assert rate == round(22050 * 0.88)  # …а вывод на меньшей частоте: голос ниже, длительность та же
+    assert len(pcm) == len("привет") * 400 * 4
+
+
+def test_pitch_and_effect_bounds() -> None:
+    sp = tts.Speaker("ruslan", pitch=0.1, effect=7.0)
+    assert (sp.pitch, sp.effect) == (0.8, 1.0)
+
+
+def test_effect_applied_to_samples() -> None:
+    plain = tts.Speaker("ruslan")
+    plain._engine = FakeEngine()
+    fx = tts.Speaker("ruslan", effect=0.65)
+    fx._engine = FakeEngine()
+    assert plain._synth("тест")[0] != fx._synth("тест")[0]
+    assert plain._synth("тест")[1] == fx._synth("тест")[1] == 22050
+
+
+@pytest.mark.parametrize(
+    ("text", "ok", "lead", "spoken"),
+    [
+        ("Открыл Telegram", True, False, "Открыл Telegram, сэр."),
+        ("Напомню в 18:30.", True, False, "Напомню в 18:30, сэр."),
+        ("Какой файл открыть?", True, False, "Какой файл открыть, сэр?"),
+        ("Готово!", True, False, "Готово, сэр!"),
+        ("Нет устройства вывода звука", False, False, "Сэр, нет устройства вывода звука"),
+        ("GPT не ответил", False, False, "Сэр, GPT не ответил"),
+        ("Завершить chrome.exe?", True, True, "Сэр, завершить chrome.exe?"),
+    ],
+)
+def test_addressed(text: str, ok: bool, lead: bool, spoken: str) -> None:
+    assert tts.addressed(text, ok, "сэр", lead=lead) == spoken
+    assert tts.addressed(text, ok, "", lead=lead) == text
+
+
+def test_narrator_speaks_with_address() -> None:
+    sp, journal = FakeSpeaker(), FakeJournal()
+    n = tts.Narrator(sp, "voice", journal, address="сэр")  # type: ignore[arg-type]
+    n.begin(1, spoken=True)
+    n.on_event(1, Level("grammar", "grammar:open"))
+    n.on_event(1, Done(True, "Открыл Telegram", level="grammar"))
+    assert sp.said == ["Открыл телеграм, сэр."]  # латиница — транслитом (speakable), «сэр» — в конце
+    n.say("Напоминание: вынуть пиццу")
+    assert sp.said[-1] == "Сэр, напоминание: вынуть пиццу"

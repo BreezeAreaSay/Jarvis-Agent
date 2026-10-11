@@ -587,12 +587,13 @@ def check_voice_tts(d: Doctor) -> Check:
         return Check("skip", 'озвучка: выключена ([voice] tts = "off")')
     from jarvis import tts
 
+    name = tts.pick_voice(v.tts_voice) or v.tts_voice  # нужного нет — Jarvis говорит скачанным (как в app)
     try:
-        tts.voice_files(v.tts_voice)
+        tts.voice_files(name)
     except tts.TtsError as e:
         have = ", ".join(tts.available_voices()) or "нет"
         return Check("warn", f"озвучка: {e} (скачаны: {have})", VOICE_HINT)
-    speaker = tts.Speaker(v.tts_voice, v.tts_speed, v.threads)
+    speaker = tts.Speaker(name, v.tts_speed, v.threads, v.tts_pitch, v.tts_effect)
     try:
         speaker.load()
     except tts.TtsError as e:
@@ -600,7 +601,10 @@ def check_voice_tts(d: Doctor) -> Check:
     t = time.perf_counter()
     speaker._synth("Открыл телеграм, громкость тридцать процентов.")
     ms = (time.perf_counter() - t) * 1000
-    text = f"озвучка: голос {v.tts_voice} ({v.tts}), загрузка {speaker.load_ms:.0f} мс, фраза — {ms:.0f} мс"
+    text = f"озвучка: голос {name} ({v.tts}), загрузка {speaker.load_ms:.0f} мс, фраза — {ms:.0f} мс"
+    if name != v.tts_voice:
+        hint = f"pwsh -File scripts\\get_voice_models.ps1 -Voice {v.tts_voice}"
+        return Check("warn", f"{text}; голоса {v.tts_voice} из [voice] tts_voice нет", hint)
     if ms > 300:
         return Check("warn", text, "медленно: [voice] threads = 4 (или голос попроще)")
     return Check("ok", text)

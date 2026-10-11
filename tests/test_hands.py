@@ -553,6 +553,12 @@ def health_server(codes: list[int | None]) -> Callable[[httpx.Request], httpx.Re
     return handler
 
 
+@pytest.fixture(autouse=True)
+def _server_cmd_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    r"""C:\Jarvis\scripts\start_hands.cmd из тестов «существует» на любой ОС (на windows-latest его нет)."""
+    monkeypatch.setattr(hands, "_file_exists", lambda path: True)
+
+
 def raw_hands(handler: Callable[[httpx.Request], httpx.Response], **kw: Any) -> hands.Hands:
     cfg = HandsConfig(server_cmd=[r"C:\Jarvis\scripts\start_hands.cmd"])
     return hands.Hands(cfg, transport=httpx.MockTransport(handler), **kw)
@@ -777,3 +783,14 @@ def test_close_closes_client() -> None:
     h = make_hands(Capture(tool_response([("ask_gpt", {})])))
     h.close()
     assert h._client.is_closed
+
+
+def test_ensure_server_missing_server_cmd_file(ps: FakePsutil, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Нет файла start_hands.cmd — понятная ошибка до запуска, без попытки spawn."""
+    monkeypatch.setattr(hands, "_file_exists", lambda path: False)
+    spawned: list[Any] = []
+    monkeypatch.setattr(hands.subproc, "spawn", lambda argv, **kw: spawned.append(argv))
+    h = raw_hands(health_server([None]))
+    with pytest.raises(hands.HandsError, match="Нет файла"):
+        h.ensure_server()
+    assert spawned == [] and "Нет файла" in h.status["error"]

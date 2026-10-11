@@ -378,6 +378,11 @@ def _log_tail(since: float, lines: int = 6) -> tuple[list[str], bool]:
     return tail, any(m in text for m in OOM_MARKERS)
 
 
+def _file_exists(path: str) -> bool:
+    r"""Есть ли файл команды запуска сервера (тесты подменяют: C:\Jarvis\… есть не на каждой машине)."""
+    return os.path.exists(path)
+
+
 class Hands:
     """Клиент сервера рук. Живёт весь процесс: один httpx.Client с keep-alive.
 
@@ -469,7 +474,8 @@ class Hands:
         if not self.cfg.server_cmd:
             raise self._fail("Не задана команда запуска сервера рук (hands.server_cmd)")
         argv = [*self.cfg.server_cmd, self.cfg.model]
-        if os.path.isabs(argv[0]) and not os.path.exists(argv[0]):
+        # путь Windows (C:\…) — проверка не зависит от ОС, где идут тесты
+        if PureWindowsPath(argv[0]).is_absolute() and not _file_exists(argv[0]):
             raise self._fail(f"Нет файла {argv[0]} (hands.server_cmd)")
         if PureWindowsPath(argv[0]).suffix.casefold() in (".cmd", ".bat"):
             argv = [os.environ.get("COMSPEC") or "cmd.exe", "/d", "/c", *argv]

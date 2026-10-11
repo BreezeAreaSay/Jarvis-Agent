@@ -1,24 +1,26 @@
 """Озвучка ответов: sherpa-onnx OfflineTts (piper/VITS, русский голос) и что из ответа говорить вслух.
 
 Голоса — в <data>\\models\\tts-<имя> (piper ru_RU medium; скачивает scripts\\get_voice_models.ps1).
-По умолчанию мужской denis (датасет CC0): по замеру распознаётся обратно 16/20 фраз, синтез фразы ≈140 мс
-на 2 потоках; ruslan — 17/20, но датасет CC BY-NC-SA 4.0; dmitri (CC0) — 13/20, глотает начало фразы.
+По умолчанию мужской ruslan (выбор владельца; датасет CC BY-NC-SA 4.0 — для личного использования): по замеру
+распознаётся обратно 17/20 фраз, синтез фразы ≈140 мс на 2 потоках; denis (CC0) — 16/20; dmitri (CC0) — 13/20,
+глотает начало фразы. Поверх — «электроника» (jarvis.voicefx) и тон (pitch).
 
 - Speaker — движок и два рабочих потока: синтез (следующее предложение готовится, пока звучит текущее)
   и воспроизведение (sounddevice через jarvis.mic, блоки по ~50 мс). stop() глушит сразу: поколение `gen`
   растёт, всё старое выбрасывается, поток вывода — abort(). Модель грузится в фоне (load()).
 - Narrator — что говорить по событиям запроса (jarvis.events): [voice] tts = "voice" — только запросы,
   сказанные голосом; "always" — и набранные; "off" — молчать. Мозг — весь ответ по предложениям по мере
-  прихода текста (длинное, код, таблицы — «Остальное — в окне»); «Секунду…», если до первых слов мозга
-  дольше SECOND_DELAY_S; грамматика и руки — короткий итог Done.text; вопрос подтверждения — вслух (ответ —
-  только клавишами окна). В журнал — запись kind="tts": tts_ms (от первой фразы до звука), reply_ms (от начала
-  запроса до звука), spoken, interrupted.
+  прихода текста (длинное, код, таблицы — «Остальное — в окне»); пока мозг думает — тишина (о работе говорит
+  сфера); грамматика и руки — короткий итог Done.text; вопрос подтверждения — вслух (ответ — только клавишами
+  окна). on_unsaid() — часть ответа не прозвучит (окно стоит показать). В журнал — запись kind="tts": tts_ms
+  (от первой фразы до звука), reply_ms (от начала запроса до звука), spoken, interrupted.
 - speakable(text) — текст для голоса: без markdown, ссылок, путей и расширений файлов; латиница —
   русскими буквами (piper с espeak-ng ru латиницу читает плохо: «Telegram» не распознаётся обратно).
 """
 
 import array
 import logging
+import math
 import queue
 import re
 import threading
@@ -38,8 +40,6 @@ VOICE_ORDER = ("ruslan", "denis", "dmitri", "irina")  # нужного голо�
 TTS_MODES = ("voice", "always", "off")
 SPEAK_LIMIT = 600  # больше знаков ответа мозга вслух не читаем
 SHORT_LIMIT = 200  # итог грамматики/рук длиннее — только первое предложение
-SECOND_DELAY_S = 0.8  # «Секунду…», если мозг молчит дольше
-SECOND = "Секунду…"
 REST = "Остальное — в окне."
 CHUNK_FRAMES = 1024  # блок вывода (~46 мс при 22 кГц): stop() глушит не позже чем через блок
 WARMUP_TEXT = "Готов."
@@ -289,6 +289,8 @@ class Speaker:
 
     Поколение `gen` растёт на каждый stop(): фразы старого поколения выбрасываются. on_idle(gen) — все фразы
     поколения отзвучали (зовёт поток вывода). first_sound — time.monotonic() начала звука в текущем поколении.
+    on_level(0..1) — громкость каждого блока перед выводом (~20 раз в секунду, поток вывода; сфера говорит
+    в такт), 0 — речь кончилась или прервана.
     """
 
     def __init__(
@@ -309,6 +311,7 @@ class Speaker:
         self.load_ms = 0.0
         self.first_sound = 0.0
         self.on_idle: Callable[[int], None] | None = None
+        self.on_level: Callable[[float], None] | None = None
         self._engine: Any = None
         self._gen = 0
         self._lock = threading.Lock()
@@ -337,8 +340,7 @@ class Speaker:
             )
             self._engine = so.OfflineTts(cfg)
             self._synth(WARMUP_TEXT)
-            for phrase in (SECOND, REST):
-                self._cache[phrase] = self._synth(phrase)
+            self._cache[REST] = self._synth(REST)
             from jarvis import mic
 
             mic.warmup()  # PortAudio — заранее, а не на первой фразе
@@ -398,6 +400,8 @@ class Speaker:
             self._pending = 0
             self._playing_until = 0.0
             self.first_sound = 0.0
+        if busy:
+            self._level(0.0)
         return busy
 
     def close(self) -> None:
@@ -477,6 +481,7 @@ class Speaker:
             if gen != self._gen:
                 return True
             block = pcm[off : off + step]
+            self._level(block_level(block))
             stream.write(block)
             with self._lock:
                 if gen != self._gen:
@@ -492,12 +497,30 @@ class Speaker:
             self._pending = max(0, self._pending - 1)
             if self._pending:
                 return False
+        self._level(0.0)
         if self.on_idle is not None:
             try:
                 self.on_idle(gen)
             except Exception:
                 log.exception("голос: on_idle")
         return True
+
+    def _level(self, value: float) -> None:
+        if self.on_level is not None:
+            try:
+                self.on_level(value)
+            except Exception:
+                log.exception("голос: on_level")
+
+
+def block_level(pcm: bytes) -> float:
+    """Громкость блока float32 0..1 (RMS по каждому 4-му отсчёту ×4: речь piper ≈0,1–0,2 → 0,4–0,8)."""
+    samples = array.array("f")
+    samples.frombytes(pcm[: len(pcm) // 4 * 4])
+    part = samples[::4]
+    if not part:
+        return 0.0
+    return min(1.0, 4.0 * math.sqrt(sum(v * v for v in part) / len(part)))
 
 
 def _close_stream(stream: Any, abort: bool) -> None:
@@ -530,7 +553,7 @@ class _Request:
     splitter: Splitter = field(default_factory=Splitter)
     got_text: bool = False
     done: bool = False  # Done обработан — после последней фразы пишем журнал
-    timer: threading.Timer | None = None
+    unsaid: bool = False  # часть ответа не прозвучит — on_unsaid уже позван
     first_say: float = 0.0
     chars: int = 0
     phrases: int = 0
@@ -546,6 +569,7 @@ class Narrator:
         self.journal = journal
         # манера Джарвиса ([brain] persona): «Открыл Telegram, сэр.»; "" — без обращения
         self.address = address
+        self.on_unsaid: Callable[[], None] | None = None  # часть ответа не прозвучит (UI-поток, как on_event)
         self._req = _Request(0, False, 0.0)
         self._lock = threading.Lock()
         speaker.on_idle = self._idle
@@ -584,7 +608,6 @@ class Narrator:
             req = self._req
             if not req.active:
                 return
-            self._cancel_timer()
             phrases = [addressed(short_text(summary), True, self.address, lead=True)]
         self._say(req, phrases)
 
@@ -598,31 +621,32 @@ class Narrator:
                 return
             if isinstance(ev, Level):
                 req.level = ev.level
-                if ev.level == "brain" and req.timer is None and not req.got_text:
-                    req.timer = threading.Timer(SECOND_DELAY_S, self._second, args=(rid,))
-                    req.timer.daemon = True
-                    req.timer.start()
                 return
             if isinstance(ev, TextChunk):
                 if req.level != "brain":
                     return
                 req.got_text = True
-                self._cancel_timer()
                 phrases = req.splitter.feed(ev.text)
+                cut = req.splitter.stopped
             elif isinstance(ev, Done):
-                self._cancel_timer()
                 req.active, req.done = False, True
                 if ev.cancelled:
-                    phrases = []
+                    phrases, cut = [], False
                 elif req.level == "brain" and req.got_text:
                     phrases = req.splitter.flush()
+                    cut = req.splitter.stopped
                 else:
                     phrases = [addressed(short_text(ev.text), ev.ok, self.address)]
+                    cut = len(speakable(ev.text)) > SHORT_LIMIT  # прозвучит только первое предложение
             else:
                 return
+            unsaid = cut and not req.unsaid
+            req.unsaid = req.unsaid or cut
         if isinstance(ev, Done) and ev.cancelled:
             self._interrupt()
             return
+        if unsaid and self.on_unsaid is not None:
+            self.on_unsaid()
         self._say(req, phrases)
         if isinstance(ev, Done) and not self.speaker.speaking:
             self._log(req, interrupted=False)
@@ -638,23 +662,9 @@ class Narrator:
                 req.phrases += 1
             self.speaker.say(phrase)
 
-    def _second(self, rid: int) -> None:
-        with self._lock:
-            req = self._req
-            if rid != req.rid or not req.active or req.got_text:
-                return
-            req.timer = None
-        self._say(req, [SECOND])
-
-    def _cancel_timer(self) -> None:
-        timer, self._req.timer = self._req.timer, None
-        if timer is not None:
-            timer.cancel()
-
     def _interrupt(self) -> bool:
         with self._lock:
             req = self._req
-            self._cancel_timer()
         first_sound = self.speaker.first_sound
         interrupted = self.speaker.stop()
         self._log(req, interrupted=interrupted, first_sound=first_sound)

@@ -276,20 +276,23 @@ GDI не учитывается), SmoothTransformation, меньший сним�
   text}`. `enabled(cfg)` — ptt_key задан и модель скачана.
 - tts — `Speaker(voice="ruslan", speed=1.0, threads=2, pitch=1.0, effect=0.0)`: `load()` (TtsError), `say(text) ->
   gen` (не блокирует; синтез следующей фразы, пока звучит текущая), `stop() -> bool` (глушит сразу, новое
-  поколение), `.speaking`, `.first_sound`, `on_idle(gen)`; вывод — `mic.api().open_output`, блоки ~46 мс. pitch
-  (0,8..1,2): синтез со скоростью speed/pitch, вывод на частоте ×pitch — длительность та же, тон ниже/выше; effect
-  (0..1) — `voicefx.electronic` после синтеза. `Narrator(speaker, mode, journal, address="")`:
-  `begin(rid, spoken)`, `close()`, `on_event(rid, ev)` (мозг — весь ответ по предложениям через `Splitter`, не больше
-  `SPEAK_LIMIT`, код/таблица — `REST`; «Секунду…» через `SECOND_DELAY_S`, если мозг молчит; грамматика и руки —
-  `addressed(short_text(Done.text), ok, address)`; cancelled — тишина), `confirm(summary)`, `say(text)`
-  (напоминания), `cancel()`, `.active`. `addressed(text, ok, address, lead=False)` — обращение только в озвучке:
-  успех — «Открыл Telegram, сэр.», ошибка, подтверждение и напоминание (lead) — «Сэр, …»; address "" — как есть.
-  Обращение берётся из `[brain] address` при `persona="jarvis"`.
+  поколение), `.speaking`, `.first_sound`, `on_idle(gen)`, `on_level(0..1)` (громкость блока перед выводом —
+  `block_level`, 0 — замолчал; поток вывода); вывод — `mic.api().open_output`, блоки ~46 мс. pitch (0,8..1,2):
+  синтез со скоростью speed/pitch, вывод на частоте ×pitch — длительность та же, тон ниже/выше; effect (0..1) —
+  `voicefx.electronic` после синтеза. `pick_voice(wanted)` — wanted, если скачан, иначе первый скачанный.
+  `Narrator(speaker, mode, journal, address="")`: `begin(rid, spoken)`, `close()`, `on_event(rid, ev)` (мозг — весь
+  ответ по предложениям через `Splitter`, не больше `SPEAK_LIMIT`, код/таблица — `REST`; пока мозг думает — тишина,
+  работу показывает сфера; грамматика и руки — `addressed(short_text(Done.text), ok, address)`; cancelled —
+  тишина), `confirm(summary)`, `say(text)` (напоминания), `cancel()`, `.active`, `on_unsaid()` (один раз на запрос:
+  у мозга код/таблица/лимит, итог грамматики/рук длиннее `SHORT_LIMIT` — часть ответа не прозвучит).
+  `addressed(text, ok, address, lead=False)` — обращение только в озвучке: успех — «Открыл Telegram, сэр.»,
+  ошибка, подтверждение и напоминание (lead) — «Сэр, …»; address "" — как есть. Обращение берётся из
+  `[brain] address` при `persona="jarvis"`.
+  Журнал: `{"kind": "tts", tts_ms, reply_ms, spoken, interrupted, level, chars, phrases, voice}`. `speakable(text)` —
+  без markdown, ссылок, путей, расширений; латиница по-русски (`transliterate`).
 - voicefx — `electronic(samples, rate, amount) -> list[float]` (без numpy): два прямых эха 4,5 и 11 мс (гребёнка,
   «металл»), кольцевая модуляция 50 Гц, ФВЧ первого порядка (до 150 Гц), нормализация пика `PEAK`; amount 0 —
   копия без изменений, >1 — как 1. Фраза 3 с при 22 кГц — десятки миллисекунд.
-  Журнал: `{"kind": "tts", tts_ms, reply_ms, spoken, interrupted, level, chars, phrases, voice}`. `speakable(text)` —
-  без markdown, ссылок, путей, расширений; латиница по-русски (`transliterate`).
 
 ### jarvis.journal
 `Journal()`: `write(record: dict)` (фоновый поток), `close()`; модульные `read(days) -> list[dict]`,
@@ -327,16 +330,24 @@ SetWinEventHook(EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOW
 `[vision] hide_jarvis`). Клик по сфере — как хоткей (окно активно и запроса нет — спрятать, иначе показать, без
 «окна до Jarvis»). Хук `winapp.watch_foreground` → `OrbWindow.set_suppressed(is_fullscreen(hwnd))`; выход — снять
 хук, `close_orb()`.
-Голос (S9): в фоне после Core — `_start_voice()`: `tts.Narrator` (голос скачан и `[voice] tts != "off"`; модель
-грузится в потоке "jarvis-tts-load") и `voice.Voice` (`voice.enabled(cfg.voice)`; `on_press` и `on_escape` —
-`Narrator.cancel`). Сигнал `voice_event(object)` (из потоков голоса, QueuedConnection) → `_on_voice_event`:
-`Listening` — активное окно снимается ДО показа (как по хоткею), окно показывается БЕЗ активации
-(WA_ShowWithoutActivating: вдруг это правый Ctrl+C — C должна попасть в программу человека), `voice_state("listen")`;
-`Loudness` → `voice_level`; `Recognizing` → `voice_state("recognize")`; `Heard` → открытые подтверждения — «нет»
-(`deny_confirms`: голосом «да» не подтверждается) и `start_request(text, source="voice")`; `Failed` → тост и `voice_dismiss()`; `ListenCancelled` → `voice_dismiss(0)`.
-`start_request(text, source="typed")` → `Narrator.begin(rid, spoken=source == "voice")`; события запроса →
-`Narrator.on_event`; подтверждение → `Narrator.confirm(summary)`; Esc в окне → `Narrator.cancel()`; напоминания —
-`Narrator.say` (при tts != "off"); выход — `Voice.stop()`, `Narrator.close()`.
+Голос (S9): в фоне после Core — `_start_voice()`: `tts.Narrator` (голос — `tts.pick_voice`, `[voice] tts != "off"`;
+модель грузится в потоке "jarvis-tts-load"; `Speaker.on_level` → сигнал `speech_level(float)` → `OrbModel.speech`,
+`Narrator.on_unsaid` → `_on_unsaid`) и `voice.Voice` (`voice.enabled(cfg.voice)`; `on_press` — `Narrator.cancel`,
+`on_escape` — `_escape_anywhere`: речь смолкает, сигнал `voice_escape` → `LauncherWindow.dismiss_inactive()`).
+Сигнал `voice_event(object)` (из потоков голоса, QueuedConnection) → `_on_voice_event`: `Listening` — активное окно
+снимается ДО показа (как по хоткею). Окно спрятано и ответ прозвучит (`_speaks()`: Narrator готов, tts != "off",
+сфера на столе есть) — голос «без окна»: `OrbModel.listen(True)`, окно не показывается; иначе окно показывается
+БЕЗ активации (WA_ShowWithoutActivating: вдруг это правый Ctrl+C — C должна попасть в программу человека),
+`voice_state("listen")`. `Loudness` → `voice_level`; `Recognizing` → `voice_state("recognize")` (без окна — ничего);
+`Heard` → `listen(False)`, открытые подтверждения — «нет» (`deny_confirms`: голосом «да» не подтверждается) и
+`start_request(text, source="voice", quiet=…)`; `Failed` → без окна: `OrbModel.fail()` и `Narrator.say(text)`,
+иначе тост и `voice_dismiss()`; `ListenCancelled` → `listen(False)` или `voice_dismiss(0)`.
+`start_request(text, source="typed", quiet=False)` → `Narrator.begin(rid, spoken=source == "voice")`; события
+запроса → окно (спрятанное тоже копит ответ: он виден при следующем показе) и `Narrator.on_event`. Запрос без окна
+показывает окно сам, без активации (`_reveal`), только ради списка (`Items`), того, что не прозвучит (`on_unsaid`:
+код, таблица, длинный ответ) или подтверждения; после Done такое окно — `linger(REVEAL_LINGER_S)` (20 с).
+Подтверждение → `Narrator.confirm(summary)`; Esc в окне → `Narrator.cancel()`; напоминания — `Narrator.say` (при
+tts != "off"); выход — `Voice.stop()`, `Narrator.close()`.
 - ui/logic.py — логика окна без Qt: `History`, `ConfirmRequest(summary, details, caller)` с `resolve(approved)` и
   `wait(timeout=60) -> bool`, `ConfirmQueue` (одна очередь для обработчика процесса и pipe; правило 700 мс;
   Enter/Esc = «нет», Ctrl+Enter = «да»), разбор «цифра+Enter», автоскрытие.
@@ -344,10 +355,13 @@ SetWinEventHook(EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOW
   success | error; входы `wake()` (показ окна), `key()`, `voice(rms)` (уровень голоса 0..1 — импульс), `begin()`,
   `set_level(level)` (оттенок grammar | hands | brain | local), `status()`, `chunk()`, `confirm(on)`,
   `done(ok, cancelled=False)`, `hide()` (идёт запрос — работа продолжается, вспышка догорает), `set_local(on)`;
+  голос без окна: `listen(on)` (пробуждение и покой listen без показа окна), `speech(level)` (Jarvis говорит:
+  импульс в такт, 0 — замолчал), `fail()` (малиновая вспышка «не расслышал»);
   `tick(dt) -> bool` (False — успокоилась, кадр застыл), `advance(now)` (общие часы для нескольких виджетов),
   `frame(t=None) -> OrbFrame` (детерминированно, без random: доли внутри сферы, аура и искры — в 1 + `ORB_EXTENT`),
   `subscribe(fn)`/`unsubscribe(fn)` (зовёт после входов и смены состояния в tick), `.animating`, `.resting` (окно
-  спрятано, запроса и вспышки нет), `.shown`.
+  спрятано; запроса, вспышки, слушания и речи нет), `.shown`, `.listening`, `.talking`. `AutoHide.arm_now()` —
+  взвести без Done (окно, показанное само).
 - ui/orb.py — `paint_orb(painter, rect, model, t=None)` (QPainter, кэш картинок тела, ободка и ореола; аура — один
   контур в маленьком буфере), `orb_radius(side)`, `orb_side(orb_size)`; `OrbWidget(model=None, parent=None, *, size)`
   — таймер ~60 к/с только пока `model.animating` и виджет виден, затем последний кадр и стоп; `OrbWindow(model,
@@ -366,7 +380,14 @@ SetWinEventHook(EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOW
   сферы слева от строки ввода (`theme.ORB_PX` поверх места `theme.ORB_SLOT`), окно ведёт её своими событиями.
   Голос: `voice_state(phase)` ("listen" — строка пустая, подсказка «Слушаю…», сфера просыпается; "recognize" —
   «Распознаю…»; "" — обычная подсказка), `voice_level(value)` (→ `OrbModel.voice`), `voice_dismiss(delay_ms=2500)`
-  (окно, которое человек не трогал — не активно, без запроса, подтверждения и текста, — прячется через delay_ms).
+  (окно, которое человек не трогал — не активно, без запроса, подтверждения и текста, — прячется через delay_ms),
+  `linger(seconds)` (окно, показанное само, прячется через seconds; мышь над ним — ждёт; клик или клавиша —
+  остаётся), `dismiss_inactive()` (Esc в другой программе: окно без фокуса прячется; подтверждение — нет).
+  Клик мимо прячет окно: потеря фокуса без запроса — всегда; посреди запроса — только с нажатой кнопкой мыши
+  (`.mouse_down`, app ставит `winapp.mouse_button_down`): запрос продолжается, как после Esc ×2, а программа,
+  открытая по команде и вышедшая вперёд, окно с ответом не прячет. Окно видно без фокуса — клик мимо ловится
+  опросом кнопок мыши (`OUTSIDE_POLL_MS` = 50 мс, таймер — только пока окно такое). Открытое подтверждение и меню
+  окна остаются.
 - ui/icon.py — `render_icon(state: "ready"|"busy"|"local"|"warn", size) -> QImage` (рисунок QPainter; тот же
   рисунок — в трее и в .ico при сборке); ui/tray.py — `Tray`: сигналы `open_requested`, `local_toggled(bool)`,
   `new_conversation`, `restart_hands`, `unload_hands`, `open_logs`, `autostart_toggled(bool)`, `quit_requested`;

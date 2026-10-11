@@ -30,7 +30,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from jarvis import config, winapp
 from jarvis import log as jlog
 from jarvis.context import Context
-from jarvis.events import Done, Level
+from jarvis.events import Done, Items, Level
 from jarvis.ui.icon import IconState
 from jarvis.ui.tray import Tray
 from pc import confirm_client
@@ -43,6 +43,7 @@ HOTKEY_ID = 1
 CONFIRM_TIMEOUT_S = 60.0
 CORE_WAIT_S = 60.0  # запрос, пришедший до готовности Core, ждёт её не дольше
 PREV_REQUEST_JOIN_S = 5.0  # новый запрос ждёт отменённый старый
+REVEAL_LINGER_S = 20.0  # окно, показанное голосовому запросу само (список, код), уходит, если его не трогать
 BRAIN_READY_WAIT_S = 90.0
 APPS_FIRST_REFRESH_S = 15.0  # не мешать прогреву рук и мозга при старте
 APPS_REFRESH_S = 24 * 3600.0
@@ -184,6 +185,8 @@ class JarvisApp(QObject):
     autostart_changed = Signal(bool)
     exit_ready = Signal()  # дочернее остановлено — можно завершать цикл Qt
     voice_event = Signal(object)  # событие jarvis.voice (Listening, Loudness, Heard…) — из потоков голоса
+    speech_level = Signal(float)  # громкость озвучки 0..1 — из потока вывода звука (сфера говорит в такт)
+    voice_escape = Signal()  # Esc в любой программе (хук голоса) — из потока голоса
 
     def __init__(self, qapp: QApplication, started: float | None = None) -> None:
         super().__init__()
@@ -223,6 +226,11 @@ class JarvisApp(QObject):
         self._worker: threading.Thread | None = None
         self._canceller: threading.Thread | None = None
         self._hotkey_ms: float | None = None
+        # голос без окна: сфера слушает (_voice_quiet), запрос rid отвечает только голосом (_quiet_rid);
+        # окно показано само ради списка или длинного ответа (_revealed_rid)
+        self._voice_quiet = False
+        self._quiet_rid = 0
+        self._revealed_rid = 0
         self._closed = False
         queued = Qt.ConnectionType.QueuedConnection
         self.event_ready.connect(self._on_event, queued)
@@ -232,6 +240,8 @@ class JarvisApp(QObject):
         self.autostart_changed.connect(self._on_autostart_changed, queued)
         self.exit_ready.connect(self._on_exit_ready, queued)
         self.voice_event.connect(self._on_voice_event, queued)
+        self.speech_level.connect(self._on_speech_level, queued)
+        self.voice_escape.connect(self._on_voice_escape, queued)
 
     # --- старт (UI-поток)
 
@@ -290,6 +300,8 @@ class JarvisApp(QObject):
         w.winId()  # родное окно создаётся сейчас, а не при первом хоткее
         if self.cfg.vision.hide_jarvis and winapp.available():
             winapp.exclude_from_capture(int(w.winId()))  # «экран: …» для GPT — без окна Jarvis
+        if winapp.available():
+            w.mouse_down = winapp.mouse_button_down  # клик мимо окна посреди запроса — спрятать
         self.window = w
 
     def _create_tray(self) -> None:
@@ -425,13 +437,16 @@ class JarvisApp(QObject):
                 speaker = tts.Speaker(name, vcfg.tts_speed, vcfg.threads, vcfg.tts_pitch, vcfg.tts_effect)
                 bcfg = self.cfg.brain
                 address = bcfg.address if bcfg.persona == "jarvis" else ""
+                speaker.on_level = self.speech_level.emit
                 self.narrator = tts.Narrator(speaker, vcfg.tts, journal, address)
+                self.narrator.on_unsaid = self._on_unsaid
                 self._bg(_safe, speaker.load, "озвучка не загружена", name="jarvis-tts-load")
             if not voice.enabled(vcfg):
                 log.info("голос: голосовой ввод выключен или модели нет (scripts\\get_voice_models.ps1)")
                 return
             silence = self.narrator.cancel if self.narrator is not None else None
-            v = voice.Voice(vcfg, self.voice_event.emit, on_press=silence, on_escape=silence, journal=journal)
+            esc = self._escape_anywhere
+            v = voice.Voice(vcfg, self.voice_event.emit, on_press=silence, on_escape=esc, journal=journal)
             v.start()
             self.voice = v
             log.info("голос: удерживай %s и говори", v.key)
@@ -748,7 +763,10 @@ class JarvisApp(QObject):
 
     @Slot(object)
     def _on_voice_event(self, ev: Any) -> None:
-        """События jarvis.voice в UI-потоке: «Слушаю…», громкость, распознанный текст → запрос."""
+        """События jarvis.voice в UI-потоке: «Слушаю…», громкость, распознанный текст → запрос.
+
+        Окно спрятано и ответ прозвучит — слушает и работает только сфера на столе (строка ввода не нужна);
+        окно показывается само лишь ради подтверждения, списка или того, что не прозвучит (_reveal)."""
         from jarvis import voice
 
         w = self.window
@@ -759,24 +777,36 @@ class JarvisApp(QObject):
         elif isinstance(ev, voice.Listening):
             self._voice_listen()
         elif isinstance(ev, voice.Recognizing):
-            w.voice_state("recognize")
+            if not self._voice_quiet:
+                w.voice_state("recognize")
         elif isinstance(ev, voice.Heard):
+            quiet = self._end_listen()
             w.voice_state("")
             # новая команда голосом — открытые вопросы «нет» (голосом «да» не подтверждается)
             for caller in ("user", "brain"):
                 w.deny_confirms(caller)
-            self.start_request(ev.text, source="voice")
+            self.start_request(ev.text, source="voice", quiet=quiet)
         elif isinstance(ev, voice.Failed):
+            if self._end_listen() and self.narrator is not None:
+                self.orb_model.fail()
+                self.narrator.say(ev.text)  # «Сэр, не расслышал — повтори»
+                return
             if not w.isVisible():
                 self._show_inactive()
             w.show_toast(ev.text, "warn")
             w.voice_dismiss()
-        elif isinstance(ev, voice.ListenCancelled):
+        elif isinstance(ev, voice.ListenCancelled) and not self._end_listen():
             w.voice_dismiss(0)
 
+    def _speaks(self) -> bool:
+        """Ответ прозвучит (озвучка включена и загружена), а сфера на рабочем столе есть."""
+        n = self.narrator
+        return n is not None and n.mode != "off" and bool(n.speaker.ready) and self.orb is not None
+
     def _voice_listen(self) -> None:
-        """PTT удерживается: активное окно — снять ДО показа Jarvis (как по хоткею); окно — без кражи фокуса:
-        вдруг это сочетание (правый Ctrl+C), и C должна попасть в программу человека."""
+        """PTT удерживается: активное окно — снять ДО показа Jarvis (как по хоткею). Окно спрятано и ответ
+        прозвучит — слушает сфера, окно не показывается; иначе окно — без кражи фокуса: вдруг это сочетание
+        (правый Ctrl+C), и C должна попасть в программу человека."""
         w = self.window
         if not (w.isVisible() and w.isActiveWindow()):
             try:
@@ -786,9 +816,50 @@ class JarvisApp(QObject):
                 active = None
             self._set_active(active)
         self._hotkey_ms = None
+        self._voice_quiet = not w.isVisible() and self._speaks()
+        if self._voice_quiet:
+            self.orb_model.listen(True)
+            return
         if not w.isVisible():
             self._show_inactive()
         w.voice_state("listen")
+
+    def _end_listen(self) -> bool:
+        """Запись кончилась (текст, ошибка или отмена). True — слушала только сфера."""
+        quiet, self._voice_quiet = self._voice_quiet, False
+        if quiet and self.orb_model is not None:
+            self.orb_model.listen(False)
+        return quiet
+
+    def _escape_anywhere(self) -> None:
+        """Esc в любой программе (поток голоса): речь смолкает сразу, окно без фокуса прячется (UI-поток)."""
+        if self.narrator is not None:
+            self.narrator.cancel()
+        self.voice_escape.emit()
+
+    @Slot()
+    def _on_voice_escape(self) -> None:
+        if self.window is not None and not self._closed:
+            self.window.dismiss_inactive()
+
+    @Slot(float)
+    def _on_speech_level(self, level: float) -> None:
+        if self.orb_model is not None and not self._closed:
+            self.orb_model.speech(level)
+
+    def _on_unsaid(self) -> None:
+        """Narrator: часть ответа не прозвучит (код, таблица, длинный текст) — голосовому запросу без окна
+        показать окно (UI-поток: Narrator.on_event зовётся из _on_event)."""
+        if self._quiet_rid and self._quiet_rid == self._rid:
+            self._reveal(self._rid)
+
+    def _reveal(self, rid: int) -> None:
+        """Показать окно голосового запроса без кражи фокуса; после ответа оно повисит REVEAL_LINGER_S."""
+        w = self.window
+        if w is None or w.isVisible():
+            return
+        self._show_inactive()
+        self._revealed_rid = rid
 
     def _show_inactive(self) -> None:
         """Показать окно, не забирая фокус у программы человека."""
@@ -818,14 +889,17 @@ class JarvisApp(QObject):
         if core is not None and self._worker is not None and self._worker.is_alive():
             self._canceller = self._bg(_safe, core.cancel, "отмена запроса", name="jarvis-cancel")
 
-    def start_request(self, text: str, source: str = "typed") -> None:
+    def start_request(self, text: str, source: str = "typed", quiet: bool = False) -> None:
         """Новый запрос в своём рабочем потоке; старый (если идёт) этот поток сначала отменяет и ждёт.
 
         source — "typed" | "voice": сказанный голосом запрос получает ответ голосом ([voice] tts = "voice").
+        quiet — голосом при спрятанном окне: ответ — вслух и на сфере, окно — только по надобности (_reveal).
         """
         prev = self._worker if self._worker is not None and self._worker.is_alive() else None
         self._rid += 1
         rid = self._rid
+        self._quiet_rid = rid if quiet else 0
+        self._revealed_rid = 0
         if self.narrator is not None:
             self.narrator.begin(rid, spoken=source == "voice")  # старая речь замолкает
         hotkey_ms, self._hotkey_ms = self._hotkey_ms, None
@@ -893,9 +967,13 @@ class JarvisApp(QObject):
     def _on_event(self, rid: int, ev: Any) -> None:
         if rid == self._rid and self.window is not None:  # события отменённого старого запроса не показываем
             self.window.on_event(ev)
+            if self._quiet_rid and rid == self._quiet_rid and isinstance(ev, Items) and ev.items:
+                self._reveal(rid)  # список выбирают глазами — голосом его не прочитать
         if self.narrator is not None:
             self.narrator.on_event(rid, ev)  # что сказать вслух (фразы — в очередь синтеза, без ожидания)
         if isinstance(ev, Done):
+            if self._revealed_rid and rid == self._revealed_rid and self.window is not None:
+                self.window.linger(REVEAL_LINGER_S)
             self._sync_health()
             if self.reminders is not None:
                 self.reminders.refresh()  # запрос мог добавить или отменить напоминание
@@ -947,6 +1025,8 @@ class JarvisApp(QObject):
             w.show_launcher()
             w.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
             QApplication.alert(w)
+            if self._quiet_rid and self._quiet_rid == self._rid:
+                self._revealed_rid = self._rid  # голосовой запрос: после ответа окно уйдёт само
         w.ask_confirm(req)
         if self.narrator is not None:
             self.narrator.confirm(req.summary)  # вопрос — вслух; ответ — только клавишами окна

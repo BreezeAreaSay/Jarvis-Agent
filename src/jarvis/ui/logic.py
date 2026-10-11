@@ -267,6 +267,10 @@ class AutoHide:
         self.state = "armed" if ok and autohide and self.delay_s > 0 else "off"
         return self.state == "armed"
 
+    def arm_now(self) -> None:
+        """Взвести без Done (окно показано само, «пусть повисит»): таймер ставит вызывающий."""
+        self.state = "armed"
+
     def cancel(self) -> None:
         self.state = "off"
 
@@ -647,7 +651,8 @@ class OrbModel:
 
     Входы — события окна: wake() (показ, хоткей), key() (ввод), begin() (запрос), set_level(), status(),
     chunk() (поток ответа), confirm(on), done(ok, cancelled), hide(), set_local(on); voice(rms) — уровень
-    голоса (для голосового ввода). Все входы — в UI-потоке. Одну модель рисуют сфера в окне и на столе.
+    голоса (для голосового ввода); голос без окна — listen(on) (сфера слушает), speech(level) (Jarvis
+    говорит), fail() (не расслышал). Все входы — в UI-потоке. Одну модель рисуют сфера в окне и на столе.
     tick(dt) двигает время и отвечает, нужна ли дальше анимация: False — сфера успокоилась, таймер
     останавливается. advance(now) — то же по абсолютному времени: несколько виджетов могут рисовать одну
     модель, и время не идёт вдвое быстрее. frame(t) детерминирован (суммы синусов, без random); доли —
@@ -658,6 +663,8 @@ class OrbModel:
         self.animated = bool(animations)
         self.state: OrbState = "idle"
         self.shown = False  # окно Jarvis видно (покой — listen, иначе idle)
+        self.listening = False  # голосовой ввод без окна: сфера слушает
+        self.talking = False  # Jarvis говорит вслух
         self.level = ""  # уровень текущего запроса — оттенок
         self.local = False
         self.busy = False
@@ -695,8 +702,8 @@ class OrbModel:
 
     @property
     def resting(self) -> bool:
-        """Окно спрятано, запроса нет, вспышка догорела (режим auto прячет сферу рабочего стола)."""
-        return not self.shown and not self.busy and self.state == "idle"
+        """Окно спрятано, запроса нет, никто не говорит, вспышка догорела (режим auto прячет сферу стола)."""
+        return not (self.shown or self.busy or self.listening or self.talking) and self.state == "idle"
 
     # --- входы
 
@@ -709,6 +716,37 @@ class OrbModel:
         self.flash_t = -1.0  # вспышка прошлого запроса (окно спрятали посреди неё) не продолжается
         self._set("wake")
         self.wake_t = 0.0
+        self._input()
+
+    def listen(self, on: bool) -> None:
+        """Голосовой ввод без окна (сфера — единственный индикатор): on — пробуждение и покой listen,
+        off — запись кончилась (дальше запрос или покой)."""
+        self.listening = bool(on)
+        if on and not self.busy and self.state not in ("work", "speak", "confirm"):
+            self.flash_t = -1.0
+            self._set("wake")
+            self.wake_t = 0.0
+        elif not on and not self.busy and self.state in ("wake", "listen"):
+            self.wake_t = -1.0
+            self._set(self._rest())
+        self._input(pulse=0.25 if on else 0.0)
+
+    def speech(self, level: float) -> None:
+        """Jarvis говорит: громкость блока 0..1 (~20 раз в секунду) — импульс в такт; 0 — речь кончилась."""
+        level = min(1.0, max(0.0, float(level)))
+        self.talking = level > 0.0
+        if self.animated:
+            self.pulse = max(self.pulse, 0.45 * level)
+        self._input()
+
+    def fail(self) -> None:
+        """Ошибка без запроса («не расслышал»): малиновая вспышка; идёт запрос — только импульс."""
+        if self.busy or not self.animated:
+            self._input(pulse=0.2)
+            return
+        self._set("error")
+        self.flash_kind = "error"
+        self.flash_t = 0.0
         self._input()
 
     def key(self) -> None:
@@ -898,7 +936,7 @@ class OrbModel:
             self._soft = False
 
     def _rest(self) -> OrbState:
-        return "listen" if self.shown else "idle"
+        return "listen" if self.shown or self.listening else "idle"
 
     def _resume(self) -> OrbState:
         if not self.busy:

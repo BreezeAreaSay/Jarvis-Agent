@@ -10,6 +10,7 @@ on_event — O(1) на событие (текст дописывается, бл
 import logging
 import sys
 import time
+from collections.abc import Callable
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -27,6 +28,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QCursor, QGuiApplication, QKeyEvent, QPainter, QPainterPath, QPalette
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLayout,
@@ -63,6 +65,7 @@ PLACEHOLDER = "Скажи, что сделать…"
 LISTEN_TEXT = "Слушаю… отпусти клавишу — и выполню"
 RECOGNIZE_TEXT = "Распознаю…"
 VOICE_DISMISS_MS = 2500  # голос ничего не дал — окно, показанное ради него, прячется само
+OUTSIDE_POLL_MS = 50  # окно видно без фокуса: клик мимо — опросом кнопок мыши, только пока окно такое
 ACRYLIC_FILL = 0.86  # непрозрачность панели поверх системного acrylic
 
 
@@ -122,6 +125,10 @@ class LauncherWindow(QWidget):
         self._screen_h = 1080
         self._panel_w = max(360, int(ui_cfg.width))
         self._home = QPoint(0, 0)
+        # нажата ли кнопка мыши (app ставит winapp.mouse_button_down; None — не знаем): потеря фокуса посреди
+        # запроса прячет окно, только если человек кликнул мимо, а не открытая по команде программа вышла
+        # вперёд; окно без фокуса прячется по клику мимо (опрос OUTSIDE_POLL_MS, только пока оно такое)
+        self.mouse_down: Callable[[], bool] | None = None
 
         self.setStyleSheet(theme.stylesheet())
         self.setFont(theme.font(theme.FONT_ROW))
@@ -302,6 +309,10 @@ class LauncherWindow(QWidget):
         self._voice_timer.setSingleShot(True)
         self._voice_timer.timeout.connect(self._voice_dismiss)
 
+        self._outside_timer = QTimer(self)
+        self._outside_timer.setInterval(OUTSIDE_POLL_MS)
+        self._outside_timer.timeout.connect(self._check_outside)
+
     def _apply_dwm(self) -> None:
         """Тёмная рамка, скругления Windows 11 и (по желанию) acrylic; не вышло — сплошной фон."""
         if sys.platform != "win32":
@@ -350,6 +361,7 @@ class LauncherWindow(QWidget):
             self._input.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
             self._input.selectAll()
         self._sync_motion()
+        self._watch_outside()
 
     def hide_launcher(self) -> None:
         """Спрятать (90 мс). Неотвеченные подтверждения — «нет»: человек их больше не видит."""
@@ -459,6 +471,20 @@ class LauncherWindow(QWidget):
     def _voice_dismiss(self) -> None:
         untouched = not self.isActiveWindow() and not self._input.text()
         if self.isVisible() and untouched and not self._busy and self._confirms.current is None:
+            self.hide_launcher()
+
+    def linger(self, seconds: float) -> None:
+        """Окно показано само, без фокуса (голос: список, длинный ответ) — спрятать через seconds, если его
+        не трогают; мышь над окном — ждём, пока уйдёт; клик или клавиша в окне — остаётся."""
+        if seconds <= 0 or not self.isVisible() or self._confirms.current is not None:
+            return
+        self._autohide.arm_now()
+        self._autohide_timer.start(int(seconds * 1000))
+
+    def dismiss_inactive(self) -> None:
+        """Esc в другой программе: окно, показанное без фокуса, прячется (до него не дотянуться ни Esc,
+        ни кликом мимо). Открытое подтверждение остаётся — ответ на него только явный."""
+        if self.isVisible() and not self.isActiveWindow() and self._confirms.current is None:
             self.hide_launcher()
 
     # --- события запроса ------------------------------------------------------------------------------
@@ -779,9 +805,34 @@ class LauncherWindow(QWidget):
         super().changeEvent(ev)
         if ev.type() != QEvent.Type.ActivationChange or self.isActiveWindow():
             return
-        # потеря фокуса прячет окно, только если нет запроса и открытого подтверждения
-        if self.isVisible() and not self._hiding and not self._busy and self._confirms.current is None:
+        # потеря фокуса прячет окно; посреди запроса — только клик мимо (кнопка мыши нажата): запрос
+        # продолжается, как после Esc ×2 (ответ — на сфере и вслух, текст — при следующем показе), а
+        # программа, открытая по команде, окно с ответом не прячет. Подтверждение и меню окна — остаются.
+        if QApplication.activePopupWidget() is not None:
+            return
+        if not self.isVisible() or self._hiding or self._confirms.current is not None:
+            return
+        if not self._busy or (self.mouse_down is not None and self.mouse_down()):
             self.hide_launcher()
+        else:
+            self._watch_outside()  # ответ остаётся на экране, пока человек не кликнет мимо
+
+    def _watch_outside(self) -> None:
+        """Окно видно без фокуса (голос, программа по команде вышла вперёд) — потери фокуса не будет:
+        клик мимо ловим опросом кнопок мыши, пока окно такое."""
+        if self.mouse_down is not None and self.isVisible() and not self.isActiveWindow():
+            self._outside_timer.start()
+
+    def _check_outside(self) -> None:
+        if not self.isVisible() or self._hiding or self.isActiveWindow() or self.mouse_down is None:
+            self._outside_timer.stop()
+            return
+        if not self.mouse_down() or self.frameGeometry().contains(QCursor.pos()):
+            return
+        if self._confirms.current is not None or QApplication.activePopupWidget() is not None:
+            return  # ответ на подтверждение — только явный
+        self._outside_timer.stop()
+        self.hide_launcher()
 
     def leaveEvent(self, ev: QEvent) -> None:
         super().leaveEvent(ev)
@@ -853,6 +904,7 @@ class LauncherWindow(QWidget):
 
     def _finish_hide(self) -> None:
         self._hiding = True  # потеря фокуса внутри hide() не должна прятать окно второй раз
+        self._outside_timer.stop()
         self._stop_motion()
         self.hide()
         self._hiding = False

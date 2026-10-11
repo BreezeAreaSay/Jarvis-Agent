@@ -89,6 +89,7 @@ class _WinApi:
                 wintypes.BOOL,
             ),
             "RegisterWindowMessageW": _fn(dll, "RegisterWindowMessageW", (wintypes.LPCWSTR,), wintypes.UINT),
+            "GetAsyncKeyState": _fn(dll, "GetAsyncKeyState", (ctypes.c_int,), ctypes.c_short),
             "GetWindowThreadProcessId": _fn(
                 dll,
                 "GetWindowThreadProcessId",
@@ -151,6 +152,10 @@ class _WinApi:
 
     def tick_count(self) -> int:
         return int(self._k32["GetTickCount"]())
+
+    def key_down(self, vk: int) -> bool:
+        """GetAsyncKeyState: клавиша или кнопка мыши (физическая) нажата сейчас — старший бит."""
+        return bool(int(self._u32["GetAsyncKeyState"](vk)) & 0x8000)
 
     # --- один экземпляр
 
@@ -811,6 +816,18 @@ def set_foreground(hwnd: int) -> bool:
 def tick_count() -> int:
     """GetTickCount (мс, 32 бита) — для задержки сообщения в очереди: MSG.time в тех же единицах."""
     return api().tick_count()
+
+
+MOUSE_BUTTONS = (0x01, 0x02, 0x04)  # VK_LBUTTON, VK_RBUTTON, VK_MBUTTON
+
+
+def mouse_button_down() -> bool:
+    """Нажата ли сейчас кнопка мыши: окно Jarvis потеряло фокус с нажатой кнопкой — человек кликнул мимо,
+    а не открытая по команде программа вышла вперёд. Не Windows или ошибка — False."""
+    try:
+        return any(api().key_down(vk) for vk in MOUSE_BUTTONS)
+    except Exception:
+        return False
 
 
 # --- снимки экрана -------------------------------------------------------------------------------------

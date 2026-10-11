@@ -6,7 +6,9 @@
 
 import os
 import sys
+import threading
 import time
+import types
 from collections.abc import Iterator
 from typing import Any
 
@@ -16,9 +18,10 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
+from jarvis import app as app_mod
 from jarvis import asr, tts, voice
 from jarvis.config import UiConfig
-from jarvis.events import Done, Level, TextChunk
+from jarvis.events import Done, Items, Level, TextChunk
 from jarvis.reminders import Reminder
 from pc import windows as pc_windows
 from pc.windows import WindowInfo
@@ -33,6 +36,7 @@ class VoiceWindow(FakeWindow):
         self.voice: list[tuple[str, Any]] = []
         self.toasts: list[str] = []
         self.inactive: list[bool] = []
+        self.lingers: list[float] = []
 
     def show_launcher(self) -> None:
         self.inactive.append(self.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating))
@@ -52,6 +56,13 @@ class VoiceWindow(FakeWindow):
 
     def deny_confirms(self, caller: str) -> None:
         self.voice.append(("deny", caller))
+
+    def linger(self, seconds: float) -> None:
+        self.lingers.append(seconds)
+
+    def dismiss_inactive(self) -> None:
+        if self.isVisible() and not self.isActiveWindow():
+            self.hide()
 
 
 class VoiceCore(FakeCore):
@@ -89,6 +100,21 @@ class FakeNarrator:
 
     def close(self) -> None:
         self.closed = True
+
+
+class QuietNarrator(FakeNarrator):
+    """Озвучка готова (режим voice): голосовой команде строка ввода не нужна. Код в ответе — on_unsaid."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.mode = "voice"
+        self.speaker = types.SimpleNamespace(ready=True)
+        self.on_unsaid: Any = None
+
+    def on_event(self, rid: int, ev: Any) -> None:
+        super().on_event(rid, ev)
+        if isinstance(ev, TextChunk) and "```" in ev.text and self.on_unsaid is not None:
+            self.on_unsaid()
 
 
 @pytest.fixture
@@ -160,6 +186,111 @@ def test_narrator_wiring(app: Any) -> None:
     assert n.said == ["Напоминание: проверить почту"]
 
 
+def quiet(app: Any) -> QuietNarrator:
+    n = QuietNarrator()
+    n.on_unsaid = app._on_unsaid
+    app.narrator = n
+    return n
+
+
+def test_quiet_voice_uses_orb_not_window(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Озвучка готова и сфера на столе есть: строка ввода не появляется — слушает и работает сфера,
+    ответ звучит; активное окно снимается, как по хоткею."""
+    before = WindowInfo(77, "Без имени — Блокнот", 5, "notepad.exe")
+    monkeypatch.setattr(pc_windows, "foreground", lambda: before)
+    n = quiet(app)
+    w, model = app.window, app.orb_model
+    app.voice_event.emit(voice.Listening())
+    assert wait_for(q(), lambda: model.listening)
+    assert app.ctx.active_window is before and not w.isVisible() and w.voice == []
+    assert not model.resting  # режим auto: сфера видна, пока слушает
+    app.voice_event.emit(voice.Loudness(0.6))
+    app.voice_event.emit(voice.Recognizing())
+    app.voice_event.emit(voice.Heard("громкость 30", 200.0, 1.5, "gigaam-v3"))
+    assert wait_for(q(), lambda: any(isinstance(ev, Done) for _, ev in n.events))
+    assert not model.listening and not w.isVisible() and w.lingers == []
+    assert FakeCore.last is not None and FakeCore.last.sources == ["voice"] and n.begun[-1][1] is True
+    assert ("state", "listen") not in w.voice and ("state", "recognize") not in w.voice
+
+
+def test_quiet_voice_failure_spoken_and_cancel(app: Any) -> None:
+    n = quiet(app)
+    w, model = app.window, app.orb_model
+    app.voice_event.emit(voice.Listening())
+    app.voice_event.emit(voice.Failed("Не расслышал — повтори"))
+    assert wait_for(q(), lambda: n.said == ["Не расслышал — повтори"])
+    assert not w.isVisible() and w.toasts == [] and model.state == "error"  # малиновая вспышка сферы
+    app.voice_event.emit(voice.Listening())
+    assert wait_for(q(), lambda: model.listening)
+    app.voice_event.emit(voice.ListenCancelled("keys"))
+    assert wait_for(q(), lambda: not model.listening)
+    assert not w.isVisible()
+
+
+def test_quiet_voice_reveals_window_for_list_or_code(app: Any) -> None:
+    """Список результатов или то, что не прозвучит (код): окно показывается само, без фокуса, а после
+    ответа уходит через REVEAL_LINGER_S; Esc в другой программе — прячет сразу и глушит речь."""
+    n = quiet(app)
+    w = app.window
+
+    def found(core: Any, text: str) -> Any:
+        yield Level("hands", "find")
+        yield Items(["C:\\Users\\me\\отчёт.docx", "C:\\Users\\me\\отчёт-2.docx"])
+        yield Done(ok=True, text="Нашёл 2 файла")
+
+    FakeCore.script = found
+    app.voice_event.emit(voice.Listening())
+    app.voice_event.emit(voice.Heard("найди отчёт", 200.0, 1.5))
+    assert wait_for(q(), lambda: w.lingers == [app_mod.REVEAL_LINGER_S])
+    assert w.isVisible() and w.inactive[-1] is True
+    t = threading.Thread(target=app._escape_anywhere)  # хук голоса — свой поток
+    t.start()
+    t.join(2)
+    assert wait_for(q(), lambda: not w.isVisible()) and n.cancels == 1
+
+    def code(core: Any, text: str) -> Any:
+        yield Level("brain", "gpt")
+        yield TextChunk("Вот так:\n```python\nprint(1)\n```")
+        yield Done(ok=True, text="")
+
+    FakeCore.script = code
+    app.voice_event.emit(voice.Listening())
+    app.voice_event.emit(voice.Heard("gpt: пример кода", 200.0, 1.5))
+    assert wait_for(q(), lambda: len(w.lingers) == 2)
+    assert w.isVisible()
+
+    def plain(core: Any, text: str) -> Any:
+        yield Level("brain", "gpt")
+        yield TextChunk("Небо голубое из-за рассеяния.")
+        yield Done(ok=True, text="")
+
+    w.hide()
+    FakeCore.script = plain
+    app.voice_event.emit(voice.Listening())
+    app.voice_event.emit(voice.Heard("почему небо голубое", 200.0, 1.5))
+    assert wait_for(q(), lambda: sum(isinstance(ev, Done) for _, ev in n.events) == 3)
+    assert not w.isVisible() and len(w.lingers) == 2  # прозвучало целиком — окно не нужно
+
+
+def test_window_visible_voice_stays_in_window(app: Any) -> None:
+    """Окно уже открыто (человек печатал) — голос идёт через строку ввода, как раньше."""
+    quiet(app)
+    w = app.window
+    w.show_launcher()
+    app.voice_event.emit(voice.Listening())
+    assert wait_for(q(), lambda: ("state", "listen") in w.voice)
+    assert not app.orb_model.listening
+
+
+def test_speech_level_moves_orb(app: Any) -> None:
+    model = app.orb_model
+    app.speech_level.emit(0.7)
+    assert wait_for(q(), lambda: model.talking)
+    assert not model.resting  # режим auto: сфера видна, пока Jarvis говорит
+    app.speech_level.emit(0.0)
+    assert wait_for(q(), lambda: not model.talking)
+
+
 def test_start_voice_with_models(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Модели скачаны: Narrator и Voice создаются при старте (на Linux хук не встаёт — статус error)."""
     folder = asr.model_dir("gigaam-v3")
@@ -194,7 +325,8 @@ def test_start_voice_with_models(request: pytest.FixtureRequest, monkeypatch: py
     a = request.getfixturevalue("make_app")()
     assert wait_for(q(), lambda: a.voice is not None and a.narrator is not None)
     assert hooks and hooks[0].vk == 0xA3
-    assert a.voice.on_press == a.narrator.cancel and a.voice.on_escape == a.narrator.cancel
+    assert a.voice.on_press == a.narrator.cancel and a.voice.on_escape == a._escape_anywhere
+    assert a.narrator.on_unsaid == a._on_unsaid and a.narrator.speaker.on_level is not None
     assert wait_for(q(), lambda: a.voice.status == "error", 10)  # модель-пустышка не грузится — честно error
     a.shutdown()
     assert getattr(hooks[0], "stopped", False)

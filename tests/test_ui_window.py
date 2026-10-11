@@ -615,21 +615,106 @@ def test_confirm_shows_hidden_window_and_hide_denies(make: Any) -> None:
     assert idle(w) == []
 
 
-def test_deactivate_hides_only_when_idle(make: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_click_outside_hides_even_while_busy(make: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Клик мимо окна (потеря фокуса с нажатой кнопкой мыши) прячет его и при идущем запросе — запрос
+    продолжается (как Esc ×2). Программа, открытая по команде, вышла вперёд (кнопка не нажата) — окно
+    с ответом остаётся; открытая карточка подтверждения остаётся всегда."""
     w = make(animations=False)
+    cancels = record(w.cancel_requested)
+    mouse = {"down": False}
+    w.mouse_down = lambda: mouse["down"]
     monkeypatch.setattr(w, "isActiveWindow", lambda: False)
     w.show_launcher()
     w.ask_confirm(ConfirmRequest("a", "", "brain"))
+    mouse["down"] = True
     QApplication.sendEvent(w, QEvent(QEvent.Type.ActivationChange))
     assert w.isVisible()  # карточка открыта — не прятать
     w._confirms.deny_all()
     w._render_confirm()
     w.begin_request("gpt: x")
+    mouse["down"] = False
     QApplication.sendEvent(w, QEvent(QEvent.Type.ActivationChange))
-    assert w.isVisible()  # идёт запрос — не прятать
+    assert w.isVisible()  # открытая по команде программа вышла вперёд — ответ остаётся на экране
+    mouse["down"] = True
+    QApplication.sendEvent(w, QEvent(QEvent.Type.ActivationChange))
+    assert not w.isVisible() and w.is_busy() and cancels == []  # спрятано, запрос идёт
+    w.on_event(TextChunk("Ответ."))
     w.on_event(Done(True, level="brain"))
+    w.show_launcher()
+    assert "Ответ." in w._text_view.toPlainText()  # ответ виден при следующем показе
+    mouse["down"] = False
     QApplication.sendEvent(w, QEvent(QEvent.Type.ActivationChange))
+    assert not w.isVisible()  # без запроса — любая потеря фокуса прячет, как раньше
+
+
+def test_inactive_window_hides_on_click_outside(make: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Окно без фокуса (программа по команде вышла вперёд, голос) потерю фокуса больше не получит — клик
+    мимо ловится опросом кнопок мыши, только пока окно видно без фокуса; клик по окну и подтверждение —
+    не прячут."""
+    from PySide6.QtCore import QPoint
+
+    from jarvis.ui import window as win
+
+    w = make(animations=False)
+    active = {"on": True}
+    monkeypatch.setattr(w, "isActiveWindow", lambda: active["on"])
+    mouse = {"down": False, "at": QPoint(-5000, -5000)}
+
+    class Cursor:
+        @staticmethod
+        def pos() -> QPoint:
+            return mouse["at"]
+
+    monkeypatch.setattr(win, "QCursor", Cursor)
+    w.show_launcher()
+    QTest.qWait(50)  # офскрин активирует окно асинхронно — пусть это пройдёт, пока окно «в фокусе»
+    active["on"] = False
+    w.begin_request("gpt: открой сайт погоды")
+    QApplication.sendEvent(w, QEvent(QEvent.Type.ActivationChange))  # браузер вышел вперёд, кнопка не нажата
+    assert w.isVisible() and not w._outside_timer.isActive()  # mouse_down не задан (не Windows) — опроса нет
+    w.mouse_down = lambda: mouse["down"]
+    QApplication.sendEvent(w, QEvent(QEvent.Type.ActivationChange))
+    assert w.isVisible() and w._outside_timer.isActive()
+    w.on_event(TextChunk("Солнечно."))
+    w.on_event(Done(True, level="brain"))
+    QTest.qWait(120)
+    assert w.isVisible()  # кнопка не нажата — ответ на экране
+    mouse["down"], mouse["at"] = True, w.frameGeometry().center()
+    QTest.qWait(120)
+    assert w.isVisible()  # клик по самому окну
+    req = ConfirmRequest("a", "", "brain")
+    w.ask_confirm(req)
+    mouse["at"] = QPoint(-5000, -5000)
+    QTest.qWait(120)
+    assert w.isVisible() and not req.done  # подтверждение — только явный ответ
+    w._confirms.deny_all()
+    w._render_confirm()
+    QTest.qWait(120)
+    assert not w.isVisible() and not w._outside_timer.isActive()  # клик мимо — спрятано, опрос остановлен
+    assert idle(w) == []
+
+
+def test_linger_and_dismiss_inactive(make: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Окно, показанное само без фокуса (голос), прячется через linger или по Esc в другой программе."""
+    w = make(animations=False)
+    monkeypatch.setattr(w, "isActiveWindow", lambda: False)
+    w.show_launcher()
+    w.linger(0.05)
+    QTest.qWait(300)
     assert not w.isVisible()
+    w.show_launcher()
+    w.dismiss_inactive()
+    assert not w.isVisible()
+    w.show_launcher()
+    req = ConfirmRequest("a", "", "brain")
+    w.ask_confirm(req)
+    w.dismiss_inactive()
+    w.linger(0.01)
+    QTest.qWait(100)
+    assert w.isVisible() and not req.done  # подтверждение — только явный ответ
+    w._confirms.deny_all()
+    w._render_confirm()
+    assert idle(w) == []
 
 
 # --- автоскрытие и покой ------------------------------------------------------------------------------

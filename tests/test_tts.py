@@ -236,6 +236,22 @@ def test_speaker_plays_in_chunks_and_goes_idle(monkeypatch: pytest.MonkeyPatch) 
     wait_for(lambda: not sp.speaking, 2)
 
 
+def test_speaker_reports_level_for_orb(monkeypatch: pytest.MonkeyPatch) -> None:
+    """on_level: громкость каждого блока (сфера говорит в такт), 0 — речь кончилась."""
+    sp, _ = ready_speaker(monkeypatch)
+    levels: list[float] = []
+    sp.on_level = levels.append
+    idle: list[int] = []
+    sp.on_idle = idle.append
+    sp.say("Открыл телеграм")
+    wait_for(lambda: idle)
+    assert len(levels) > 2 and levels[-1] == 0.0
+    assert all(v == pytest.approx(1.0) for v in levels[:-1])  # 0,25 × 4 = 1 (предел)
+    assert tts.block_level(b"") == 0.0
+    quiet = tts.array.array("f", [0.05, -0.05] * 64).tobytes()
+    assert tts.block_level(quiet) == pytest.approx(0.2, abs=1e-6)
+
+
 def test_speaker_stop_interrupts_now(monkeypatch: pytest.MonkeyPatch) -> None:
     gate = threading.Event()
     sp, sd = ready_speaker(monkeypatch, gate)
@@ -415,24 +431,54 @@ def test_narrator_brain_error_without_text_says_done() -> None:
     assert sp.said == ["Нет связи с джипити"]
 
 
-def test_narrator_second_when_brain_slow(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tts, "SECOND_DELAY_S", 0.02)
+def test_narrator_silent_while_brain_thinks() -> None:
+    """Никаких «Секунду…»: пока мозг думает, тишина (о работе говорит сфера); первые слова — сразу."""
+    assert not hasattr(tts, "SECOND")
     n, sp, _ = narrator("voice")
     n.begin(1, spoken=True)
     n.on_event(1, Level("brain", "x"))
-    wait_for(lambda: sp.said == [tts.SECOND])
+    time.sleep(0.05)
+    assert sp.said == []
     n.on_event(1, TextChunk("Готово. "))
-    assert sp.said == [tts.SECOND, "Готово."]
+    assert sp.said == ["Готово."]
 
 
-def test_narrator_no_second_when_brain_fast(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tts, "SECOND_DELAY_S", 0.05)
+def test_narrator_unsaid_brain_code_and_long_result() -> None:
+    """on_unsaid — один раз, когда часть ответа не прозвучит: код у мозга, длинный итог грамматики."""
     n, sp, _ = narrator("voice")
+    calls: list[int] = []
+    n.on_unsaid = lambda: calls.append(1)
     n.begin(1, spoken=True)
     n.on_event(1, Level("brain", "x"))
-    n.on_event(1, TextChunk("Быстро. "))
-    time.sleep(0.1)
-    assert sp.said == ["Быстро."]
+    n.on_event(1, TextChunk("Вот пример. "))
+    assert calls == []
+    n.on_event(1, TextChunk("```python\nprint(1)\n```\nЕщё текст. "))
+    assert calls == [1]
+    n.on_event(1, Done(ok=True, text=""))
+    assert calls == [1] and sp.said == ["Вот пример.", tts.REST]
+
+    n.begin(2, spoken=True)
+    n.on_event(2, Level("grammar", "x"))
+    n.on_event(2, Done(ok=True, text="Открыл Telegram"))
+    assert calls == [1]
+    long = "Умею так. " + "Открывать программы и папки, менять громкость и окна. " * 6
+    n.begin(3, spoken=True)
+    n.on_event(3, Level("grammar", "x"))
+    n.on_event(3, Done(ok=True, text=long))
+    assert calls == [1, 1] and sp.said[-1] == "Умею так."
+
+
+def test_narrator_unsaid_not_called_when_silent_or_cancelled() -> None:
+    n, _, _ = narrator("voice")
+    calls: list[int] = []
+    n.on_unsaid = lambda: calls.append(1)
+    n.begin(1, spoken=False)  # набранный запрос в режиме voice — не озвучивается
+    n.on_event(1, Level("brain", "x"))
+    n.on_event(1, TextChunk("```\ncode\n```"))
+    n.begin(2, spoken=True)
+    n.on_event(2, Level("brain", "x"))
+    n.on_event(2, Done(ok=False, text="Отменено", cancelled=True))
+    assert calls == []
 
 
 def test_narrator_cancelled_done_stops_and_logs_interrupted() -> None:

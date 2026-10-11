@@ -696,6 +696,47 @@ def test_orb_voice_level_pulse() -> None:
     assert quiet.pulse == 0.0
 
 
+def test_orb_listen_without_window() -> None:
+    """Голос без окна: сфера просыпается и слушает (не в покое для режима auto), после — назад в idle."""
+    m = OrbModel()
+    m.listen(True)
+    assert m.state == "wake" and m.listening and not m.shown and not m.resting
+    _run(m, ORB_WAKE_S + 0.05)
+    assert m.state == "listen"  # покой слушания, а не idle
+    m.voice(0.8)
+    assert m.pulse > 0.3
+    m.listen(False)
+    assert m.state == "idle" and not m.listening and m.resting
+    m.listen(True)
+    m.listen(False)  # отпустил до конца пробуждения
+    assert m.state == "idle" and m.wake_t < 0
+    m.begin()
+    m.listen(True)  # идёт запрос — только импульс, работа не прерывается
+    assert m.state == "work" and m.listening
+    m.listen(False)
+    assert m.state == "work"
+
+
+def test_orb_speech_and_fail() -> None:
+    m = OrbModel()
+    m.speech(0.8)
+    assert m.talking and not m.resting and m.pulse == pytest.approx(0.36)
+    m.speech(0.0)
+    assert not m.talking
+    assert _calm_s(m) < 2.5 and m.resting
+    m.fail()
+    assert m.state == "error" and m.flash_kind == "error" and m.flash_t == 0.0
+    _run(m, ORB_FLASH_S + 0.1)
+    assert m.state == "idle"
+    m.begin()
+    m.fail()  # во время запроса — без вспышки
+    assert m.state == "work"
+    still = OrbModel(animations=False)
+    still.fail()
+    still.speech(1.0)
+    assert still.state == "idle" and still.pulse == 0.0 and still.talking
+
+
 def test_orb_listeners_and_state_changes_in_tick() -> None:
     m = OrbModel()
     seen: list[str] = []

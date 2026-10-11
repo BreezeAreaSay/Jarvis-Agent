@@ -221,6 +221,33 @@ def test_foreground_helpers(fake: FakeApi) -> None:
     assert fake.calls == [("allow", 0xFFFFFFFF), ("foreground", 555)]
 
 
+def test_mouse_button_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Нажата любая из трёх кнопок мыши (кнопки поменяны местами — тоже видно); ошибка — False."""
+    pressed: set[int] = set()
+
+    class Keys:
+        def key_down(self, vk: int) -> bool:
+            return vk in pressed
+
+    monkeypatch.setattr(winapp, "_api", Keys())
+    assert not winapp.mouse_button_down()
+    pressed.add(0x02)
+    assert winapp.mouse_button_down()
+
+    class Broken:
+        def key_down(self, vk: int) -> bool:
+            raise OSError("нет user32")
+
+    monkeypatch.setattr(winapp, "_api", Broken())
+    assert not winapp.mouse_button_down()
+
+
+def test_key_down_reads_high_bit(monkeypatch: pytest.MonkeyPatch) -> None:
+    real = winapp._WinApi()
+    monkeypatch.setattr(winapp._WinApi, "_u32", {"GetAsyncKeyState": lambda vk: -32768 if vk == 1 else 1})
+    assert real.key_down(1) and not real.key_down(2)  # младший бит («нажималась») не в счёт
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="на Windows слой ОС настоящий")
 def test_not_windows_without_fake() -> None:
     assert winapp._api is None

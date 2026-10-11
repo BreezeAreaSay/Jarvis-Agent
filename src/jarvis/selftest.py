@@ -2,7 +2,8 @@
 
 Без сети и GPU. По пунктам печатает ✓/✗ и время; код выхода 0 — всё ✓, 1 — есть ✗.
 Пункты: файлы бандла, импорт всех модулей jarvis.* и pc.*, конфиг, плагины Qt, окно (LauncherWindow скрыто,
-рендер в PNG), иконка, MCP-сервер pc (подпроцесс, ровно 18 инструментов), `codex --version` бинаря из SDK.
+рендер в PNG), иконка, MCP-сервер pc (подпроцесс, ровно 18 инструментов), `codex --version` бинаря из SDK,
+голос (sherpa-onnx с нативными onnxruntime/sherpa-onnx-c-api и sounddevice с PortAudio; модели не в бандле).
 
 Настоящий каталог данных и ~/.codex не трогаются: на время проверки JARVIS_DATA_DIR, JARVIS_CONFIG
 и CODEX_HOME указывают во временную папку. Офскрин Qt (QT_QPA_PLATFORM=offscreen) — флаг --offscreen
@@ -86,6 +87,11 @@ REQUIRED_MODULES = (
     "jarvis.doctor",
     "jarvis.bench",
     "jarvis.selftest",
+    "jarvis.ptt",
+    "jarvis.mic",
+    "jarvis.asr",
+    "jarvis.voice",
+    "jarvis.tts",
     "jarvis.ui.logic",
     "jarvis.ui.orb",
     "jarvis.ui.window",
@@ -411,6 +417,30 @@ def _codex_version(path: Path, ctx: Ctx) -> str:
     return out.splitlines()[0] if out else "(пустой вывод)"
 
 
+def check_voice(ctx: Ctx) -> str:
+    """Голос: sherpa-onnx и его нативные библиотеки грузятся; sounddevice находит PortAudio (на Windows — ✗,
+    если DLL нет в бандле; на Linux без PortAudio — пропуск). Модели в бандл не входят."""
+    script = settings.app_root() / "scripts" / "get_voice_models.ps1"
+    if not script.is_file():
+        raise Fail(f"нет {script} — нечем скачать модели голоса")
+    import sherpa_onnx
+
+    lib = Path(sherpa_onnx.__file__).parent / "lib"
+    natives = sorted(p.name for p in lib.glob("*") if p.suffix.lower() in (".dll", ".pyd", ".so"))
+    sherpa_onnx.SileroVadModelConfig()  # нативный модуль отвечает
+    try:
+        import sounddevice
+
+        portaudio = sounddevice.get_portaudio_version()[1]
+        inputs = sum(1 for d in sounddevice.query_devices() if d["max_input_channels"] > 0)
+        sound = f"{portaudio}, устройств ввода: {inputs}"
+    except OSError as e:
+        if sys.platform == "win32":
+            raise Fail(f"sounddevice: {e} (PortAudio не попал в бандл)") from e
+        sound = f"PortAudio нет ({sys.platform}) — проверка звука пропущена"
+    return f"sherpa-onnx {sherpa_onnx.__version__} ({', '.join(natives)}); {sound}"
+
+
 CHECKS: list[tuple[str, Callable[[Ctx], str]]] = [
     ("файлы бандла", check_files),
     ("модули", check_modules),
@@ -420,6 +450,7 @@ CHECKS: list[tuple[str, Callable[[Ctx], str]]] = [
     ("иконка", check_icon),
     ("MCP-сервер pc", check_mcp),
     ("codex --version", check_codex),
+    ("голос: sherpa-onnx и звук", check_voice),
 ]
 
 

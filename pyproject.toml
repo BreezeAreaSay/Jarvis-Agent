@@ -15,6 +15,10 @@ dependencies = [
     "pywin32>=311; sys_platform == 'win32'",
     "pycaw>=20251023; sys_platform == 'win32'",
     "comtypes>=1.4.11; sys_platform == 'win32'",
+    # голос (S9): sherpa-onnx и его нативная часть — одной версии (ABI); sounddevice — PortAudio в колесе Windows
+    "sherpa-onnx==1.13.8",
+    "sherpa-onnx-core==1.13.8",
+    "sounddevice>=0.5.6",
 ]
 
 [project.scripts]

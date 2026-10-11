@@ -42,3 +42,15 @@ max_side = 1600                      # длинная сторона снимк�
 jpeg_quality = 80                    # качество JPEG (50..95)
 hide_jarvis = true                   # окна Jarvis не попадают в снимки экрана (Windows 10 2004+)
 deny_apps = []                       # чьи окна не отправлять, например ["Telegram.exe"]; менеджеры паролей — всегда
+
+[voice]
+ptt_key = "right ctrl"               # удерживай и говори; "" — голосовой ввод выключен (f9, caps lock, altgr…)
+min_hold_ms = 250                    # короче — обычное нажатие клавиши, не голос
+max_record_s = 30                    # предел одной фразы, с
+device = ""                          # микрофон: часть имени из «Параметры → Звук»; "" — по умолчанию
+model = "gigaam-v3"                  # gigaam-v3 | gigaam-v3-punct | gigaam-v2 | vosk-small (scripts\get_voice_models.ps1)
+threads = 2                          # потоков CPU на распознавание и синтез (1..8)
+vad = true                           # обрезать тишину по краям (Silero VAD)
+tts = "voice"                        # ответ голосом: voice — на сказанное голосом, always — на всё, off — молча
+tts_voice = "denis"                  # голос: denis | dmitri | ruslan | irina (папка <data>\models\tts-<имя>)
+tts_speed = 1.0                      # скорость речи (0.5..2.0)

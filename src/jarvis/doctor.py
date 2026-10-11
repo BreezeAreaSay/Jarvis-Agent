@@ -491,6 +491,121 @@ def check_brain_turn(d: Doctor) -> Check:
     return Check("ok", f"тестовый ход GPT: {text}")
 
 
+# --- голос (S9) ---------------------------------------------------------------------------------
+
+VOICE_HINT = "pwsh -File scripts\\get_voice_models.ps1 (в exe — <папка Jarvis>\\_internal\\scripts)"
+ASR_PROBE_S = 3.0  # столько секунд звука распознаётся для замера — как фраза из S9
+
+
+def check_voice_ptt(d: Doctor) -> Check:
+    v = d.cfg.voice
+    if not v.ptt_key:
+        return Check("skip", "голос: выключен ([voice] ptt_key пуст)")
+    from jarvis import ptt
+
+    label = ptt.key_label(ptt.parse_key(v.ptt_key))
+    return Check(
+        "ok",
+        f"голос: удерживай {label} ≥ {v.min_hold_ms} мс и говори; нажатия в окнах с правами администратора "
+        "хук клавиатуры не видит (ограничение Windows) — там голос не включится",
+    )
+
+
+def check_voice_asr(d: Doctor) -> Check:
+    """Модель распознавания грузится (sherpa-onnx) и 3 с звука распознаются в бюджет 0,4 с."""
+    v = d.cfg.voice
+    if not v.ptt_key:
+        return Check("skip", "распознавание: голос выключен")
+    from jarvis import asr
+
+    try:
+        asr.model_files(v.model)
+    except asr.AsrError as e:
+        return Check("warn", f"распознавание: {e}", VOICE_HINT)
+    rec = asr.Recognizer(v.model, v.threads, v.vad)
+    try:
+        rec.load()
+    except asr.AsrError as e:
+        return Check("fail", f"распознавание: {e}", f"скачай модель заново: {VOICE_HINT}")
+    import random
+
+    rng = random.Random(1)
+    noise = [rng.uniform(-0.02, 0.02) for _ in range(int(ASR_PROBE_S * asr.RATE))]
+    t = time.perf_counter()
+    rec._decode(noise)
+    ms = (time.perf_counter() - t) * 1000
+    vad = "VAD есть" if rec._vad is not None else f"VAD нет ({asr.vad_path()}) — тишина не обрезается"
+    import sherpa_onnx
+
+    text = (
+        f"распознавание: {v.model}, sherpa-onnx {sherpa_onnx.__version__}, загрузка {rec.load_ms:.0f} мс, "
+        f"{ASR_PROBE_S:.0f} с звука — {ms:.0f} мс (потоков {v.threads}); {vad}"
+    )
+    if ms > 400:
+        return Check("warn", text, 'медленно для бюджета 0,4 с: [voice] threads = 4 или model = "vosk-small"')
+    if rec._vad is None and v.vad:
+        return Check("warn", text, VOICE_HINT)
+    return Check("ok", text)
+
+
+def check_voice_mic(d: Doctor) -> Check:
+    v = d.cfg.voice
+    if not v.ptt_key:
+        return Check("skip", "микрофон: голос выключен")
+    from jarvis import mic
+
+    try:
+        devices = mic.api().devices()
+    except mic.MicError as e:
+        return Check("fail", f"микрофон: {e}", "переустанови Jarvis (PortAudio — в пакете sounddevice)")
+    inputs = [x for x in devices if x.get("max_input_channels", 0) > 0]
+    if not inputs:
+        return Check(
+            "fail", "микрофон: устройств ввода нет", "подключи микрофон и проверь «Параметры → Звук»"
+        )
+    if v.device:
+        index = mic.find_device(v.device, "input")
+        if index is None:
+            return Check(
+                "warn",
+                f"микрофон «{v.device}» не найден — будет устройство по умолчанию: {mic.device_name(None)}",
+                "поправь [voice] device (часть имени из «Параметры → Звук → Ввод»)",
+            )
+        return Check("ok", f"микрофон: {mic.device_name(index)}")
+    name = mic.device_name(None)
+    if not name:
+        return Check(
+            "warn", "микрофон по умолчанию не выбран", "выбери устройство ввода в «Параметры → Звук»"
+        )
+    return Check("ok", f"микрофон по умолчанию: {name} (устройств ввода: {len(inputs)})")
+
+
+def check_voice_tts(d: Doctor) -> Check:
+    """Голос озвучки грузится и фраза синтезируется (цель ≤0,3 с)."""
+    v = d.cfg.voice
+    if v.tts == "off":
+        return Check("skip", 'озвучка: выключена ([voice] tts = "off")')
+    from jarvis import tts
+
+    try:
+        tts.voice_files(v.tts_voice)
+    except tts.TtsError as e:
+        have = ", ".join(tts.available_voices()) or "нет"
+        return Check("warn", f"озвучка: {e} (скачаны: {have})", VOICE_HINT)
+    speaker = tts.Speaker(v.tts_voice, v.tts_speed, v.threads)
+    try:
+        speaker.load()
+    except tts.TtsError as e:
+        return Check("fail", f"озвучка: {e}", f"скачай голос заново: {VOICE_HINT}")
+    t = time.perf_counter()
+    speaker._synth("Открыл телеграм, громкость тридцать процентов.")
+    ms = (time.perf_counter() - t) * 1000
+    text = f"озвучка: голос {v.tts_voice} ({v.tts}), загрузка {speaker.load_ms:.0f} мс, фраза — {ms:.0f} мс"
+    if ms > 300:
+        return Check("warn", text, "медленно: [voice] threads = 4 (или голос попроще)")
+    return Check("ok", text)
+
+
 CHECKS: list[Callable[[Doctor], Check]] = [
     check_config,
     check_data_dir,
@@ -507,6 +622,10 @@ CHECKS: list[Callable[[Doctor], Check]] = [
     check_everything_running,
     check_everything_index,
     check_everything_cyrillic,
+    check_voice_ptt,
+    check_voice_asr,
+    check_voice_mic,
+    check_voice_tts,
     check_brain_login,
     check_brain_turn,
 ]

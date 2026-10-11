@@ -164,6 +164,11 @@ vision: VisionConfig)`. `VisionConfig(enabled=True, max_side=1600, jpeg_quality=
 deny_apps=[])`: max_side вне 640..2560 и jpeg_quality вне 50..95 — умолчания.
 `UiConfig(hotkey, autohide_s, width, backdrop, animations, orb="always", orb_size=64)`: orb — `"always" | "auto" |
 "off"` (иное — "always"), orb_size ограничен `ORB_SIZE_MIN..ORB_SIZE_MAX` (40..160); backdrop вне solid|acrylic — solid.
+`Config.voice: VoiceConfig(ptt_key="right ctrl", min_hold_ms=250, max_record_s=30.0, device="", model="gigaam-v3",
+threads=2, vad=True, tts="voice", tts_voice="denis", tts_speed=1.0)`: ptt_key "" — голосовой ввод выключен,
+неразборчивая клавиша — умолчание; model вне `VOICE_MODELS` — "gigaam-v3"; tts — `"voice" | "always" | "off"`
+(true/false из старых конфигов → "voice"/"off"); числа вне пределов (50..2000 мс, 2..120 с, 1..8, 0,5..2,0) —
+умолчания; tts_voice — `[a-z0-9_-]+`.
 
 ### jarvis.context
 `Context(active_window: WindowInfo | None, last_object: str | None, last_kind: str | None, last_hwnd: int | None,
@@ -200,9 +205,11 @@ vision="")`; `route(text, ctx, mode) -> Route` (снимает префиксы 
 
 ### jarvis.brain
 `Brain(cfg: BrainConfig, confirm_address: str, process_hook=None)`: `start()` (в фоне), `close()`,
-`ask(text, ctx, deep=False, images=()) -> Iterator[Event]`, `cancel()`, `new_conversation()`, `.ready`, `.status`.
-images — снимки (только «data:image/…», иначе ValueError): ход начинается с `turn_input(prompt, images)` =
-`[TextInput(prompt), ImageInput(url), …]`; без снимков вход хода — строка, как раньше.
+`ask(text, ctx, deep=False, images=(), spoken=False) -> Iterator[Event]`, `cancel()`, `new_conversation()`, `.ready`,
+`.status`. images — снимки (только «data:image/…», иначе ValueError): ход начинается с `turn_input(prompt, images)` =
+`[TextInput(prompt), ImageInput(url), …]`; без снимков вход хода — строка, как раньше. spoken — запрос сказан
+голосом: `build_prompt(text, ctx, spoken=True)` ставит в начало `SPOKEN_HINT` («Ответ будет озвучен: говори коротко
+и разговорно, без списков, таблиц и кода»).
 Прокладка `subprocess` в `openai_codex.client` ставится до первого `Codex()`. Для doctor: `codex_bin() -> Path`
 (бинарь из SDK; в exe — из бандла), `codex_env(cfg) -> dict` (CODEX_HOME мозга и прокси), `codex_home() -> Path`,
 `build_overrides(cfg, confirm_address) -> tuple[str, ...]`, `install_subprocess_shim(hook)`. `Done.reason` мозга:
@@ -210,8 +217,10 @@ region | quota | auth | config | start | transport | network | cancelled | close
 (до ~2,5 с) — вызывать не из UI-потока.
 
 ### jarvis.core
-`Core(cfg, hands, brain, journal=None)`: `handle(text, ctx, dry=False, hotkey_ms=None) -> Iterator[Event]`, `cancel()`.
-Ответ рук ask_gpt/ошибка → второй `Level("brain"|"local", "hands→ask_gpt"|"hands→error")`.
+`Core(cfg, hands, brain, journal=None)`: `handle(text, ctx, dry=False, hotkey_ms=None, source="typed") ->
+Iterator[Event]`, `cancel()`. Ответ рук ask_gpt/ошибка → второй `Level("brain"|"local", "hands→ask_gpt"|"hands→error")`.
+source="voice" (сказано голосом) — `brain.ask(…, spoken=True)` и `"source": "voice"` в записи журнала; набранный —
+вызов и запись как раньше.
 Route.vision: после `Level("brain", "vision:…")` — снимок в рабочем потоке (`pc.screen`, caller "user"; окно —
 `ctx.active_window`, без него «окно» — отказ), `Status("⚙ снимок окна «…» → GPT" | "⚙ снимок экрана → GPT",
 kind="tool", key="vision")` → ✓/✗, JPEG (`vision.encode_jpeg`), `brain.ask(…, images=[data_url])`. Отказ или ошибка
@@ -227,9 +236,51 @@ jpeg_bytes, shot_px, тайминги shot и encode (мс); ни картинк
 GDI не учитывается), SmoothTransformation, меньший снимок не увеличивается; QtGui импортируется внутри функции,
 работает без QApplication и вне GUI-потока. `data_url(jpeg) -> str`. Тексты: `NO_WINDOW_TEXT`, `DISABLED_TEXT`.
 
+### Голос (S9): jarvis.ptt, jarvis.mic, jarvis.asr, jarvis.voice, jarvis.tts (без Qt; всё локально)
+- ptt — `parse_key(name) -> int` (VK: «right ctrl», «правый ctrl», «f9», «0xA3»; Ctrl/Shift/Alt/Win без стороны —
+  ValueError), `key_label(vk) -> str`. `Hook(vk, events: SimpleQueue)`: `start()` (свой поток "jarvis-ptt" с GetMessage,
+  WH_KEYBOARD_LL; не встал — `PttError`), `stop()`, `key_down()` (GetAsyncKeyState), `release()`, `.down`. Колбэк
+  `_hook_proc` — только событие ("down" | "up" | "other" | "esc" | "resume", time.monotonic()) и CallNextHookEx;
+  "esc" — Esc в любом окне (глушит речь, даже если окно Jarvis не в фокусе); клавиши не глушатся; объект WINFUNCTYPE — `ptt._proc` на уровне модуля; переустановка каждые `REHOOK_S` (новый хук раньше
+  снятия старого) и после паузы таймера > `RESUME_GAP_S` (сон ПК → событие "resume"). Слой ОС — `ptt._api`.
+- mic — `Recorder(device="", max_s=30, on_level=None)`: `start()` (MicError), `stop() -> Recording(pcm: bytes,
+  rate=16000)`, `abort()`, `.full`; RawInputStream 16 кГц моно int16, блоки 50 мс, `on_level(0..1)` на каждый блок
+  из потока PortAudio; устройство без 16 кГц — его частота (asr передискретизирует). `level(block)`,
+  `find_device(name, kind)`, `device_name(index, kind)`, `warmup()` (импорт sounddevice в фоне), `api()` — слой
+  sounddevice (`mic._api`; нет PortAudio — MicError). numpy не нужен.
+- asr — `MODELS` (gigaam-v3 | gigaam-v3-punct | gigaam-v2 | vosk-small → папка `<data>\models\<имя>`),
+  `model_files(name)` (AsrError с подсказкой get_voice_models.ps1), `vad_path()` (`models\vad\silero_vad.onnx`),
+  `Recognizer(model, threads, vad)`: `load()` (секунды — в фоне; прогрев), `recognize(Recording) -> AsrResult(text,
+  raw, asr_ms, audio_s, speech_s, vad_ms)`; VAD кормится окнами по 512 (весь буфер одним вызовом sherpa-onnx 1.13.8
+  разбирает неверно), края речи + запас 0,25/0,35 с; речи нет — пустой текст без декодирования.
+  `normalize(raw)` — как набранная команда: без обращения «Джарвис» (нечётко, `strip_wake`), без точки в конце,
+  строчная первая буква; «?» остаётся.
+- voice — `Voice(cfg: VoiceConfig, emit, *, on_press=None, on_escape=None, journal=None, recognizer=None,
+  recorder=None, hook_factory=None)`: `start()` (потоки "jarvis-voice" и "jarvis-asr", модель грузится в фоне, хук — сразу; не встал —
+  `status="error"`), `stop()`, `cancel()` (Esc), `.status` (off | loading | ready | error), `.state`, `.error`.
+  События в `emit` (из рабочих потоков): `Listening()` (PTT ≥ min_hold без других клавиш — окно «Слушаю…»),
+  `Loudness(value)`, `Recognizing()`, `Heard(text, asr_ms, audio_s, model)`, `Failed(text)`,
+  `ListenCancelled(reason: keys | esc | resume | stop)`. Запись идёт с нажатия; короткое нажатие и сочетание
+  (правый Ctrl+C) молча выбрасываются; новое нажатие во время распознавания — старый результат не нужен;
+  потерянное отпускание — по 3 опросам GetAsyncKeyState; `on_press()` и `on_escape()` (Esc в любом окне) — глушат
+  речь (Narrator.cancel); Esc ещё и бросает запись или распознавание.
+  Журнал: `{"kind": "voice", asr_ms, vad_ms, release_to_text_ms, wait_ms, audio_s, speech_s, empty, model, threads,
+  text}`. `enabled(cfg)` — ptt_key задан и модель скачана.
+- tts — `Speaker(voice="denis", speed=1.0, threads=2)`: `load()` (TtsError), `say(text) -> gen` (не блокирует;
+  синтез следующей фразы, пока звучит текущая), `stop() -> bool` (глушит сразу, новое поколение), `.speaking`,
+  `.first_sound`, `on_idle(gen)`; вывод — `mic.api().open_output`, блоки ~46 мс. `Narrator(speaker, mode, journal)`:
+  `begin(rid, spoken)`, `close()`, `on_event(rid, ev)` (мозг — весь ответ по предложениям через `Splitter`, не больше
+  `SPEAK_LIMIT`, код/таблица — `REST`; «Секунду…» через `SECOND_DELAY_S`, если мозг молчит; грамматика и руки —
+  `short_text(Done.text)`; cancelled — тишина), `confirm(summary)`, `say(text)` (напоминания), `cancel()`, `.active`.
+  Журнал: `{"kind": "tts", tts_ms, reply_ms, spoken, interrupted, level, chars, phrases, voice}`. `speakable(text)` —
+  без markdown, ссылок, путей, расширений; латиница по-русски (`transliterate`).
+
 ### jarvis.journal
 `Journal()`: `write(record: dict)` (фоновый поток), `close()`; модульные `read(days) -> list[dict]`,
 `stats(days, records=None)`, `format_stats(st, min_tokens_per_s)`, `percentile`, `fmt_ms`. CLI журнал не пишет.
+Записи с полем `kind` ("voice", "tts") — не запросы: в `stats` — разделы `voice` (asr p50/p95, средняя длина
+записи, доля «не расслышал») и `tts` (до первого звука p50/p95, доля перебитых), бюджеты «голос: распознавание»
+≤400 мс и «озвучка: до первого звука» ≤300 мс.
 
 ### jarvis.cli
 `main(argv=None) -> int`. Подкоманды: run (`jarvis.app.main`), ask, route, apps, bench (`jarvis.bench`),
@@ -260,6 +311,16 @@ SetWinEventHook(EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOW
 `[vision] hide_jarvis`). Клик по сфере — как хоткей (окно активно и запроса нет — спрятать, иначе показать, без
 «окна до Jarvis»). Хук `winapp.watch_foreground` → `OrbWindow.set_suppressed(is_fullscreen(hwnd))`; выход — снять
 хук, `close_orb()`.
+Голос (S9): в фоне после Core — `_start_voice()`: `tts.Narrator` (голос скачан и `[voice] tts != "off"`; модель
+грузится в потоке "jarvis-tts-load") и `voice.Voice` (`voice.enabled(cfg.voice)`; `on_press` и `on_escape` —
+`Narrator.cancel`). Сигнал `voice_event(object)` (из потоков голоса, QueuedConnection) → `_on_voice_event`:
+`Listening` — активное окно снимается ДО показа (как по хоткею), окно показывается БЕЗ активации
+(WA_ShowWithoutActivating: вдруг это правый Ctrl+C — C должна попасть в программу человека), `voice_state("listen")`;
+`Loudness` → `voice_level`; `Recognizing` → `voice_state("recognize")`; `Heard` → открытые подтверждения — «нет»
+(`deny_confirms`: голосом «да» не подтверждается) и `start_request(text, source="voice")`; `Failed` → тост и `voice_dismiss()`; `ListenCancelled` → `voice_dismiss(0)`.
+`start_request(text, source="typed")` → `Narrator.begin(rid, spoken=source == "voice")`; события запроса →
+`Narrator.on_event`; подтверждение → `Narrator.confirm(summary)`; Esc в окне → `Narrator.cancel()`; напоминания —
+`Narrator.say` (при tts != "off"); выход — `Voice.stop()`, `Narrator.close()`.
 - ui/logic.py — логика окна без Qt: `History`, `ConfirmRequest(summary, details, caller)` с `resolve(approved)` и
   `wait(timeout=60) -> bool`, `ConfirmQueue` (одна очередь для обработчика процесса и pipe; правило 700 мс;
   Enter/Esc = «нет», Ctrl+Enter = «да»), разбор «цифра+Enter», автоскрытие.
@@ -287,10 +348,15 @@ SetWinEventHook(EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOW
   `show_launcher()`, `hide_launcher()`, `begin_request(text)`, `on_event(ev)` (события из jarvis.events, вызывается
   в UI-потоке), `ask_confirm(req)`, `set_local_mode(on)`, `show_toast(text, kind="error")`; `.orb_model` — модель
   сферы слева от строки ввода (`theme.ORB_PX` поверх места `theme.ORB_SLOT`), окно ведёт её своими событиями.
+  Голос: `voice_state(phase)` ("listen" — строка пустая, подсказка «Слушаю…», сфера просыпается; "recognize" —
+  «Распознаю…»; "" — обычная подсказка), `voice_level(value)` (→ `OrbModel.voice`), `voice_dismiss(delay_ms=2500)`
+  (окно, которое человек не трогал — не активно, без запроса, подтверждения и текста, — прячется через delay_ms).
 - ui/icon.py — `render_icon(state: "ready"|"busy"|"local"|"warn", size) -> QImage` (рисунок QPainter; тот же
   рисунок — в трее и в .ico при сборке); ui/tray.py — `Tray`: сигналы `open_requested`, `local_toggled(bool)`,
   `new_conversation`, `restart_hands`, `unload_hands`, `open_logs`, `autostart_toggled(bool)`, `quit_requested`;
   `menu() -> QMenu` (его пункты показывает и сфера).
 
 ### jarvis.selftest
-`main() -> int` — проверка собранного бандла без сети и GPU (раздел 5 NIGHT-PROMPT).
+`main() -> int` — проверка собранного бандла без сети и GPU (раздел 5 NIGHT-PROMPT); пункт «голос: sherpa-onnx и
+звук» — sherpa-onnx с нативными библиотеками, sounddevice с PortAudio (на Windows обязателен) и
+`scripts/get_voice_models.ps1` в бандле.

@@ -1,4 +1,4 @@
-"""Конфиг Jarvis: mode, [ui], [hands], [brain], [journal], [vision]. Пути и кэш — из pc.settings."""
+"""Конфиг Jarvis: mode, [ui], [hands], [brain], [journal], [vision], [voice]. Пути и кэш — из pc.settings."""
 
 import dataclasses
 import os
@@ -95,6 +95,57 @@ def _fix_vision(v: VisionConfig) -> VisionConfig:
     return dataclasses.replace(v, **fixes) if fixes else v
 
 
+TtsMode = Literal["voice", "always", "off"]
+VOICE_MODELS = ("gigaam-v3", "gigaam-v3-punct", "gigaam-v2", "vosk-small")  # папки в <data>\models
+
+
+@dataclass(frozen=True)
+class VoiceConfig:
+    """[voice]: голос — push-to-talk, распознавание и озвучка, всё локально (jarvis.voice, asr, tts)."""
+
+    ptt_key: str = "right ctrl"  # клавиша «удерживай и говори»; "" — голосовой ввод выключен
+    min_hold_ms: int = 250  # короче — обычное нажатие клавиши (50..2000)
+    max_record_s: float = 30.0  # предел одной записи (2..120)
+    device: str = ""  # микрофон: часть имени; "" — устройство Windows по умолчанию
+    model: str = "gigaam-v3"  # gigaam-v3 | gigaam-v3-punct | gigaam-v2 | vosk-small
+    threads: int = 2  # потоков CPU для распознавания и синтеза (1..8)
+    vad: bool = True  # обрезка тишины по краям (Silero VAD)
+    tts: TtsMode = "voice"  # озвучка ответов: voice — на голосовые запросы, always — на все, off — молча
+    tts_voice: str = "denis"  # голос: папка <data>\models\tts-<имя>
+    tts_speed: float = 1.0  # скорость речи (0.5..2.0)
+
+
+def _voice(raw: dict[str, Any]) -> VoiceConfig:
+    """[voice] с проверкой: неверные значения — умолчания; tts = true/false — "voice"/"off"."""
+    if isinstance(raw.get("tts"), bool):
+        raw = {**raw, "tts": "voice" if raw["tts"] else "off"}
+    v = _pick(VoiceConfig, raw)
+    d = VoiceConfig()
+    fixes: dict[str, Any] = {}
+    if v.ptt_key.strip():
+        from jarvis import ptt
+
+        try:
+            ptt.parse_key(v.ptt_key)
+        except ValueError:
+            fixes["ptt_key"] = d.ptt_key
+    if not 50 <= v.min_hold_ms <= 2000:
+        fixes["min_hold_ms"] = d.min_hold_ms
+    if not 2.0 <= v.max_record_s <= 120.0:
+        fixes["max_record_s"] = d.max_record_s
+    if v.model not in VOICE_MODELS:
+        fixes["model"] = d.model
+    if not 1 <= v.threads <= 8:
+        fixes["threads"] = d.threads
+    if v.tts not in ("voice", "always", "off"):
+        fixes["tts"] = d.tts
+    if not re.fullmatch(r"[a-z0-9_-]{1,40}", v.tts_voice):
+        fixes["tts_voice"] = d.tts_voice
+    if not 0.5 <= v.tts_speed <= 2.0:
+        fixes["tts_speed"] = d.tts_speed
+    return dataclasses.replace(v, **fixes) if fixes else v
+
+
 @dataclass(frozen=True)
 class Config:
     mode: Mode = "normal"
@@ -103,6 +154,7 @@ class Config:
     brain: BrainConfig = field(default_factory=BrainConfig)
     journal: JournalConfig = field(default_factory=JournalConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
 
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -157,6 +209,7 @@ def load() -> Config:
             brain=_pick(BrainConfig, _section(data, "brain")),
             journal=_pick(JournalConfig, _section(data, "journal")),
             vision=_fix_vision(_pick(VisionConfig, _section(data, "vision"))),
+            voice=_voice(_section(data, "voice")),
         )
         _cache.update(src=data, cfg=cfg)
         return cfg

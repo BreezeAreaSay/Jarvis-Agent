@@ -323,13 +323,17 @@ def turn_input(prompt: str, images: Sequence[str] = ()) -> Any:
     return [TextInput(prompt), *(ImageInput(url) for url in images)]
 
 
-def build_prompt(text: str, ctx: "Context | None") -> str:
+SPOKEN_HINT = "[Ответ будет озвучен: говори коротко и разговорно, без списков, таблиц и кода]"
+
+
+def build_prompt(text: str, ctx: "Context | None", spoken: bool = False) -> str:
     """Запрос мозгу: `[о пользователе: …] [окно: заголовок — exe, hwnd N] [последнее: …]` и текст; всё —
     через privacy. Память пишет только человек командой «запомни» (у мозга такого инструмента нет).
+    spoken — запрос сказан голосом и ответ будет озвучен: в начало — SPOKEN_HINT.
 
     Ошибка фильтра — эта часть контекста не уходит (лучше без контекста, чем без фильтра).
     """
-    head: list[str] = []
+    head: list[str] = [SPOKEN_HINT] if spoken else []
     broken = bool(settings.config_error())  # private_paths неизвестны — свободный текст не отдаём
     about = "" if broken else _about_user()
     if about:
@@ -932,11 +936,17 @@ class Brain:
     # --- запрос ---
 
     def ask(
-        self, text: str, ctx: "Context | None", deep: bool = False, images: Sequence[str] = ()
+        self,
+        text: str,
+        ctx: "Context | None",
+        deep: bool = False,
+        images: Sequence[str] = (),
+        spoken: bool = False,
     ) -> Iterator[Event]:
         """Вопрос мозгу: (Status | TextChunk)* → ровно один Done. Level отдаёт core.
 
         images — снимки окна или экрана (jarvis.vision.data_url): только «data:image/…», иначе ValueError.
+        spoken — запрос сказан голосом, ответ будет озвучен (подсказка в начале запроса, build_prompt).
         В локальном режиме не вызывается (проверка в core); здесь — страховка: RuntimeError сразу.
         """
         if self._local or jarvis_config.load().mode == "local":
@@ -944,10 +954,15 @@ class Brain:
         pictures = tuple(images)
         if any(not isinstance(url, str) or not url.startswith("data:image/") for url in pictures):
             raise ValueError("снимок для GPT — только data:image/… (файлы и ссылки не отправляются)")
-        return self._ask(text, ctx, deep, pictures)
+        return self._ask(text, ctx, deep, pictures, spoken)
 
     def _ask(
-        self, text: str, ctx: "Context | None", deep: bool, images: tuple[str, ...] = ()
+        self,
+        text: str,
+        ctx: "Context | None",
+        deep: bool,
+        images: tuple[str, ...] = (),
+        spoken: bool = False,
     ) -> Iterator[Event]:
         model = self._cfg.model_deep if deep else self._cfg.model_quick
         req = _Req(t0=time.perf_counter(), model=model)
@@ -957,7 +972,7 @@ class Brain:
         with self._lock:
             self._cancel_evt = req.cancel
         try:
-            yield from self._ask_locked(text, ctx, deep, req, images)
+            yield from self._ask_locked(text, ctx, deep, req, images, spoken)
         finally:
             with self._lock:
                 if self._cancel_evt is req.cancel:
@@ -977,7 +992,13 @@ class Brain:
         return self.ready
 
     def _ask_locked(
-        self, text: str, ctx: "Context | None", deep: bool, req: _Req, images: tuple[str, ...] = ()
+        self,
+        text: str,
+        ctx: "Context | None",
+        deep: bool,
+        req: _Req,
+        images: tuple[str, ...] = (),
+        spoken: bool = False,
     ) -> Iterator[Event]:
         if not self.ready:
             yield Status(START_TEXT, key="brain-start")
@@ -994,7 +1015,8 @@ class Brain:
                 yield req.done(False, error, self._error_reason or "start")
                 return
         try:
-            thread, handle = self._start_turn(turn_input(build_prompt(text, ctx), images), req.model, deep)
+            prompt = build_prompt(text, ctx, spoken=spoken)
+            thread, handle = self._start_turn(turn_input(prompt, images), req.model, deep)
         except Exception as e:
             if self._state == "closed":
                 yield req.done(False, CLOSED_TEXT, "closed", cancelled=True)

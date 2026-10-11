@@ -37,7 +37,9 @@
 ## Структура
 - src/jarvis/ — приложение: app.py (вход, трей, хоткей), ui/, core.py (оркестрация), router.py, grammar.py,
   context.py, hands.py, execute.py, brain.py, journal.py, log.py, config.py, cli.py,
-  vision.py (зрение: «посмотри на экран» → снимок и вопрос мозгу)
+  vision.py (зрение: «посмотри на экран» → снимок и вопрос мозгу), голос (S9, локально, sherpa-onnx):
+  ptt.py (клавиша push-to-talk, хук WH_KEYBOARD_LL), mic.py (запись и вывод звука), asr.py (распознавание),
+  voice.py (PTT → запись → текст), tts.py (озвучка ответов)
 - src/pc/ — библиотека действий Windows, без UI и без моделей: settings.py (пути и секции [pc]/[aliases]),
   subproc.py (запуск внешних процессов), result.py, paths.py, policy.py, privacy.py, apps.py, windows.py,
   audio.py, media.py, procs.py (список и завершение процессов), files.py, system.py, confirm_client.py,
@@ -49,12 +51,14 @@
   ошибки Vulkan, .cmd пишет в C:\Jarvis\logs\hands.log (обнуляется при каждом старте)
 - scripts/hands_probe.ps1 + hands_probe.json — быстрый замер рук без кода Jarvis (точность, задержка, т/с)
 - scripts/brain_smoke.py — замер мозга без кода Jarvis; scripts/es_check.py — индекс Everything и кириллица в es.exe
+- scripts/get_voice_models.ps1 — модели голоса в <data>\models (только pwsh; запускает владелец);
+  scripts/voice_bench.py — замер распознавания на 20 голосовых командах (синтез или свои записи)
 - jarvis.example.toml — пример конфига (jarvis.toml в .gitignore)
 
 ## Стек (не менять без причины)
 Python 3.12, uv, httpx (keep-alive к llama-server), openai-codex==0.160.1 (версия закреплена: мозг опирается
 на её внутренности), mcp (FastMCP, stdio), pywin32, psutil, pycaw>=20251023 + comtypes, rapidfuzz, send2trash,
-PySide6 (окно и трей), pytest, ruff. Позже для голоса: sherpa-onnx, sounddevice.
+PySide6 (окно и трей), pytest, ruff. Голос (S9): sherpa-onnx==1.13.8 (+ sherpa-onnx-core), sounddevice; без numpy.
 
 ## Контракты
 - Действия ПК — функции src/pc с типизированными аргументами; возвращают Result(ok, text, data),
@@ -188,6 +192,18 @@ max_side = 1600                      # длинная сторона снимк�
 jpeg_quality = 80                    # качество JPEG (50..95)
 hide_jarvis = true                   # окна Jarvis не попадают в снимки экрана (Windows 10 2004+)
 deny_apps = []                       # чьи окна не отправлять, например ["Telegram.exe"]; менеджеры паролей — всегда
+
+[voice]
+ptt_key = "right ctrl"               # удерживай и говори; "" — голосовой ввод выключен (f9, caps lock, altgr…)
+min_hold_ms = 250                    # короче — обычное нажатие клавиши, не голос
+max_record_s = 30                    # предел одной фразы, с
+device = ""                          # микрофон: часть имени из «Параметры → Звук»; "" — по умолчанию
+model = "gigaam-v3"                  # gigaam-v3 | gigaam-v3-punct | gigaam-v2 | vosk-small (scripts\get_voice_models.ps1)
+threads = 2                          # потоков CPU на распознавание и синтез (1..8)
+vad = true                           # обрезать тишину по краям (Silero VAD)
+tts = "voice"                        # ответ голосом: voice — на сказанное голосом, always — на всё, off — молча
+tts_voice = "denis"                  # голос: denis | dmitri | ruslan | irina (папка <data>\models\tts-<имя>)
+tts_speed = 1.0                      # скорость речи (0.5..2.0)
 ```
 
 ## Стиль
@@ -251,32 +267,20 @@ uv run pytest -q -m "not live"
 - [x] S6a приложение: старт, хоткей, трей, автозапуск (live — TODO)
 - [x] S6b окно: поток ответа, результаты, подтверждения (live — TODO)
 - [x] S7 журнал, bench, stats, doctor (live — TODO: doctor, bench --live)
-- [ ] S8 ревью
-- [ ] S9 голос
+- [x] S8 ревью: спецификация, скорость, Qt, Win32, безопасность (находки и исправления — docs/notes.md)
+- [x] S9 голос: PTT, распознавание и озвучка локально (live — TODO: 20 команд, asr p95)
+- [x] Сверх плана: отмена, напоминания, память, справка; сфера; зрение по команде (live — TODO)
 
 ## Заметки
-Подробности, длинные списки и таблицы — в docs/notes.md; контракты модулей — в docs/architecture.md.
+Подробности, длинные списки и таблицы — в docs/notes.md (там же полный журнал сессии); контракты модулей —
+в docs/architecture.md.
 
-### Журнал сессии
-- S0 (облако, NIGHT-PROMPT): Linux-контейнер, ветка jarvis-v1 от 66dc61d; scratch\, сервера рук, Everything и входа
-  в GPT нет — факты задания 00 взяты из NIGHT-PROMPT §2. uv 0.11, Python 3.12, openai-codex 0.160.1, mcp 1.30.
-- S1 начат: каркас и контракты (docs/architecture.md); `[tool.uv] environments` — win32 и linux; mcp>=1.29,<2;
-  PySide6-Essentials; эталонные scripts/brain_smoke.py и es_check.py исключены из ruff (держим как проверены).
-- Модули писали параллельные субагенты по контрактам docs/architecture.md; главный поток — интеграция, коммиты.
-- S1: paths (зоны, 8.3, junction, хвостовые точки, устройства), privacy, apps (resolve 0 промахов на 69 фразах,
-  0,1 мс). GitHub Actions: «account is locked due to a billing issue» — CI не стартует; Windows-проверка — Wine.
-- S2a: windows (лестница focus, Alt+Tab-фильтр), procs (own_pids из JARVIS_ROOT_PID), files (единственный startfile,
-  es.exe argv из спеки), system (type_text с проверкой окна перед каждой порцией), audio (COM-поток), media, _input.
-- S2b: ConfirmServer (рукопожатие в потоке соединения), клиент с проверкой адреса; FastMCP 18 инструментов, старт 0,7 с.
-- S3: руки (префикс байт-в-байт, ~1300 токенов по оценке; maxLength 80; правило kill; пример приветствия/папки),
-  execute (цель из текста или то же приложение инвентаря; тема для media/vol/win; open↔focus). Доводка — по live.
-- S4: грамматика 30 шаблонов (match 0,02 мс), роутер, корпус 150 фраз (уровень 150/150, 0 ложных грамматики);
-  core (Level → … → один Done; ответ рук ask_gpt → второй Level), CLI (UTF-8 в pipe, контекст в cli_context.json).
-- S5: Brain (overrides сверены с настоящим codex 0.160.1; запасной тред; прокладка subprocess; обрыв без сети 30 с);
-  wire_api и ошибки конфига — в notes. Live-тесты в conftest пропускаются без явного `-m live`.
-- S7: журнал (фоновая запись), stats с бюджетами, bench (dry, корпус + фикстура инвентаря), doctor (17 проверок;
-  в local codex не запускается).
-- S6a: app (хоткей через nativeEventFilter на окне-приёмнике, Job Object + потомки llama-server, mutex и показ первого
-  экземпляра, трей 4 состояния, Brain.close только в рабочем потоке), иконка кодом (QPainter), автозапуск HKCU Run.
-- S6b: окно-лаунчер (анимации 140/90/120 мс, покой без таймеров, PlainText везде, подтверждение 700 мс/Ctrl+Enter,
-  автоповтор Enter/Esc игнорируется), снимки — scripts/ui_screenshots.py (docs/screenshots/ в .gitignore).
+### Журнал сессии (кратко; подробно — docs/notes.md)
+- S0–S7 (облако, NIGHT-PROMPT): Linux-контейнер, ветка jarvis-v1 от 66dc61d; модули писали параллельные субагенты
+  по docs/architecture.md, главный поток — интеграция и коммиты. GitHub Actions заблокированы биллингом —
+  Windows-проверка под Wine (scripts/wine_build.sh, docs/wine-build.md).
+- S8: пять ревью, находки исправлены с тестами (tests/test_s8_*). codex 0.160.1: модели каталога объявляют
+  multi_agent v2 — под-агентов ключами не выключить, Jarvis прерывает такой ход; запросы codex к клиенту — отказ.
+- Сверх плана (просьбы владельца): отмена, напоминания, память, справка; сфера; зрение (снимок → GPT по команде).
+- S9: голос локально (sherpa-onnx, GigaAM v3, piper denis): синтез → распознавание 18/20, p95 ≈0,3 с (Linux).
+  Codex для голоса не годится: realtime-транскрипция только с ключом API, модели Codex не принимают звук.

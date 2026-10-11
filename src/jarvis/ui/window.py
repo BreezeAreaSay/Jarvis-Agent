@@ -60,6 +60,9 @@ from jarvis.ui.widgets import (
 log = logging.getLogger("jarvis")
 
 PLACEHOLDER = "Скажи, что сделать…"
+LISTEN_TEXT = "Слушаю… отпусти клавишу — и выполню"
+RECOGNIZE_TEXT = "Распознаю…"
+VOICE_DISMISS_MS = 2500  # голос ничего не дал — окно, показанное ради него, прячется само
 ACRYLIC_FILL = 0.86  # непрозрачность панели поверх системного acrylic
 
 
@@ -295,6 +298,10 @@ class LauncherWindow(QWidget):
         self._confirm_timer.setInterval(theme.CONFIRM_TICK_MS)
         self._confirm_timer.timeout.connect(self._confirm_tick)
 
+        self._voice_timer = QTimer(self)
+        self._voice_timer.setSingleShot(True)
+        self._voice_timer.timeout.connect(self._voice_dismiss)
+
     def _apply_dwm(self) -> None:
         """Тёмная рамка, скругления Windows 11 и (по желанию) acrylic; не вышло — сплошной фон."""
         if sys.platform != "win32":
@@ -418,6 +425,41 @@ class LauncherWindow(QWidget):
 
     def is_busy(self) -> bool:
         return self._busy
+
+    # --- голос (S9): app.py зовёт по событиям jarvis.voice ---------------------------------------------
+
+    def voice_state(self, phase: str) -> None:
+        """Голосовой ввод: "listen" — строка пустая, «Слушаю…»; "recognize" — «Распознаю…»;
+        "" — обычный ввод."""
+        self._voice_timer.stop()
+        if phase == "listen":
+            self._autohide.cancel()
+            self._autohide_timer.stop()
+            self._input.clear()
+            self._input.setPlaceholderText(LISTEN_TEXT)
+            self.orb_model.wake()
+        elif phase == "recognize":
+            self._input.setPlaceholderText(RECOGNIZE_TEXT)
+        else:
+            self._input.setPlaceholderText(PLACEHOLDER)
+
+    def voice_level(self, value: float) -> None:
+        """Громкость голоса 0..1 (≈20 раз в секунду) — импульс сферы."""
+        self.orb_model.voice(value)
+
+    def voice_dismiss(self, delay_ms: int = VOICE_DISMISS_MS) -> None:
+        """Голос ничего не дал (отмена, «не расслышал»): обычная строка ввода; окно, которое человек не трогал
+        (не активно, без запроса и текста), прячется через delay_ms (0 — сразу)."""
+        self.voice_state("")
+        if delay_ms <= 0:
+            self._voice_dismiss()
+        else:
+            self._voice_timer.start(delay_ms)
+
+    def _voice_dismiss(self) -> None:
+        untouched = not self.isActiveWindow() and not self._input.text()
+        if self.isVisible() and untouched and not self._busy and self._confirms.current is None:
+            self.hide_launcher()
 
     # --- события запроса ------------------------------------------------------------------------------
 

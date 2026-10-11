@@ -6,6 +6,10 @@ query, which), mode, level, reason, tool, args, ok, error, cancelled, tools (и�
 были) и тайминги в мс: hotkey_to_window, route, grammar (до начала действия), hands {cache_n, prompt_n,
 prompt_ms, predicted_ms, predicted_per_second, total_ms}, exec, brain {first_token, total, new_thread, model,
 usage}, total.
+Голос пишет свои записи с полем kind (в статистике запросов они не считаются): kind="voice" — распознавание
+(asr_ms, vad_ms, release_to_text_ms, wait_ms, audio_s, speech_s, empty, model, threads, text — только при
+store_text), kind="tts" — озвучка ответа (tts_ms до первого звука, reply_ms от начала запроса, spoken,
+interrupted, level, chars, phrases, voice).
 """
 
 import json
@@ -27,6 +31,8 @@ BUDGET_GRAMMAR_MS = 300.0
 BUDGET_HANDS_MS = 1200.0
 BUDGET_BRAIN_FIRST_MS = 3000.0
 BUDGET_HOTKEY_MS = 100.0
+BUDGET_ASR_MS = 400.0  # S9: от отпускания клавиши до текста (фраза ~3 с)
+BUDGET_TTS_MS = 300.0  # синтез первой фразы ответа до звука
 # тёплый запрос рук: в промпте только сообщение пользователя; больше — кэш префикса сломан
 PROMPT_N_WARN = 100.0
 
@@ -181,7 +187,10 @@ def _budget(name: str, values: list[float], limit: float) -> dict[str, Any]:
 
 def stats(days: int = 7, records: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Сводка журнала: по уровням, руки, мозг и нарушения бюджетов AGENTS.md."""
-    recs = read(days) if records is None else records
+    every = read(days) if records is None else records
+    recs = [r for r in every if not r.get("kind")]  # запросы; записи голоса (kind) — отдельно
+    voice_recs = [r for r in every if r.get("kind") == "voice"]
+    tts_recs = [r for r in every if r.get("kind") == "tts"]
     levels: dict[str, dict[str, Any]] = {}
     for name in ("grammar", "hands", "brain", "local"):
         group = [r for r in recs if r.get("level") == name]
@@ -219,6 +228,8 @@ def stats(days: int = 7, records: list[dict[str, Any]] | None = None) -> dict[st
         if v is not None
     ]
     hands_total = _nums(hands_recs, "hands", "total_ms")
+    asr_ms = _nums(voice_recs, "asr_ms")
+    tts_ms = _nums(tts_recs, "tts_ms")
     return {
         "days": days,
         "count": len(recs),
@@ -253,7 +264,22 @@ def stats(days: int = 7, records: list[dict[str, Any]] | None = None) -> dict[st
             _budget("GPT: до первых слов, новый тред", first_new, BUDGET_BRAIN_FIRST_MS),
             _budget("GPT: до первых слов, повторные", first_rep, BUDGET_BRAIN_FIRST_MS),
             _budget("хоткей → окно", _nums(recs, "hotkey_to_window"), BUDGET_HOTKEY_MS),
+            _budget("голос: распознавание", asr_ms, BUDGET_ASR_MS),
+            _budget("озвучка: до первого звука", tts_ms, BUDGET_TTS_MS),
         ],
+        "voice": {
+            "count": len(voice_recs),
+            "asr_p50": percentile(asr_ms, 50),
+            "asr_p95": percentile(asr_ms, 95),
+            "audio_s_avg": _mean(_nums(voice_recs, "audio_s")),
+            "empty": _share(sum(r.get("empty") is True for r in voice_recs), len(voice_recs)),
+        },
+        "tts": {
+            "count": len(tts_recs),
+            "tts_p50": percentile(tts_ms, 50),
+            "tts_p95": percentile(tts_ms, 95),
+            "interrupted": _share(sum(r.get("interrupted") is True for r in tts_recs), len(tts_recs)),
+        },
     }
 
 
@@ -270,6 +296,10 @@ def fmt_ms(value: float | None) -> str:
 
 def _pct(value: float | None) -> str:
     return "—" if value is None else f"{value * 100:.0f} %"
+
+
+def _seconds(value: float | None) -> str:
+    return "—" if value is None else f"{value:.1f} с".replace(".", ",")
 
 
 def format_stats(st: dict[str, Any], min_tokens_per_s: float | None = None) -> str:
@@ -319,6 +349,18 @@ def format_stats(st: dict[str, Any], min_tokens_per_s: float | None = None) -> s
         top = ", ".join(f"{name} {n}" for name, n in b.get("tools_top", [])) or "—"
         lines.append(
             f"Инструменты GPT: в {_pct(b['with_tools'])} запросов (n={b['count']}); чаще всего: {top}"
+        )
+    v = st.get("voice") or {}
+    if v.get("count"):
+        lines.append(
+            f"Голос ({v['count']}): распознавание p50 {fmt_ms(v['asr_p50'])}, p95 {fmt_ms(v['asr_p95'])}; "
+            f"запись в среднем {_seconds(v['audio_s_avg'])}; не расслышал {_pct(v['empty'])}"
+        )
+    t = st.get("tts") or {}
+    if t.get("count"):
+        lines.append(
+            f"Озвучка ({t['count']}): до первого звука p50 {fmt_ms(t['tts_p50'])}, "
+            f"p95 {fmt_ms(t['tts_p95'])}; перебито {_pct(t['interrupted'])}"
         )
     lines.append("")
     lines.append("Бюджеты AGENTS.md (p95):")

@@ -68,6 +68,7 @@ class _Run:
     tools: list[str] = field(default_factory=list)  # инструменты мозга по порядку вызова
     tool_keys: set[str] = field(default_factory=set)
     vision: dict[str, Any] = field(default_factory=dict)  # снимок для журнала: vision, jpeg_bytes, shot_px
+    source: str = "typed"  # typed | voice — сказан голосом: мозгу подсказка «ответ будет озвучен»
 
     def note_tool(self, ev: Status) -> None:
         """Вызов инструмента мозга: начало и конец одного вызова (один key) считаются один раз."""
@@ -104,10 +105,16 @@ class Core:
                 log.exception("core: brain.cancel упал")
 
     def handle(
-        self, text: str, ctx: Any, dry: bool = False, hotkey_ms: float | None = None
+        self,
+        text: str,
+        ctx: Any,
+        dry: bool = False,
+        hotkey_ms: float | None = None,
+        source: str = "typed",
     ) -> Iterator[Event]:
-        """События одного запроса. dry — решение без действия ПК; hotkey_ms — «хоткей → окно» для журнала."""
-        run = _Run(text=text, t0=time.perf_counter(), hotkey_ms=hotkey_ms)
+        """События одного запроса. dry — решение без действия ПК; hotkey_ms — «хоткей → окно» для журнала;
+        source — "typed" | "voice" (сказан голосом: мозгу — подсказка говорить коротко, в журнал — source)."""
+        run = _Run(text=text, t0=time.perf_counter(), hotkey_ms=hotkey_ms, source=source)
         # свой флаг у каждого запроса: новый handle() не снимает отмену с ещё не закончившегося старого
         self._cancel = run.cancel
         steps = self._steps(run, text, ctx, dry)
@@ -230,6 +237,8 @@ class Core:
                 return
             images.append(url)
         extra: dict[str, Any] = {"images": images} if images else {}  # без снимка — вызов как раньше
+        if run.source == "voice":
+            extra["spoken"] = True  # ответ будет озвучен — мозгу подсказка говорить коротко
         for ev in self.brain.ask(route.text, ctx, deep=deep, **extra):
             if isinstance(ev, Level):
                 continue  # уровень уже объявлен
@@ -334,6 +343,8 @@ class Core:
         if run.tools:
             record["tools"] = list(run.tools)
         record.update(run.vision)  # без картинки и без заголовка окна
+        if run.source == "voice":
+            record["source"] = "voice"
         try:
             self.journal.write(record)
         except Exception:

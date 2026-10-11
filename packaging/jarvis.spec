@@ -21,7 +21,13 @@ import shutil
 import sys
 import tomllib
 
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
 
 IS_WIN = sys.platform == "win32"
 ROOT = os.path.dirname(os.path.abspath(SPECPATH))
@@ -44,6 +50,8 @@ DATA_FILES = [
     (os.path.join(ROOT, "bench", "phrases.ru.jsonl"), "bench"),
     # инвентарь приложений для `jarvis-cli bench` (jarvis.bench берёт его через app_root(), а не с ПК)
     (os.path.join(ROOT, "tests", "fixtures", "apps.json"), os.path.join("tests", "fixtures")),
+    # голос (S9): скачивание моделей в <data>\models — модели в бандл не кладём
+    (os.path.join(ROOT, "scripts", "get_voice_models.ps1"), "scripts"),
 ]
 datas = []
 for src, dest in DATA_FILES:
@@ -69,12 +77,26 @@ try:
 except Exception as e:  # PackageNotFoundError/StopIteration: сборка из дерева без `uv sync`
     _warn(f"no jarvis package metadata ({e!r}); version will be '?'")
 
+# Голос (S9). sherpa-onnx: расширение _sherpa_onnx и нативные onnxruntime + sherpa-onnx-c-api лежат в
+# sherpa_onnx/lib (DLL туда кладёт пакет sherpa-onnx-core) — берём их с тем же относительным путём, иначе
+# расширение не найдёт зависимости. PortAudio (_sounddevice_data/portaudio-binaries) собирает хук sounddevice
+# из pyinstaller-hooks-contrib; sounddevice и sherpa_onnx импортируются лениво — поэтому hiddenimports.
+voice_binaries = collect_dynamic_libs("sherpa_onnx")
+if not voice_binaries:
+    _warn("sherpa_onnx: no native libraries found (voice will not work)")
+
 hiddenimports = [
     *collect_submodules("jarvis"),
     *collect_submodules("pc"),
     *collect_submodules("openai_codex"),
     *collect_submodules("mcp", filter=lambda name: not name.startswith(("mcp.cli", "mcp.client.websocket"))),
     *cb_hidden,
+    *collect_submodules("sherpa_onnx", filter=lambda name: not name.endswith((".cli", ".__main__"))),
+    "sherpa_onnx.lib._sherpa_onnx",
+    "sounddevice",
+    "_sounddevice",
+    "_sounddevice_data",
+    "_cffi_backend",
 ]
 if IS_WIN:
     hiddenimports += [
@@ -180,7 +202,7 @@ def analysis(script: str) -> Analysis:
     a = Analysis(
         [os.path.join(SPECPATH, script)],
         pathex=[SRC],
-        binaries=cb_binaries,
+        binaries=cb_binaries + voice_binaries,
         datas=datas,
         hiddenimports=hiddenimports,
         hookspath=[],

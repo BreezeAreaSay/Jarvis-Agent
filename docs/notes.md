@@ -13,11 +13,13 @@
 - GitHub Actions аккаунта BreezeAreaSay заблокированы: «The job was not started because your account is locked
   due to a billing issue» (ни один прогон с 1 октября не стартовал). Windows-проверка ночью — под Wine
   (docs/wine-build.md); build.yml заработает после починки биллинга или после переноса в stonebridgeway/Jarvis.
-- Windows-линия под Wine (scripts/wine_build.sh, Windows-Python 3.12.10): pytest — 2000 прошли, 5 упали, все —
-  ограничения Wine 9.0 (junction/symlink не создаются, psutil NtQuerySystemInformation, IsProcessInJob, медленный
-  старт FastMCP ≈6 с); до исправления aaed6e7 ещё 6 тестов рук падали из-за C:\Jarvis\scripts на машине тестов —
-  на windows-latest упали бы так же. Сборка: onedir 503 МБ / 164 файла, установщик ≈112 МиБ; selftest 8/8 ✓;
-  тихая установка, ярлык, ключ Run, переустановка без автозапуска, удаление (каталог данных цел) — ✓.
+- Windows-линия под Wine (scripts/wine_build.sh, Windows-Python 3.12.10), финальный прогон на c727f17: pytest —
+  2819 прошли, 5 упали, все — ограничения Wine 9.0 (junction/symlink не создаются, psutil NtQuerySystemInformation,
+  IsProcessInJob, медленный старт FastMCP ≈6 с) — те же 5, что в первом прогоне (тогда 2000 прошли); до
+  исправления aaed6e7 ещё 6 тестов рук падали из-за C:\Jarvis\scripts на машине тестов. Сборка: onedir 533 МБ /
+  178 файлов, zip 196 МиБ, установщик 117,8 МиБ; selftest 9/9 ✓ (голос: sherpa-onnx, onnxruntime.dll и PortAudio
+  в бандле грузятся); тихая установка, ярлык, ключ Run, переустановка без автозапуска, удаление (каталог данных
+  цел) — ✓.
 - PyInstaller: «Hidden import "tzdata" not found» — безвредно: zoneinfo нужен только pydantic для полей ZoneInfo,
   в схемах MCP и в коде Jarvis их нет.
 

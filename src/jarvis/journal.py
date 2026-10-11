@@ -1,8 +1,9 @@
 """Журнал запросов: одна JSON-строка на запрос в <data>\\journal\\YYYY-MM-DD.jsonl и `jarvis stats`.
 
 Запись — в фоновом daemon-потоке: write() только кладёт запись в очередь, горячий путь не ждёт диска.
-Поля записи: ts, text (только если [journal] store_text), mode, level, reason, tool, args, ok, error,
-cancelled и тайминги в мс: hotkey_to_window, route, grammar (до начала действия), hands {cache_n, prompt_n,
+Поля записи: ts, text (только если [journal] store_text; иначе из args убираются и свободные тексты text,
+query, which), mode, level, reason, tool, args, ok, error, cancelled, tools (имена инструментов мозга, если
+были) и тайминги в мс: hotkey_to_window, route, grammar (до начала действия), hands {cache_n, prompt_n,
 prompt_ms, predicted_ms, predicted_per_second, total_ms}, exec, brain {first_token, total, new_thread, model,
 usage}, total.
 """
@@ -12,6 +13,7 @@ import logging
 import math
 import queue
 import threading
+from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,9 @@ BUDGET_HOTKEY_MS = 100.0
 PROMPT_N_WARN = 100.0
 
 LEVEL_NAMES = {"grammar": "грамматика", "hands": "руки", "brain": "GPT", "local": "локально"}
+# свободный текст человека в args (заметка памяти, текст напоминания, запрос find): без store_text — не пишем
+TEXT_ARGS = ("text", "query", "which")
+TOP_TOOLS = 5
 
 
 def journal_dir() -> Path:
@@ -87,6 +92,11 @@ class Journal:
 
             if not config.load().journal.store_text:
                 rec.pop("text", None)
+                args = rec.get("args")
+                if isinstance(args, dict):
+                    rec["args"] = {
+                        k: v for k, v in args.items() if not (k in TEXT_ARGS and isinstance(v, str))
+                    }
             path = journal_dir() / f"{_day_of(rec).isoformat()}.jsonl"
             path.parent.mkdir(parents=True, exist_ok=True)
             line = json.dumps(rec, ensure_ascii=False, default=str)
@@ -156,6 +166,12 @@ def _is_error(rec: dict[str, Any]) -> bool:
     return rec.get("ok") is False and not rec.get("cancelled")
 
 
+def _tools(rec: dict[str, Any]) -> list[str]:
+    """Имена инструментов мозга из записи (поле tools; битое — пусто)."""
+    names = rec.get("tools")
+    return [n for n in names if isinstance(n, str) and n] if isinstance(names, list) else []
+
+
 def _budget(name: str, values: list[float], limit: float) -> dict[str, Any]:
     p95 = percentile(values, 95)
     return {"name": name, "p95": p95, "limit": limit, "n": len(values), "ok": p95 is None or p95 <= limit}
@@ -185,6 +201,9 @@ def stats(days: int = 7, records: list[dict[str, Any]] | None = None) -> dict[st
     ]
     hands_recs = [r for r in recs if isinstance(r.get("hands"), dict)]
     brain_recs = [r for r in recs if r.get("level") == "brain" and isinstance(r.get("brain"), dict)]
+    brain_all = [r for r in recs if r.get("level") == "brain"]
+    brain_tools = [_tools(r) for r in brain_all]
+    tool_counts = Counter(name for names in brain_tools for name in names)
     first_new = _nums([r for r in brain_recs if r["brain"].get("new_thread") is True], "brain", "first_token")
     first_rep = _nums(
         [r for r in brain_recs if r["brain"].get("new_thread") is not True], "brain", "first_token"
@@ -222,6 +241,9 @@ def stats(days: int = 7, records: list[dict[str, Any]] | None = None) -> dict[st
             "first_token_p95_repeat": percentile(first_rep, 95),
             "n_new": len(first_new),
             "n_repeat": len(first_rep),
+            "count": len(brain_all),
+            "with_tools": _share(sum(1 for names in brain_tools if names), len(brain_all)),
+            "tools_top": tool_counts.most_common(TOP_TOOLS),
         },
         "budgets": [
             _budget("грамматика: до начала действия", grammar_ms, BUDGET_GRAMMAR_MS),
@@ -291,6 +313,11 @@ def format_stats(st: dict[str, Any], min_tokens_per_s: float | None = None) -> s
         lines.append("GPT, p95 до первых слов:")
         lines.append(f"  новый тред {fmt_ms(b['first_token_p95_new'])} (n={b['n_new']})")
         lines.append(f"  повторные  {fmt_ms(b['first_token_p95_repeat'])} (n={b['n_repeat']})")
+    if b.get("count"):
+        top = ", ".join(f"{name} {n}" for name, n in b.get("tools_top", [])) or "—"
+        lines.append(
+            f"Инструменты GPT: в {_pct(b['with_tools'])} запросов (n={b['count']}); чаще всего: {top}"
+        )
     lines.append("")
     lines.append("Бюджеты AGENTS.md (p95):")
     for bud in st["budgets"]:

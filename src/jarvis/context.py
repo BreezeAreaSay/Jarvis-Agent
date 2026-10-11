@@ -1,7 +1,9 @@
-"""Контекст запроса: окно на момент хоткея, последний объект действия, результаты find.
+"""Контекст запроса: окно на момент хоткея, последний объект действия, результаты find, последнее действие.
 
 «Последнее» (объект и результаты find) забывается через TTL_S секунд. Цель "@cur" — свежий последний объект
-(hwnd или имя), иначе окно на момент хоткея. CLI хранит контекст между вызовами в <data>\\cli_context.json.
+(hwnd или имя), иначе окно на момент хоткея. undo — последнее действие человека для «отмени» (dict с "kind" и
+"ts"; заполняет и читает jarvis.execute), тоже живёт TTL_S. CLI хранит контекст между вызовами
+в <data>\\cli_context.json.
 """
 
 import json
@@ -28,6 +30,7 @@ class Context:
     last_hwnd: int | None = None
     found: list[str] = field(default_factory=list)
     last_ts: float = 0.0
+    undo: dict[str, Any] | None = None
 
     def fresh(self, now: float | None = None) -> bool:
         """«Последнее» ещё помнится."""
@@ -61,6 +64,26 @@ class Context:
         self.found = list(paths)
         self.last_ts = time.time() if now is None else now
 
+    # --- последнее действие для «отмени» ---------------------------------------------------------
+
+    def set_undo(self, record: dict[str, Any], now: float | None = None) -> None:
+        """Запомнить последнее действие: {"kind": …, данные для отмены}; время ставится здесь."""
+        self.undo = {**record, "ts": time.time() if now is None else now}
+
+    def undo_record(self, now: float | None = None) -> dict[str, Any] | None:
+        """Последнее действие, если оно свежее (TTL_S); копия."""
+        rec = self.undo
+        if not rec:
+            return None
+        ts = rec.get("ts")
+        if not isinstance(ts, int | float) or isinstance(ts, bool):
+            return None
+        t = time.time() if now is None else now
+        return dict(rec) if t - ts <= TTL_S else None
+
+    def clear_undo(self) -> None:
+        self.undo = None
+
     # --- CLI: контекст между вызовами ----------------------------------------------------------
 
     def to_json(self) -> dict[str, Any]:
@@ -70,6 +93,7 @@ class Context:
             "last_hwnd": self.last_hwnd,
             "found": self.found,
             "last_ts": self.last_ts,
+            "undo": self.undo,
         }
 
     @classmethod
@@ -85,6 +109,9 @@ class Context:
             ctx.found = [p for p in data["found"] if isinstance(p, str)]
         if isinstance(data.get("last_ts"), int | float):
             ctx.last_ts = float(data["last_ts"])
+        undo = data.get("undo")
+        if isinstance(undo, dict) and isinstance(undo.get("kind"), str):
+            ctx.undo = undo
         return ctx
 
 
@@ -102,7 +129,7 @@ def load_cli() -> Context:
     if not isinstance(data, dict):
         return Context()
     ctx = Context.from_json(data)
-    return ctx if ctx.fresh() else Context()
+    return ctx if ctx.fresh() or ctx.undo_record() is not None else Context()
 
 
 def save_cli(ctx: Context) -> None:

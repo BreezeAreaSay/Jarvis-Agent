@@ -208,7 +208,8 @@ def volume(
 ) -> Result:
     """Ровно одно из: set — уровень 0–100; delta — изменение от текущего; mute — выключить/включить звук.
 
-    set/delta > 0 снимают mute. Уровень ограничивается 0..100.
+    set/delta > 0 снимают mute. Уровень ограничивается 0..100. data: {"level", "muted", "prev": {"level",
+    "muted"}} — prev прочитан в том же вызове COM до изменения (для «отмени»).
     """
     given = [name for name, v in (("set", set), ("delta", delta), ("mute", mute)) if v is not None]
     if len(given) != 1:
@@ -225,9 +226,10 @@ def volume(
         return denied
 
     def apply(ev: Any) -> dict[str, Any]:
+        prev = _state(ev)
         if mute is not None:
             ev.SetMute(int(mute), None)
-            return _state(ev)
+            return {**_state(ev), "prev": prev}
         if level is not None:
             new, unmute = _clamp(level), level > 0
         else:
@@ -237,7 +239,7 @@ def volume(
         ev.SetMasterVolumeLevelScalar(new / 100, None)
         if unmute:
             ev.SetMute(0, None)
-        return _state(ev)
+        return {**_state(ev), "prev": prev}
 
     state = _do(apply)
     if isinstance(state, Result):
@@ -247,3 +249,24 @@ def volume(
     if mute is False:
         return ok("Звук включён", state)
     return ok(f"Громкость {state['level']} %", state)
+
+
+def restore(level: int, muted: bool, caller: Caller = "user") -> Result:
+    """Вернуть уровень и mute одним вызовом COM (отмена «громкость 30» / «выключи звук»; policy "volume")."""
+    value = _as_int(level)
+    if value is None or not isinstance(muted, bool):
+        return fail("Громкость — число от 0 до 100")
+    denied = policy.require("volume", caller, "Вернуть прежнюю громкость?")
+    if denied:
+        return denied
+
+    def apply(ev: Any) -> dict[str, Any]:
+        prev = _state(ev)
+        ev.SetMasterVolumeLevelScalar(_clamp(value) / 100, None)
+        ev.SetMute(int(muted), None)
+        return {**_state(ev), "prev": prev}
+
+    state = _do(apply)
+    if isinstance(state, Result):
+        return state
+    return ok(f"Громкость {state['level']} %" + (", звук выключен" if state["muted"] else ""), state)

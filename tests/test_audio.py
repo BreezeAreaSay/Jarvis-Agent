@@ -5,8 +5,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from pc import audio
-from pc.result import Caller
+from pc import audio, policy
+from pc.result import Caller, Result
 
 
 class FakeEndpoint:
@@ -102,19 +102,24 @@ def test_new_endpoint_per_operation(com: FakeAudioApi) -> None:
     assert com.endpoints == 3
 
 
+def now(r: Result) -> dict:
+    """Состояние после действия — без prev (prev проверяется отдельно)."""
+    return {k: v for k, v in r.data.items() if k != "prev"}
+
+
 def test_set_unmutes_and_clamps(com: FakeAudioApi) -> None:
     com.muted = True
     r = audio.volume(set=50)
     assert r.ok
     assert r.text == "Громкость 50 %"
-    assert r.data == {"level": 50, "muted": False}
+    assert r.data == {"level": 50, "muted": False, "prev": {"level": 30, "muted": True}}
     assert audio.volume(set=150).data["level"] == 100
     assert audio.volume(set=-5).data["level"] == 0
 
 
 def test_set_zero_keeps_mute(com: FakeAudioApi) -> None:
     com.muted = True
-    assert audio.volume(set=0).data == {"level": 0, "muted": True}
+    assert now(audio.volume(set=0)) == {"level": 0, "muted": True}
 
 
 def test_delta(com: FakeAudioApi) -> None:
@@ -123,15 +128,51 @@ def test_delta(com: FakeAudioApi) -> None:
     com.level = 0.10
     assert audio.volume(delta=-20).data["level"] == 0
     com.level, com.muted = 0.30, True
-    assert audio.volume(delta=-5).data == {"level": 25, "muted": True}
-    assert audio.volume(delta=5).data == {"level": 30, "muted": False}
+    assert now(audio.volume(delta=-5)) == {"level": 25, "muted": True}
+    r = audio.volume(delta=5)
+    assert r.data == {"level": 30, "muted": False, "prev": {"level": 25, "muted": True}}
 
 
 def test_mute_unmute(com: FakeAudioApi) -> None:
     r = audio.volume(mute=True)
     assert (r.ok, r.text, com.muted) == (True, "Звук выключен", True)
+    assert r.data["prev"] == {"level": 30, "muted": False}  # для «отмени»: как было до действия
     r = audio.volume(mute=False)
     assert (r.ok, r.text, com.muted) == (True, "Звук включён", False)
+    assert r.data["prev"] == {"level": 30, "muted": True}
+
+
+# --- отмена: вернуть уровень и mute одним вызовом -----------------------------------------------------
+
+
+def test_restore_level_and_mute_in_one_call(com: FakeAudioApi) -> None:
+    com.level, com.muted = 0.8, False
+    r = audio.restore(30, True)
+    assert r.ok and r.text == "Громкость 30 %, звук выключен"
+    assert r.data == {"level": 30, "muted": True, "prev": {"level": 80, "muted": False}}
+    assert (round(com.level * 100), com.muted) == (30, True)
+    assert com.endpoints == 1  # одна операция COM, без промежуточного «звук включён»
+    r = audio.restore(55, False, caller="user")
+    assert r.ok and r.text == "Громкость 55 %" and com.muted is False
+
+
+@pytest.mark.parametrize(("level", "muted"), [(True, False), ("громко", False), (30, 1), (None, False)])
+def test_restore_bad_args(com: FakeAudioApi, level: object, muted: object) -> None:
+    assert not audio.restore(level, muted).ok  # type: ignore[arg-type]
+    assert com.endpoints == 0
+
+
+def test_restore_clamps_and_asks_policy(com: FakeAudioApi, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert audio.restore(150, False).data["level"] == 100
+    asked: list[str] = []
+
+    def require(action: str, caller: str, summary: str, details: str = "") -> Result | None:
+        asked.append(action)
+        return Result(False, "стоп")
+
+    monkeypatch.setattr(policy, "require", require)
+    assert audio.restore(10, False).text == "стоп"
+    assert asked == ["volume"]
 
 
 @pytest.mark.parametrize(

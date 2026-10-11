@@ -35,7 +35,8 @@ FG_POLL_S = 0.015
 LABEL_MAX = 60
 CUR = "@cur"
 SELF_TEXT = procs.SELF_TEXT
-ACTIONS = ("minimize", "maximize", "restore", "minimize_all")
+# undo_minimize_all — только для «отмени» после «сверни все» (у мозга в pc.mcp такого действия нет)
+ACTIONS = ("minimize", "maximize", "restore", "minimize_all", "undo_minimize_all")
 
 
 def clean_text(text: str) -> str:
@@ -334,7 +335,8 @@ def close_target(target: str | int, caller: Caller) -> Result:
 
 
 def window_action(action: str, target: str | int | None, caller: Caller) -> Result:
-    """Свернуть/развернуть/восстановить окно или свернуть все (policy "window")."""
+    """Свернуть/развернуть/восстановить окно, свернуть все или вернуть свёрнутые «свернуть все»
+    (undo_minimize_all) — policy "window"."""
     if action not in ACTIONS:
         return fail(f"Неизвестное действие с окном: {action}")
     a = api()
@@ -348,6 +350,16 @@ def window_action(action: str, target: str | int | None, caller: Caller) -> Resu
             log.warning("свернуть все окна: %s", e)
             return fail("Не удалось свернуть все окна.")
         return ok("Свернул все окна")
+    if action == "undo_minimize_all":
+        denied = policy.require("window", caller, "Вернуть свёрнутые окна?")
+        if denied is not None:
+            return denied
+        try:
+            a.undo_minimize_all()
+        except Exception as e:
+            log.warning("вернуть свёрнутые окна: %s", e)
+            return fail("Не удалось вернуть окна.")
+        return ok("Вернул окна")
     win = _target(target, caller)
     if isinstance(win, Result):
         return win
@@ -404,6 +416,13 @@ def _minimize_all_com() -> None:
     import win32com.client
 
     win32com.client.Dispatch("Shell.Application").MinimizeAll()
+
+
+def _undo_minimize_all_com() -> None:
+    """Shell.Application.UndoMinimizeALL — вернуть окна, свёрнутые MinimizeAll (STA-поток, apps.run_sta)."""
+    import win32com.client
+
+    win32com.client.Dispatch("Shell.Application").UndoMinimizeALL()
 
 
 class _Api:
@@ -608,6 +627,9 @@ class _Api:
 
     def minimize_all(self) -> None:
         apps.run_sta(_minimize_all_com)
+
+    def undo_minimize_all(self) -> None:
+        apps.run_sta(_undo_minimize_all_com)
 
 
 _api: Any = None

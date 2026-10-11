@@ -58,6 +58,23 @@
 {"text": "открой второй", "level": "grammar", "tool": "open_found", "args": {"index": 2}, "ctx": {"found": ["C:\\Users\\me\\Documents\\смета.xlsx", "C:\\Users\\me\\Desktop\\смета-старая.xlsx", "C:\\Users\\me\\Downloads\\смета (1).xlsx"]}}
 {"text": "открой последний", "level": "grammar", "tool": "open_found", "args": {"index": -1}, "ctx": {"found": ["C:\\Users\\me\\Documents\\Проекты", "C:\\Users\\me\\Desktop\\проекты 2025"]}}
 {"text": "открой первый файл", "level": "grammar", "tool": "open_found", "args": {"index": 1}, "ctx": {"found": ["C:\\Users\\me\\Documents\\договор аренды.pdf", "C:\\Users\\me\\Downloads\\договор аренды (скан).pdf"]}}
+{"text": "отмени", "level": "grammar", "tool": "undo", "args": {}}
+{"text": "верни как было", "level": "grammar", "tool": "undo", "args": {}}
+{"text": "верни громкость", "level": "grammar", "tool": "undo", "args": {}}
+{"text": "верни все окна", "level": "grammar", "tool": "undo", "args": {}}
+{"text": "напомни через 10 минут вынуть пиццу", "level": "grammar", "tool": "remind", "args": {"text": "вынуть пиццу"}}
+{"text": "напомни мне позвонить маме в 18:30", "level": "grammar", "tool": "remind", "args": {"text": "позвонить маме"}}
+{"text": "напомни завтра в 8:15 про встречу", "level": "grammar", "tool": "remind", "args": {"text": "про встречу"}}
+{"text": "напомни через полчаса проверить духовку", "level": "grammar", "tool": "remind", "args": {"text": "проверить духовку"}}
+{"text": "поставь таймер на 5 минут", "level": "grammar", "tool": "remind", "args": {"text": "таймер на 5 минут"}}
+{"text": "какие у меня напоминания", "level": "grammar", "tool": "reminders", "args": {}}
+{"text": "отмени последнее напоминание", "level": "grammar", "tool": "cancel_reminder", "args": {"which": "последнее"}}
+{"text": "отмени напоминание 2", "level": "grammar", "tool": "cancel_reminder", "args": {"which": 2}}
+{"text": "запомни что я пью кофе без сахара", "level": "grammar", "tool": "remember", "args": {"text": "я пью кофе без сахара"}}
+{"text": "что ты обо мне помнишь", "level": "grammar", "tool": "memory", "args": {}}
+{"text": "забудь про кофе", "level": "grammar", "tool": "forget", "args": {"which": "кофе"}}
+{"text": "забудь всё", "level": "grammar", "tool": "forget", "args": {"which": "все"}}
+{"text": "что ты умеешь", "level": "grammar", "tool": "help", "args": {}}
 {"text": "открой фотошоп", "level": "hands", "tool": "open"}
 {"text": "запусти майнкрафт", "level": "hands", "tool": "open"}
 {"text": "открой ютуб", "level": "hands", "tool": "open"}

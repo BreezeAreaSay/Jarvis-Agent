@@ -3,12 +3,15 @@
 handle() отдаёт Level → (Status | TextChunk | Items)* → ровно один Done последним — даже при исключении
 (traceback — в лог). Если руки вернули ask_gpt или ошибку, уровень меняется: второе событие
 Level("brain" | "local", "hands→…"). Тайминги (мс) — в Done.timings и в журнал (очередь, запись в фоне).
+Инструменты мозга (Status kind="tool", по одному на key) — в журнал полем tools: только имена, без аргументов
+(в аргументах бывают пути и тексты).
 Соседние модули (router, execute) импортируются лениво — в Core(), не на первом запросе;
 в handle() это уже поиск в sys.modules.
 """
 
 import dataclasses
 import logging
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -23,6 +26,10 @@ NEEDS_GPT = "Это нужно GPT, а включён локальный реж�
 CANCELLED = "Отменено"
 HANDS_TIMINGS = ("cache_n", "prompt_n", "prompt_ms", "predicted_ms", "predicted_per_second", "total_ms")
 JOURNAL_TIMINGS = ("hotkey_to_window", "route", "grammar", "hands", "exec", "brain", "total")
+TOOLS_MAX = 50  # имён инструментов мозга в одной записи журнала
+# строка «⚙ имя: аргументы» (brain.tool_label); «⚙ буфер: …» — clipboard_set
+_TOOL_LABEL = re.compile(r"⚙\s*([^\s:]+)")
+_TOOL_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
 
 
 def _ms(t0: float) -> float:
@@ -43,6 +50,19 @@ class _Run:
     args: dict[str, Any] = field(default_factory=dict)
     timings: dict[str, Any] = field(default_factory=dict)
     cancel: threading.Event = field(default_factory=threading.Event)
+    tools: list[str] = field(default_factory=list)  # инструменты мозга по порядку вызова
+    tool_keys: set[str] = field(default_factory=set)
+
+    def note_tool(self, ev: Status) -> None:
+        """Вызов инструмента мозга: начало и конец одного вызова (один key) считаются один раз."""
+        if ev.key:
+            if ev.key in self.tool_keys:
+                return
+            self.tool_keys.add(ev.key)
+        elif ev.done:
+            return
+        if len(self.tools) < TOOLS_MAX:
+            self.tools.append(tool_name(ev.text))
 
 
 class Core:
@@ -191,6 +211,8 @@ class Core:
                 run.timings["brain"] = brain_timings(ev.timings)
                 yield ev
                 return
+            if isinstance(ev, Status) and ev.kind == "tool":
+                run.note_tool(ev)
             yield ev
         yield Done(ok=False, text="GPT не ответил")
 
@@ -232,10 +254,21 @@ class Core:
             "cancelled": done.cancelled,
         }
         record.update({k: done.timings[k] for k in JOURNAL_TIMINGS if k in done.timings})
+        if run.tools:
+            record["tools"] = list(run.tools)
         try:
             self.journal.write(record)
         except Exception:
             log.exception("core: запись журнала не удалась")
+
+
+def tool_name(label: str) -> str:
+    """Имя инструмента из строки «⚙ find_files: vulkan» (аргументы отбрасываются); непонятное — «?»."""
+    m = _TOOL_LABEL.match(label.strip())
+    name = m.group(1) if m else ""
+    if name == "буфер":
+        return "clipboard_set"
+    return name if _TOOL_NAME.fullmatch(name) else "?"
 
 
 def brain_timings(raw: dict[str, Any]) -> dict[str, Any]:

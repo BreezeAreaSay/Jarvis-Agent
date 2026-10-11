@@ -3,19 +3,28 @@
 reply / clarify / ask_gpt не исполняются, а возвращаются наверх. Решение РУК исполняется, только если цель
 взята из текста команды или равна "@cur" (AGENTS.md, «Пути, цели и недоверенные данные»): заголовок окна —
 недоверенный текст и может содержать «команды». open и focus взаимозаменяемы для приложений и папок.
+
+Отмена: каждое удачное действие пользователя запоминается в ctx.undo (одно, последнее; свежесть — TTL
+контекста). Обратимые — громкость (прежний уровень и mute из Result.data["prev"]), свернуть/развернуть окно
+(restore того же hwnd), свернуть все (UndoMinimizeALL), напоминание и заметка памяти; остальное — «Это не
+отменить».
+Напоминания, память и помощь — только у грамматики, без модели; это не действия ПК (в policy их нет).
 """
 
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import PureWindowsPath
 from typing import Any, Literal
 
 from rapidfuzz import fuzz
 
+from jarvis import memory, reminders
 from jarvis.context import CUR, Context
+from jarvis.memory import StoreError
+from jarvis.reminders import plural
 from pc import apps, audio, files, media, procs, system, windows
 from pc.result import Result
 from pc.windows import WindowInfo
@@ -27,7 +36,11 @@ Source = Literal["grammar", "hands"]
 
 FUZZ_MIN = 80.0
 HANDS_ACTIONS = {"open", "close", "focus", "win", "find", "vol", "media", "kill"}
-GRAMMAR_ACTIONS = HANDS_ACTIONS | {"open_found", "lock", "clock"}
+# только у грамматики, без модели: отмена, напоминания, память, помощь
+LOCAL_ACTIONS = {"undo", "remind", "reminders", "cancel_reminder", "remember", "forget", "memory", "help"}
+GRAMMAR_ACTIONS = HANDS_ACTIONS | {"open_found", "lock", "clock"} | LOCAL_ACTIONS
+# действия, которые что-то меняют на ПК: удачное — «последнее действие» для «отмени»
+STATEFUL = {"open", "close", "focus", "win", "vol", "media", "kill", "open_found", "lock"}
 # поле с целью: оно должно быть взято из текста команды (или "@cur")
 TARGET_KEY = {
     "open": "target",
@@ -37,7 +50,10 @@ TARGET_KEY = {
     "find": "query",
     "kill": "name",
 }
-REQUIRED = {**TARGET_KEY, "win": "action", "media": "action", "open_found": "index"}
+REQUIRED = {
+    **TARGET_KEY, "win": "action", "media": "action", "open_found": "index",
+    "remember": "text", "forget": "which",
+}  # fmt: skip
 
 # слова темы: без них media, vol и win без цели не исполняются; для "@cur" — глагол действия
 TOPIC: dict[str, tuple[str, ...]] = {
@@ -72,8 +88,27 @@ MONTHS = (
     "января", "февраля", "марта", "апреля", "мая", "июня",
     "июля", "августа", "сентября", "октября", "ноября", "декабря",
 )  # fmt: skip
-# действия без ответа, который надо читать: окно можно спрятать
+# действия без ответа, который надо читать: окно можно спрятать (списки и помощь — нет)
 AUTOHIDE = {"open", "close", "focus", "win", "vol", "media", "lock", "open_found", "kill"}
+AUTOHIDE |= {"undo", "remind", "cancel_reminder", "remember", "forget"}
+NOTHING_TO_UNDO = "Нечего отменять"
+CANT_UNDO = "Это не отменить"
+ASK_WHEN = (
+    "Во сколько напомнить? Например: «напомни завтра в 9 позвонить маме» или «напомни через 10 минут …»"
+)
+HELP_TEXT = """Частые команды выполняю сразу, без модели; остальное разбирает локальная модель, \
+вопросы и тексты — GPT.
+• Окна: «сверни телегу», «разверни на весь экран», «закрой его», «сверни все окна».
+• Приложения и папки: «открой хром», «переключись на ворд», «открой загрузки».
+• Звук и музыка: «громкость 30», «тише», «выключи звук», «пауза», «следующий трек».
+• Файлы: «найди файл смета», потом «открой второй».
+• Напоминания: «напомни через 10 минут вынуть пиццу», «таймер на 5 минут», «какие напоминания», \
+«отмени напоминание 1».
+• Память: «запомни, что я пью кофе без сахара», «что ты обо мне помнишь», «забудь про кофе». \
+Память видит GPT — пароли туда не пиши.
+• Отмена: «отмени» — вернёт громкость, окна, напоминание или заметку как было.
+• Префиксы: «gpt: …» — спросить GPT, «думай: …» — подумать подольше, «локально: …» — без облака.
+• Окно: Enter — выполнить, Esc — отменить или скрыть, ↑/↓ — прошлые команды, цифра и Enter — пункт списка."""
 
 _SCHEME = re.compile(r"^[a-z][a-z0-9+.\-]+:", re.IGNORECASE)  # от двух букв: «C:» — это диск, не схема
 _DRIVE = re.compile(r"^[a-z]:", re.IGNORECASE)
@@ -223,11 +258,15 @@ def run(
         return Outcome("clarify", True, "Какое окно?")
     if dry:
         return Outcome("done", True, _dry_text(tool, shown), action=tool)
+    before = ctx.undo
     try:
-        return _HANDLERS[tool](args, ctx)
+        out = _HANDLERS[tool](args, ctx)
     except Exception as e:
         log.exception("execute: %s упало", tool)
         return Outcome("done", False, f"Не вышло: {e}"[:200], action=tool)
+    if out.ok and out.kind == "done" and tool in STATEFUL and ctx.undo is before:
+        ctx.set_undo({"kind": "none", "action": tool})  # последнее действие необратимо: «Это не отменить»
+    return out
 
 
 # --- действия ----------------------------------------------------------------------------------------
@@ -307,10 +346,15 @@ def _close(args: dict[str, Any], ctx: Context) -> Outcome:
 
 def _win(args: dict[str, Any], ctx: Context) -> Outcome:
     target = args.get("target")
+    action = args["action"]
     info = _find_window(target) if target is not None else None
-    r = windows.window_action(args["action"], target, "user")
+    r = windows.window_action(action, target, "user")
     if r.ok and info is not None:
         ctx.remember(info.title, "window", info.hwnd)
+    if r.ok and action == "minimize_all":
+        ctx.set_undo({"kind": "minimize_all"})
+    elif r.ok and action in ("minimize", "maximize") and info is not None:
+        ctx.set_undo({"kind": "window", "action": action, "hwnd": info.hwnd})
     return _done(r, "win")
 
 
@@ -325,7 +369,11 @@ def _find(args: dict[str, Any], ctx: Context) -> Outcome:
 
 def _vol(args: dict[str, Any], ctx: Context) -> Outcome:
     kwargs = {k: args[k] for k in ("set", "delta", "mute") if args.get(k) is not None}
-    return _done(audio.volume(**kwargs, caller="user"), "vol")
+    r = audio.volume(**kwargs, caller="user")
+    prev = r.data.get("prev") if r.ok and isinstance(r.data, dict) else None
+    if isinstance(prev, dict) and isinstance(prev.get("level"), int) and isinstance(prev.get("muted"), bool):
+        ctx.set_undo({"kind": "volume", "level": prev["level"], "muted": prev["muted"]})
+    return _done(r, "vol")
 
 
 def _media(args: dict[str, Any], ctx: Context) -> Outcome:
@@ -374,6 +422,194 @@ def _clock(args: dict[str, Any], ctx: Context) -> Outcome:
     return Outcome("done", True, text, action="clock")
 
 
+# --- отмена ------------------------------------------------------------------------------------------
+
+
+def _undo(args: dict[str, Any], ctx: Context) -> Outcome:
+    """Вернуть последнее действие как было; удачно — забыть его (вторая «отмени» — «Нечего отменять»)."""
+    rec = ctx.undo_record()
+    if rec is None:
+        return Outcome("done", False, NOTHING_TO_UNDO, action="undo")
+    fn = _UNDO.get(str(rec.get("kind")))
+    if fn is None:
+        return Outcome("done", False, CANT_UNDO, action="undo")
+    try:
+        out = fn(rec)
+    except StoreError as e:
+        return Outcome("done", False, str(e), action="undo")
+    if out.ok:
+        ctx.clear_undo()
+    return out
+
+
+def _int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _undone(text: str) -> Outcome:
+    return Outcome("done", True, text, autohide=True, action="undo")
+
+
+def _undo_volume(rec: dict[str, Any]) -> Outcome:
+    level, muted = _int(rec.get("level")), rec.get("muted")
+    if level is None or not isinstance(muted, bool):
+        return Outcome("done", False, CANT_UNDO, action="undo")
+    r = audio.restore(level, muted, caller="user")
+    if not r.ok:
+        return _done(r, "undo")
+    return _undone(f"Вернул громкость {level} %" + (", звук выключен" if muted else ""))
+
+
+def _undo_window(rec: dict[str, Any]) -> Outcome:
+    hwnd = _int(rec.get("hwnd"))
+    if hwnd is None:
+        return Outcome("done", False, CANT_UNDO, action="undo")
+    return _done(windows.window_action("restore", hwnd, "user"), "undo")
+
+
+def _undo_minimize_all(rec: dict[str, Any]) -> Outcome:
+    return _done(windows.window_action("undo_minimize_all", None, "user"), "undo")
+
+
+def _undo_reminder_add(rec: dict[str, Any]) -> Outcome:
+    gone = reminders.cancel_ids([str(rec.get("id"))])
+    if not gone:
+        return Outcome("done", False, "Напоминание уже сработало или отменено", action="undo")
+    return _undone(f"Отменил напоминание: {gone[0].text}")
+
+
+def _undo_reminder_cancel(rec: dict[str, Any]) -> Outcome:
+    items = rec.get("items")
+    back = reminders.restore(items if isinstance(items, list) else [])
+    if not back:
+        return Outcome("done", False, "Эти напоминания уже есть", action="undo")
+    if len(back) == 1:
+        return _undone(f"Вернул напоминание {reminders.format_due(back[0].due_ts)}: {back[0].text}")
+    return _undone(f"Вернул {len(back)} {plural(len(back), ('напоминание', 'напоминания', 'напоминаний'))}")
+
+
+def _undo_memory_add(rec: dict[str, Any]) -> Outcome:
+    gone = memory.forget_ids([str(rec.get("id"))])
+    if not gone:
+        return Outcome("done", False, "Этой заметки уже нет", action="undo")
+    return _undone(f"Забыл: {gone[0].text}")
+
+
+def _undo_memory_forget(rec: dict[str, Any]) -> Outcome:
+    items = rec.get("items")
+    back = memory.restore(items if isinstance(items, list) else [])
+    if not back:
+        return Outcome("done", False, "Эти заметки уже есть", action="undo")
+    if len(back) == 1:
+        return _undone(f"Вспомнил: {back[0].text}")
+    return _undone(f"Вспомнил {len(back)} {plural(len(back), ('заметку', 'заметки', 'заметок'))}")
+
+
+_UNDO: dict[str, Callable[[dict[str, Any]], Outcome]] = {
+    "volume": _undo_volume,
+    "window": _undo_window,
+    "minimize_all": _undo_minimize_all,
+    "reminder_add": _undo_reminder_add,
+    "reminder_cancel": _undo_reminder_cancel,
+    "memory_add": _undo_memory_add,
+    "memory_forget": _undo_memory_forget,
+}  # «none» и неизвестное — «Это не отменить»
+
+
+# --- напоминания -------------------------------------------------------------------------------------
+
+
+def _reminder_lines(items: list[reminders.Reminder]) -> str:
+    """Строки «2. завтра в 8:15 — позвонить маме»; номер — как в общем списке (для «отмени напоминание 2»)."""
+    order = {r.id: i for i, r in enumerate(reminders.pending(), 1)}
+    return "\n".join(
+        f"{order.get(r.id, i)}. {reminders.format_due(r.due_ts)} — {r.text}" for i, r in enumerate(items, 1)
+    )
+
+
+def _remind(args: dict[str, Any], ctx: Context) -> Outcome:
+    due = args.get("due")
+    if due is None:
+        return Outcome("clarify", True, ASK_WHEN, action="remind")
+    text = str(args.get("text") or "").strip()
+    try:
+        item = reminders.add(text, due)
+    except StoreError as e:
+        return Outcome("done", False, str(e), action="remind")
+    ctx.set_undo({"kind": "reminder_add", "id": item.id})
+    tail = f": {item.text}" if text else ""
+    return Outcome("done", True, f"Напомню {reminders.format_due(item.due_ts)}{tail}", [], True, "remind")
+
+
+def _reminders(args: dict[str, Any], ctx: Context) -> Outcome:
+    items = reminders.pending()
+    if not items:
+        return Outcome("done", True, "Напоминаний нет", action="reminders")
+    return Outcome("done", True, "Напоминания:\n" + _reminder_lines(items), action="reminders")
+
+
+def _cancel_reminder(args: dict[str, Any], ctx: Context) -> Outcome:
+    try:
+        removed, candidates = reminders.cancel(args.get("which"))
+    except StoreError as e:
+        return Outcome("done", False, str(e), action="cancel_reminder")
+    if candidates:
+        question = "Какое отменить? Скажи номер, например «отмени напоминание 1»:\n"
+        return Outcome("clarify", True, question + _reminder_lines(candidates), action="cancel_reminder")
+    if not removed:
+        text = "Не нашёл такого напоминания" if reminders.pending() else "Напоминаний нет"
+        return Outcome("done", False, text, action="cancel_reminder")
+    ctx.set_undo({"kind": "reminder_cancel", "items": [asdict(r) for r in removed]})
+    n = len(removed)
+    if n == 1:
+        text = f"Отменил напоминание {reminders.format_due(removed[0].due_ts)}: {removed[0].text}"
+    else:
+        text = f"Отменил {n} {plural(n, ('напоминание', 'напоминания', 'напоминаний'))}"
+    return Outcome("done", True, text, [], True, "cancel_reminder")
+
+
+# --- память и помощь ---------------------------------------------------------------------------------
+
+
+def _remember(args: dict[str, Any], ctx: Context) -> Outcome:
+    try:
+        item, added = memory.remember(str(args["text"]))
+    except StoreError as e:
+        return Outcome("done", False, str(e), action="remember")
+    if not added:
+        return Outcome("done", True, f"Это я уже помню: {item.text}", [], True, "remember")
+    ctx.set_undo({"kind": "memory_add", "id": item.id})
+    return Outcome("done", True, f"Запомнил: {item.text}", [], True, "remember")
+
+
+def _forget(args: dict[str, Any], ctx: Context) -> Outcome:
+    try:
+        gone = memory.forget(args["which"])
+    except StoreError as e:
+        return Outcome("done", False, str(e), action="forget")
+    if not gone:
+        text = "Не нашёл такого в памяти" if memory.items() else "Я и так ничего о тебе не помню"
+        return Outcome("done", False, text, action="forget")
+    ctx.set_undo({"kind": "memory_forget", "items": [asdict(i) for i in gone]})
+    n = len(gone)
+    text = f"Забыл: {gone[0].text}" if n == 1 else f"Забыл {n} {plural(n, ('заметку', 'заметки', 'заметок'))}"
+    return Outcome("done", True, text, [], True, "forget")
+
+
+def _memory(args: dict[str, Any], ctx: Context) -> Outcome:
+    items = memory.items()
+    if not items:
+        return Outcome(
+            "done", True, "Я пока ничего о тебе не помню. Скажи: «запомни, что …»", action="memory"
+        )
+    lines = "\n".join(f"{i}. {item.text}" for i, item in enumerate(items, 1))
+    return Outcome("done", True, f"Я помню:\n{lines}\nЗабыть: «забудь 2» или «забудь всё».", action="memory")
+
+
+def _help(args: dict[str, Any], ctx: Context) -> Outcome:
+    return Outcome("done", True, HELP_TEXT, action="help")
+
+
 _HANDLERS: dict[str, Callable[[dict[str, Any], Context], Outcome]] = {
     "open": _open,
     "close": _close,
@@ -386,4 +622,12 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], Context], Outcome]] = {
     "open_found": _open_found,
     "lock": _lock,
     "clock": _clock,
+    "undo": _undo,
+    "remind": _remind,
+    "reminders": _reminders,
+    "cancel_reminder": _cancel_reminder,
+    "remember": _remember,
+    "forget": _forget,
+    "memory": _memory,
+    "help": _help,
 }

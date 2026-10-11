@@ -24,6 +24,8 @@ from pc.windows import WindowInfo
 CORPUS = Path(__file__).resolve().parents[1] / "bench" / "phrases.ru.jsonl"
 HANDS_TOOLS = {"open", "close", "focus", "win", "find", "vol", "media", "kill", "reply", "clarify", "ask_gpt"}
 GRAMMAR_TOOLS = {"open", "close", "focus", "win", "find", "vol", "media", "open_found", "lock", "clock"}
+# только у грамматики: отмена, напоминания, память, помощь
+GRAMMAR_TOOLS |= {"undo", "remind", "reminders", "cancel_reminder", "remember", "forget", "memory", "help"}
 
 
 def load() -> list[dict[str, Any]]:
@@ -57,11 +59,13 @@ def inventory(apps_fixture: list[dict[str, str]]) -> Any:
 
 def test_corpus_shape() -> None:
     levels = Counter(p["level"] for p in PHRASES)
-    assert levels == {"grammar": 60, "hands": 60, "brain": 30}
+    assert levels == {"grammar": 77, "hands": 60, "brain": 30}
     texts = [p["text"] for p in PHRASES]
     assert (
-        len(set(zip(texts, [json.dumps(p.get("ctx"), sort_keys=True) for p in PHRASES], strict=True))) == 150
+        len(set(zip(texts, [json.dumps(p.get("ctx"), sort_keys=True) for p in PHRASES], strict=True))) == 167
     )
+    # новые команды грамматики (отмена, напоминания, память, помощь) — в корпусе каждая
+    assert GRAMMAR_TOOLS - {p.get("tool") for p in PHRASES if p["level"] == "grammar"} == set()
     for p in PHRASES:
         assert set(p) <= {"text", "level", "tool", "args", "ctx"}, p
         assert p["text"] == p["text"].strip() and p["text"], p
@@ -84,6 +88,19 @@ def test_grammar_phrases_are_caught() -> None:
         if got != (p["tool"], p["args"]):
             bad.append(f"{p['text']!r}: ждали {p['tool']} {p['args']}, получили {hit}")
     assert not bad, "\n".join(bad)
+
+
+def test_reminder_phrases_have_future_time() -> None:
+    """remind из корпуса: время разобрано и оно в будущем.
+
+    В args корпуса только текст: время зависит от «сейчас».
+    """
+    now = time.time()
+    for p in PHRASES:
+        if p.get("tool") == "remind":
+            hit = grammar.match(p["text"], make_ctx(p.get("ctx")))
+            assert hit is not None and isinstance(hit.args.get("due"), float), p["text"]
+            assert now < hit.args["due"] <= now + 2 * 86400, p["text"]
 
 
 def test_no_false_positives() -> None:

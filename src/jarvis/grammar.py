@@ -2,20 +2,24 @@
 
 `match(text, ctx) -> GrammarHit | None`; action и args — из «Словаря инструментов» (docs/architecture.md):
 open{target, kind}, close{target}, focus{target}, win{action, target?}, find{query, kind},
-vol{set|delta|mute}, media{action}, open_found{index}, lock{}, clock{what}.
+vol{set|delta|mute}, media{action}, open_found{index}, lock{}, clock{what}; только у грамматики (без модели,
+не действия ПК, кроме undo): undo{}, remind{text, due}, reminders{}, cancel_reminder{which?},
+remember{text}, forget{which}, memory{}, help{}.
 
 Главный принцип: ложное срабатывание хуже промаха. Всё, в чём нет уверенности, — None, и команду разбирают
 руки: приложение ниже порога apps.resolve, «его» без цели, номер вне результатов find, вопрос, несколько
 шагов, лишние слова. Сопоставление — fullmatch по нормализованной строке (нижний регистр, ё → е, без
 пунктуации и вежливых слов); свободный текст (запрос find) берётся из исходной строки с теми же позициями —
-с регистром и «ё».
+с регистром и «ё»; текст напоминания и заметки памяти — из исходной строки вместе со знаками препинания.
 """
 
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from jarvis import reminders
 from jarvis.context import CUR, Context
 from pc import apps
 
@@ -29,8 +33,9 @@ class GrammarHit:
 
 # --- нормализация --------------------------------------------------------------------------------------
 
-# точка и двоеточие — только в конце слова (в «отчёт.docx» точка остаётся); тире между словами
-_PUNCT = re.compile(r"[.:](?=\s|$)|[,!?;…\"«»“”„()\[\]]|\s[-–—]+(?=\s)")
+# точка и двоеточие — только в конце слова (в «отчёт.docx» точка остаётся); запятая — кроме «1,5»; тире
+# между словами
+_PUNCT = re.compile(r"[.:](?=\s|$)|(?<!\d),|,(?!\d)|[!?;…\"«»“”„()\[\]]|\s[-–—]+(?=\s)")
 _POLITE = re.compile(
     r"(?<!\S)(?:пожалуйста|пожалуста|плиз|пжлст|пж|джарвис|jarvis)(?!\S)|(?<=[а-я])-ка(?!\S)"
 )
@@ -164,6 +169,23 @@ _VOLW = r"(?:громкость|громкасть|грмокость|громк
 _CURW = r"(?:его|ее|это|окно|это окно|текущее окно|активное окно|эту программу|это приложение|эту прогу)"
 _FULL = r"(?: (?:на|во) (?:весь|полный) экран)"
 _TRACK = r"(?: (?:трек|трэк|песн[яюи]|композици[яю]|видео))"
+_UNDO = r"(?:отмени|отмените|отменить|отмена|откати|откатить)"
+_REMIND = r"(?:напомни|напомните|нопомни|напомини|напомнить)"
+_CANCEL = r"(?:отмени|отмените|отменить|удали|удалите|удалить|убери|сотри)"
+_REMEMBER = r"(?:запомни|запомните|запомнить|зaпомни|зпомни)"
+_FORGET = r"(?:забудь|забудьте|забыть|забуть)"
+_NEW_REMINDER = r"(?:поставь|создай|сделай|добавь|заведи|установи) напоминание"
+# «запомни это», «забудь его» — непонятно, о чём: пусть разбираются руки
+_VAGUE = _words("это его ее то вот этот эту эти тот")
+# заметка памяти — не команда в несколько шагов («запомни текст и переведи его»)
+_NOT_NOTE = _words("переведи напиши объясни посчитай придумай составь открой закрой найди удали")
+# «длинные» команды со свободным текстом: им можно больше MAX_LEN символов
+_LONG_OK = re.compile(r"^\W*(?:(?:джарвис|jarvis)\W+)?(?:запомни|напомни|поставь напоминание)", re.IGNORECASE)
+_DAY_START = re.compile(r"^(?:сегодня|завтра|послезавтра)(?:\s|$)")
+_DAY_END = re.compile(r"(?:^|\s)(?:сегодня|завтра|послезавтра)$")
+_QUESTION_WORD = re.compile(r"^(?:что|как|кто|где|когда|какой|какая|какое|какие|сколько|почему|зачем|чем)\s")
+MAX_LEN = 120
+LONG_LEN = 300
 
 # --- обработчики ---------------------------------------------------------------------------------------
 
@@ -305,6 +327,110 @@ def _find(m: re.Match[str], orig: str, ctx: Context) -> GrammarHit | None:
     return GrammarHit("find", {"query": query, "kind": kind})
 
 
+# --- отмена, напоминания, память, помощь (не действия ПК, кроме undo) ------------------------------------
+
+
+def _simple(action: str, **args: Any) -> Handler:
+    return lambda m, orig, ctx: GrammarHit(action, dict(args))
+
+
+def _span(m: re.Match[str], orig: str, group: str) -> str:
+    return orig[m.start(group) : m.end(group)].strip()
+
+
+def _day_only(rest: str) -> bool:
+    """«напомни завтра позвонить маме» — день без времени: спросить время. «напомни, что я делаю завтра» —
+    вопрос, а не напоминание."""
+    return bool(_DAY_START.match(rest)) or (bool(_DAY_END.search(rest)) and not _QUESTION_WORD.match(rest))
+
+
+def _remind_hit(m: re.Match[str], orig: str, duration_ok: bool) -> GrammarHit | None:
+    rest = _span(m, orig, "rest")
+    parsed = reminders.parse_when(rest)
+    if parsed is None and duration_ok:  # «поставь напоминание на 10 минут …»
+        duration = reminders.parse_duration(rest)
+        if duration is not None:
+            parsed = (time.time() + duration[0], duration[2])
+    if parsed is not None:
+        return GrammarHit("remind", {"text": parsed[1], "due": parsed[0]})
+    if _day_only(m["rest"]):
+        return GrammarHit("remind", {"text": rest, "due": None})  # execute спросит время
+    return None
+
+
+def _remind(m: re.Match[str], orig: str, ctx: Context) -> GrammarHit | None:
+    """«напомни через 10 минут вынуть пиццу», «напомни вынуть пиццу в 18:30»; без времени — None
+    («напомни, как зовут актёра» — вопрос для GPT)."""
+    return _remind_hit(m, orig, duration_ok=False)
+
+
+def _new_reminder(m: re.Match[str], orig: str, ctx: Context) -> GrammarHit | None:
+    """«поставь напоминание на 18:30 …», «создай напоминание на 10 минут …»."""
+    return _remind_hit(m, orig, duration_ok=True)
+
+
+def _timer(m: re.Match[str], orig: str, ctx: Context) -> GrammarHit | None:
+    """«поставь таймер на 10 минут», «засеки полчаса»: напоминание «таймер на …»."""
+    duration = reminders.parse_duration(_span(m, orig, "rest"))
+    if duration is None:
+        return None
+    seconds, said, label = duration
+    text = f"таймер на {said}" + (f": {label}" if label else "")
+    return GrammarHit("remind", {"text": text, "due": time.time() + seconds})
+
+
+def _vague(text: str) -> bool:
+    return len(text) < 2 or all(w in _VAGUE for w in text.split())
+
+
+def _selector(m: re.Match[str], orig: str) -> int | str | None:
+    """Что выбрано в шаблоне: номер (с 1), «последнее», «все» или часть текста; None — ничего не сказано;
+    "" — сказано непонятно («забудь это», «отмени нулевое напоминание»)."""
+    g = m.groupdict()
+    if g.get("all"):
+        return "все"
+    if g.get("stem") or g.get("n"):
+        index = _ORD_STEMS[g["stem"]] if g.get("stem") else int(g["n"])
+        return "последнее" if index == -1 else (index or "")
+    if g.get("num"):
+        return int(g["num"]) or ""
+    if g.get("last"):
+        return "последнее"
+    if g.get("q"):
+        if _vague(g["q"]):
+            return ""
+        return "последнее" if g["q"].startswith("последн") else _span(m, orig, "q")
+    return None
+
+
+def _cancel_reminder(m: re.Match[str], orig: str, ctx: Context) -> GrammarHit | None:
+    which = _selector(m, orig)
+    if which == "":
+        return None
+    return GrammarHit("cancel_reminder", {} if which is None else {"which": which})
+
+
+def _remember(m: re.Match[str], orig: str, ctx: Context) -> GrammarHit | None:
+    if _vague(m["x"]) or any(w in _NOT_NOTE for w in m["x"].split()):
+        return None
+    return GrammarHit("remember", {"text": _span(m, orig, "x")})
+
+
+def _forget(m: re.Match[str], orig: str, ctx: Context) -> GrammarHit | None:
+    which = _selector(m, orig)
+    return None if which is None or which == "" else GrammarHit("forget", {"which": which})
+
+
+def _raw_span(raw: str, words: str) -> str:
+    """Тот же текст в исходной строке — со знаками препинания («хлеб, молоко»); не нашёлся — как есть."""
+    parts = words.split()
+    if not parts:
+        return words
+    rx = re.compile(r"(?<!\w)" + r"[\W_]+".join(re.escape(p) for p in parts) + r"(?!\w)", re.IGNORECASE)
+    found = rx.search(raw)
+    return found.group(0) if found else words
+
+
 # --- шаблоны: порядок важен (частное раньше общего); совпал шаблон — его ответ окончательный -------------
 
 _RULES: list[tuple[str, Handler]] = [
@@ -321,6 +447,49 @@ _RULES: list[tuple[str, Handler]] = [
         r"(?: недели)?|(?:скажи|подскажи) (?:дату|число|какое сегодня число))",
         _clock("date"),
     ),
+    # помощь — локальный ответ без модели
+    (
+        r"(?:что|чего) (?:ты )?(?:вообще |еще )?(?:умеешь|можешь)(?: делать| сделать)?"
+        r"|(?:расскажи|покажи|скажи) что ты (?:умеешь|можешь)(?: делать)?|помощь|справка|help|хелп|помоги"
+        r"|(?:(?:какие|покажи) )?(?:у тебя )?(?:есть )?команды|список команд"
+        r"|как (?:тобой|с тобой) пользоваться|как с тобой работать",
+        _simple("help"),
+    ),
+    # память: что помнишь
+    (
+        r"что ты (?:обо мне |про меня )?(?:помнишь|запомнил)(?: обо мне| про меня)?"
+        r"|что ты (?:обо мне|про меня) знаешь|что ты знаешь (?:обо мне|про меня)"
+        r"|(?:покажи )?(?:свою |твою )?память|что я (?:тебе )?(?:говорил|просил) запомнить",
+        _simple("memory"),
+    ),
+    # напоминания: список, отмена, новое, таймер
+    (
+        r"(?:(?:какие|покажи)(?: мне)?(?: у меня)?(?: есть)?(?: мои| все)? напоминания"
+        r"|(?:мои|все) напоминания|напоминания|есть (?:ли )?(?:у меня )?напоминания"
+        r"|список(?: моих| всех)? напоминаний"
+        r"|(?:о )?ч(?:ем|то) ты (?:мне )?напомнишь)",
+        _simple("reminders"),
+    ),
+    (rf"{_CANCEL} (?P<all>все) напоминания", _cancel_reminder),
+    (rf"{_CANCEL} {_ORD} напоминание", _cancel_reminder),
+    (rf"{_CANCEL} напоминание(?: номер| под номером| №)? (?P<num>\d{{1,2}})", _cancel_reminder),
+    (rf"{_CANCEL} напоминание(?: (?:про|о|об|что|насчет|с текстом))? (?P<q>.+)", _cancel_reminder),
+    (rf"{_CANCEL} напоминание", _cancel_reminder),
+    (r"не напоминай(?: мне)?(?: (?:про|о|об|что))? (?P<q>.+)", _cancel_reminder),
+    (rf"{_REMIND}(?: (?:мне|нам))? (?P<rest>.+)", _remind),
+    (rf"{_NEW_REMINDER} (?P<rest>.+)", _new_reminder),
+    (r"(?:(?:поставь|заведи|запусти|включи|установи) )?таймер (?P<rest>.+)", _timer),
+    (r"засеки (?P<rest>.+)", _timer),
+    # память: запомнить, забыть
+    (rf"{_REMEMBER}(?: (?:что|то что|себе|себе что))? (?P<x>.+)", _remember),
+    (
+        rf"{_FORGET} (?:все(?: обо мне| про меня| что (?:знаешь|помнишь)(?: обо мне)?)?|обо мне|про меня)"
+        r"|(?:очисти|сотри) (?:свою |твою )?память",
+        _simple("forget", which="все"),
+    ),
+    (rf"{_FORGET}(?: запись)?(?: номер| под номером| №)? (?P<num>\d{{1,2}})", _forget),
+    (rf"{_FORGET} (?P<last>последн(?:ее|юю|ий|ую))(?: запись)?", _forget),
+    (rf"{_FORGET}(?: все)?(?: (?:про|о|об|что|то что|насчет))? (?P<q>.+)", _forget),
     (rf"{_LOCK}(?: (?:мой |этот )?(?:компьютер|комп|пк|экран|систему|винду|windows|ноутбук|ноут))?", _lock),
     # громкость
     (rf"(?:(?:поставь|сделай|установи|выстави) )?{_VOLW}(?: на| в)? (?P<n>{_NUM}){_PCT}", _vol_set),
@@ -376,6 +545,13 @@ _RULES: list[tuple[str, Handler]] = [
         rf"{_TRACK}?",
         _media("prev"),
     ),
+    # отмена последнего действия; «верни звук (обратно)» выше — это «включи звук»
+    (
+        rf"(?:нет )?{_UNDO}(?: (?:это|последнее|последнее действие|действие|последнюю команду|команду))?"
+        r"|верни(?: все| громкость| звук| окно| окна| все окна)? (?:как (?:было|был|была|были)|назад|обратно"
+        r"|на место)|верни (?:громкость|окно|окна|все окна)|(?:сделай )?как было",
+        _simple("undo"),
+    ),
     # окна: «покажи рабочий стол» — свернуть всё (как Win+D), раньше папок
     (r"(?:сверни (?:все|все окна|все приложения|все программы)|покажи рабочий стол)", _win_all),
     # известные папки; «покажи» — только с «папку», иначе неоднозначно
@@ -414,9 +590,15 @@ _RULES: list[tuple[str, Handler]] = [
 _COMPILED: list[tuple[re.Pattern[str], Handler]] = [(re.compile(p, re.IGNORECASE), h) for p, h in _RULES]
 
 
+# ответы на вопросы: с «?» в конце они тоже узнаются
+_QUESTION_OK = frozenset({"clock", "help", "memory", "reminders"})
+# свободный текст этих команд берётся из исходной строки со знаками препинания
+_RAW_TEXT = frozenset({"remember", "remind"})
+
+
 def match(text: str, ctx: Context) -> GrammarHit | None:
     """Разобрать частую команду без модели; нет уверенности — None (команду разберут руки)."""
-    if not text or len(text) > 120:
+    if not text or len(text) > (LONG_LEN if _LONG_OK.match(text) else MAX_LEN):
         return None
     question = text.rstrip().endswith("?")
     low, orig = _normalize(text)
@@ -427,7 +609,11 @@ def match(text: str, ctx: Context) -> GrammarHit | None:
         if m is None:
             continue
         hit = handler(m, orig, ctx)
-        if hit is not None and question and hit.action != "clock":
+        if hit is not None and question and hit.action not in _QUESTION_OK:
             return None  # «открой хром?» — похоже на вопрос, пусть решают руки
+        if hit is not None and hit.action in _RAW_TEXT and isinstance(hit.args.get("text"), str):
+            hit = GrammarHit(
+                hit.action, {**hit.args, "text": _raw_span(text, hit.args["text"])}, hit.confidence
+            )
         return hit
     return None

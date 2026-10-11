@@ -288,6 +288,7 @@ def test_real_corpus_parses() -> None:
     assert len(items) == sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
     tools = {"open", "close", "focus", "win", "find", "vol", "media", "kill", "open_found", "lock", "clock"}
     tools |= {"reply", "clarify", "ask_gpt"}
+    tools |= {"undo", "remind", "reminders", "cancel_reminder", "remember", "forget", "memory", "help"}
     for it in items:
         assert it["level"] in ("grammar", "hands", "brain"), it
         assert it.get("tool") is None or it["tool"] in tools, it

@@ -174,6 +174,14 @@ def _collect_own(env: str) -> set[int]:
             log.warning("%s не число: %r", ROOT_ENV, env)
     pids = {root, me}
     pids.update(_own_descendants(root))
+    if root != me:  # трамплин console_scripts и python из venv над корнем — части Jarvis
+        try:
+            for parent in psutil.Process(root).parents():
+                if str(parent.name()).casefold() not in OWN_EXES:
+                    break
+                pids.add(int(parent.pid))
+        except psutil.Error as e:
+            log.debug("предки корня не получены: %s", e)
     if root != me:
         chain: list[int] = []
         try:

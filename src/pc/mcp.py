@@ -100,7 +100,8 @@ def _format(result: Result) -> str:
     text = _pc("privacy").redact_text(result.text)
     if result.data is None:
         return text
-    data = json.dumps(result.data, ensure_ascii=False, separators=(",", ":"), default=_json_default)
+    payload = _pc("privacy").redact(result.data)
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=_json_default)
     return f"{text}\n{data}"
 
 

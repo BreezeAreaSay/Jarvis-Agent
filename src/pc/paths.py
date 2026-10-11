@@ -38,6 +38,9 @@ EXTRA_ACTIVE_SUFFIXES: frozenset[str] = frozenset(
         *(".msc", ".chm", ".scf", ".psm1", ".psd1", ".vb", ".ws", ".wsc", ".application", ".appx"),
         *(".appxbundle", ".msix", ".msixbundle", ".appinstaller", ".diagcab", ".xbap", ".gadget", ".inf"),
         *(".ins", ".mst"),
+        *(".py", ".pyw", ".pyz", ".pyzw", ".pyc", ".sh", ".bash", ".theme", ".themepack", ".deskthemepack"),
+        *(".rdp", ".searchconnector-ms", ".wsb", ".xll", ".jnlp", ".ps1xml", ".psc1", ".pssc", ".cdxml"),
+        *(".shb", ".shs", ".sct", ".website", ".msu", ".ppkg", ".vhd", ".vhdx", ".iso", ".img"),
     }
 )
 

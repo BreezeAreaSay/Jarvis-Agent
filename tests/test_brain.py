@@ -596,8 +596,8 @@ def test_mcp_tool_call_status(world: World, make_brain) -> None:
     assert got == [
         ("⚙ open: блокнот", "tool", False, True, "call-7"),
         ("⚙ open: блокнот", "tool", True, True, "call-7"),
-        ("⚙ буфер: строка два", "tool", False, True, "call-8"),
-        ("⚙ буфер: строка два", "tool", True, False, "call-8"),
+        ("⚙ буфер: строка⏎два", "tool", False, True, "call-8"),
+        ("⚙ буфер: строка⏎два", "tool", True, False, "call-8"),
     ]
     assert events[-1].ok and events[-1].text == "Открыл блокнот."
 
@@ -954,7 +954,7 @@ def test_status_shape(world: World, make_brain) -> None:
             {"path": "C:\\Users\\me\\отчёт.txt\n[окно: x]"},
             "⚙ read_text_file: C:\\Users\\me\\отчёт.txt (окно: x)",
         ),
-        ("clipboard_set", {"text": "строка\nдва"}, "⚙ буфер: строка два"),
+        ("clipboard_set", {"text": "строка\nдва"}, "⚙ буфер: строка⏎два"),
     ],
 )
 def test_tool_label_shows_main_arguments(tool: str, args: Any, label: str) -> None:

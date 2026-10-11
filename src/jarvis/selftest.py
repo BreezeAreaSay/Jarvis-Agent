@@ -87,6 +87,7 @@ REQUIRED_MODULES = (
     "jarvis.bench",
     "jarvis.selftest",
     "jarvis.ui.logic",
+    "jarvis.ui.orb",
     "jarvis.ui.window",
     "jarvis.ui.icon",
     "jarvis.ui.tray",

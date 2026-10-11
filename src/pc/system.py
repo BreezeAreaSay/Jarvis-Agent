@@ -44,6 +44,8 @@ CONSOLE_EXES = frozenset(
     {
         *("cmd.exe", "powershell.exe", "pwsh.exe", "windowsterminal.exe", "wsl.exe", "conhost.exe"),
         *("openconsole.exe", "bash.exe", "wt.exe", "powershell_ise.exe", "wslhost.exe", "mintty.exe"),
+        *("alacritty.exe", "wezterm-gui.exe", "wezterm.exe", "conemu.exe", "conemu64.exe", "putty.exe"),
+        *("kitty.exe", "mobaxterm.exe", "tabby.exe", "hyper.exe", "cmder.exe", "termius.exe", "warp.exe"),
     }
 )
 CONSOLE_CLASSES = frozenset({"consolewindowclass", "cascadia_hosting_window_class", "pseudoconsolewindow"})
@@ -375,7 +377,7 @@ def type_text(text: str, target: str | int, caller: Caller) -> Result:
 
     title = (win.title or "")[:80]
     summary = f"Ввести текст в «{title}» ({win.exe})?"
-    details = text.replace("\n", "⏎\n")
+    details = text.replace("\t", "⇥").replace("\n", "⏎\n")
     denied = policy.require("type_text", caller, summary, details)
     if denied:
         return denied

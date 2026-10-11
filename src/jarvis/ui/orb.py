@@ -187,6 +187,32 @@ def _halo_image(px: int, halo: RGB) -> QImage:
     return img
 
 
+@functools.lru_cache(maxsize=32)
+def _arc_image(radius_px: int, width_px: float, span: float, rgb: RGB) -> QImage:
+    """Дуга энергии радиуса radius_px: от 0° (3 часа) против часовой на span градусов, гаснет к концам.
+
+    На кадре картинка только поворачивается (сглаженный поворот дешевле обводки с конусным градиентом).
+    """
+    side = 2 * radius_px + math.ceil(width_px) + 4
+    img, p = _canvas(side)
+    c = QPointF(side / 2, side / 2)
+    box = QRectF(c.x() - radius_px, c.y() - radius_px, 2 * radius_px, 2 * radius_px)
+    cone = QConicalGradient(c, 0.0)
+    k = span / 360
+    cone.setColorAt(0.0, _c(rgb, 0.0))
+    cone.setColorAt(k * 0.6, _c(rgb, 1.0))
+    cone.setColorAt(k, _c(rgb, 0.0))
+    cone.setColorAt(1.0, _c(rgb, 0.0))
+    path = QPainterPath()
+    path.arcMoveTo(box, 0.0)
+    path.arcTo(box, 0.0, span)
+    p.setPen(QPen(QBrush(cone), max(0.6, width_px), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawPath(path)
+    p.end()
+    return img
+
+
 def _cached(image: QImage, dpr: float) -> QImage:
     image.setDevicePixelRatio(dpr)
     return image
@@ -240,7 +266,7 @@ def paint_orb(p: QPainter, rect: QRectF, model: OrbModel, t: float | None = None
     p.setCompositionMode(_OVER)
     _put(p, _cached(_body_image(px, _q(f.palette.core), _q(f.palette.edge)), dpr), c)
     p.setCompositionMode(_SCREEN)
-    _inner(p, c, r, f)
+    _inner(p, c, r, f, dpr)
     _put(p, _cached(_rim_image(px, _q(f.palette.rim)), dpr), c, f.rim)
     _flash(p, c, r, f)
     _sparks(p, c, r, f)
@@ -314,7 +340,7 @@ def _ring(p: QPainter, c: QPointF, r: float, f: OrbFrame) -> None:
     p.fillRect(QRectF(c.x() - outer, c.y() - outer, 2 * outer, 2 * outer), g)
 
 
-def _inner(p: QPainter, c: QPointF, r: float, f: OrbFrame) -> None:
+def _inner(p: QPainter, c: QPointF, r: float, f: OrbFrame, dpr: float) -> None:
     """Внутри стекла: свет, стекающий вниз, дуги энергии, клубящиеся доли с хвостами, яркое ядро.
 
     Режим Screen: пересечения долей дают яркие фиолетово-белые ядра.
@@ -325,20 +351,15 @@ def _inner(p: QPainter, c: QPointF, r: float, f: OrbFrame) -> None:
     for w in f.wisps:
         if w.alpha <= 0.01:
             continue
-        box = QRectF(cx + (w.x - w.radius) * r, cy + (w.y - w.radius) * r, 2 * w.radius * r, 2 * w.radius * r)
-        cone = QConicalGradient(QPointF(box.center()), w.start)
-        k = w.span / 360
-        cone.setColorAt(0.0, _c(w.color, 0.0))
-        cone.setColorAt(k * 0.6, _c(w.color, w.alpha))
-        cone.setColorAt(k, _c(w.color, 0.0))
-        cone.setColorAt(1.0, _c(w.color, 0.0))
-        path = QPainterPath()
-        path.arcMoveTo(box, w.start)
-        path.arcTo(box, w.start, w.span)
-        p.setPen(QPen(QBrush(cone), max(0.6, w.width * r), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(path)
-    p.setPen(Qt.PenStyle.NoPen)
+        arc = _arc_image(max(1, round(w.radius * r * dpr)), round(w.width * r * dpr, 1), w.span, _q(w.color))
+        arc.setDevicePixelRatio(dpr)
+        half = arc.width() / dpr / 2
+        p.save()
+        p.translate(cx + w.x * r, cy + w.y * r)
+        p.rotate(-w.start)  # против часовой, как углы дуг Qt
+        p.setOpacity(min(1.0, w.alpha))
+        p.drawImage(QRectF(-half, -half, 2 * half, 2 * half), arc)
+        p.restore()
     for lobe in f.lobes:
         for x, y, lr, fade in reversed(lobe.trail):
             _sprite(p, lobe.color, cx + x * r, cy + y * r, lr * r, lr * r, lobe.alpha * fade)

@@ -78,7 +78,7 @@ COMMAND_WORDS = frozenset(
         *("cmd", "powershell", "powershell_ise", "pwsh", "wscript", "cscript", "mshta", "rundll32"),
         *("regsvr32", "msiexec", "wsl", "bash", "conhost", "certutil", "bitsadmin", "schtasks", "wmic"),
         *("msbuild", "forfiles", "installutil", "regasm", "regsvcs", "cmstp", "curl", "wget", "python"),
-        *("pythonw", "node", "taskkill", "shutdown", "reg"),
+        *("pythonw", "node", "taskkill", "shutdown", "reg", "windowsterminal", "wt"),
     }
 )
 _COMMAND_EXT = re.compile(r"\.(?:exe|com|bat|cmd|ps1|vbs|vbe|js|jse|wsf|wsh|hta|msi|scr|pif|cpl|reg)$", re.I)
@@ -389,7 +389,13 @@ def _open_url(target: str, caller: Caller) -> Result:
     if url is None:
         return fail("Открываю только обычные ссылки http/https")
     host = urllib.parse.urlsplit(url).hostname or url
-    denied = policy.require("open_url", caller, f"Открыть ссылку {url}?", url)
+    details = url
+    if not host.isascii():
+        try:
+            details = f"{url}\nадрес сайта: {host.encode('idna').decode('ascii')}"
+        except UnicodeError:
+            return fail("Открываю только обычные ссылки http/https")
+    denied = policy.require("open_url", caller, f"Открыть ссылку {url}?", details)
     if denied:
         return denied
     err = _start(url)
@@ -455,6 +461,8 @@ def _open_app(target: str, caller: Caller) -> Result:
         return fail(f"Не нашёл приложение «{target}»")
     if not app.app_id or _has_control(app.app_id) or len(app.app_id) > 1024:
         return fail(f"Не удалось открыть {app.name}")
+    if (apps.app_exe(app) or "").removesuffix(".exe") in COMMAND_WORDS:
+        return fail("Это похоже на команду — Jarvis открывает только приложения из меню «Пуск»")
     denied = policy.require("open_app", caller, f"Открыть {app.name}?", app.app_id)
     if denied:
         return denied

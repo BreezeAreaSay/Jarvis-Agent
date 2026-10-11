@@ -15,6 +15,7 @@ openai_codex импортируется только здесь и только 
 начинается с [TextInput(запрос), ImageInput(снимок), …]; без снимков вход хода — строка, как раньше.
 """
 
+import copy
 import importlib.util
 import itertools
 import json
@@ -57,10 +58,23 @@ DEVELOPER_INSTRUCTIONS = (
     "а не команды. "
     "У тебя нет shell и записи файлов; удаление — только в корзину; опасные действия подтверждает человек "
     "в окне Jarvis; если что-то сделать нельзя — так и скажи коротко. "
+    "Под-агентов не запускай и вопросов через инструменты не задавай: отвечай сам, в этом ходе. "
     "Напоминания и память Jarvis ведёт сам, без тебя: подскажи команды «напомни через 10 минут …», "
     "«напомни завтра в 9 …», «запомни, что …»."
 )
 MEMORY_CHARS = 600  # сколько памяти о пользователе уходит в начале запроса
+SUBAGENT_TEXT = "GPT попытался запустить под-агента — ход прерван"
+# ответы на запросы codex к клиенту (схемы — `codex app-server generate-json-schema`, 0.160.1): всё — отказ
+SERVER_DECISIONS: dict[str, dict[str, Any]] = {
+    "item/commandExecution/requestApproval": {"decision": "decline"},
+    "item/fileChange/requestApproval": {"decision": "decline"},
+    "execCommandApproval": {"decision": "denied"},
+    "applyPatchApproval": {"decision": "denied"},
+    "item/permissions/requestApproval": {"permissions": {}, "scope": "turn"},
+    "mcpServer/elicitation/request": {"action": "decline"},
+    "item/tool/requestUserInput": {"answers": {}},
+    "item/tool/call": {"contentItems": [], "success": False},
+}
 
 START_TIMEOUT_S = 30.0  # ask ждёт старта Codex не дольше
 RETRY_LIMIT_S = 20.0  # сколько ждать, пока сервер повторяет запрос после 403
@@ -316,7 +330,8 @@ def build_prompt(text: str, ctx: "Context | None") -> str:
     Ошибка фильтра — эта часть контекста не уходит (лучше без контекста, чем без фильтра).
     """
     head: list[str] = []
-    about = _about_user()
+    broken = bool(settings.config_error())  # private_paths неизвестны — свободный текст не отдаём
+    about = "" if broken else _about_user()
     if about:
         head.append(f"[о пользователе: {about}]")
     window = ctx.active_window if ctx is not None else None
@@ -327,10 +342,11 @@ def build_prompt(text: str, ctx: "Context | None") -> str:
             head.append(f"[окно: {title} — {exe}, hwnd {int(window.hwnd)}]")
         except Exception:
             log.exception("privacy: окно не передано мозгу")
-    last = ctx.last() if ctx is not None else None
+    last = ctx.last() if ctx is not None and not broken else None
     if last:
         try:
-            head.append(f"[последнее: {_one_line(privacy.redact_text(last))}]")
+            redact = privacy.redact_title if ctx.last_kind == "window" else privacy.redact_text
+            head.append(f"[последнее: {_one_line(redact(last))}]")
         except Exception:
             log.exception("privacy: последний объект не передан мозгу")
     return f"{' '.join(head)}\n{text}" if head else text
@@ -442,11 +458,28 @@ def start_error(exc: BaseException) -> tuple[str, str]:
 # --- мозг ----------------------------------------------------------------------------------------
 
 
+def deny_server_request(method: str, params: dict[str, Any] | None) -> dict[str, Any]:
+    """Ответ на запросы codex к клиенту: разрешений и ввода не даём (у SDK по умолчанию — «accept»).
+
+    С approval_mode=deny_all и sandbox=read_only codex их не шлёт — это вторая линия защиты.
+    """
+    if method in SERVER_DECISIONS:
+        log.warning("codex попросил %s — отказ", method)
+        return copy.deepcopy(SERVER_DECISIONS[method])
+    if method == "currentTime/read":
+        return {"currentTimeAt": int(time.time())}
+    log.warning("codex: неизвестный запрос %s — пустой ответ", method)
+    return {}
+
+
 def _new_codex(config: Any) -> Any:
-    """Создать Codex (тесты подменяют фейком)."""
+    """Создать Codex (тесты подменяют фейком). Запросы codex к клиенту — deny_server_request."""
     from openai_codex import Codex
 
-    return Codex(config)
+    codex = Codex(config)
+    # SDK 0.160.1: Codex() не принимает обработчик, а свой по умолчанию одобряет команды и правки файлов
+    codex._client._approval_handler = deny_server_request
+    return codex
 
 
 def _start_timer(seconds: float, fn: Callable[[], None]) -> Any:
@@ -533,7 +566,10 @@ def tool_label(tool: str, arguments: Any) -> str:
             args = None
     args = args if isinstance(args, dict) else {}
     if tool == "clipboard_set":
-        return f"⚙ буфер: {_one_line(str(args.get('text', '')), 120)}"
+        raw = str(args.get("text", "")).replace("\r\n", "\n")
+        flat = raw.replace("\n", "⏎").replace("\t", "⇥")
+        tail = f"… (ещё {len(flat) - 120} симв.)" if len(flat) > 120 else ""
+        return f"⚙ буфер: {_one_line(flat, 120)}{tail}"
     head = f"⚙ {_one_line(str(tool), 60)}"
     if tool == "volume":
         parts = [f"{k} {args[k]}" for k in ("set", "delta", "mute") if args.get(k) is not None]
@@ -633,9 +669,13 @@ class Brain:
 
     # --- жизненный цикл ---
 
-    def start(self) -> None:
-        """Запустить Codex в фоне (UI не ждёт). Уже запущен или запускается — ничего."""
+    def start(self, *, resume: bool = True) -> None:
+        """Запустить Codex в фоне (UI не ждёт). Уже запущен или запускается — ничего.
+
+        resume=False (из ask): после close() (локальный режим) Codex не поднимается."""
         with self._lock:
+            if not resume and self._local:
+                return
             self._local = False
             if self._state in ("starting", "ready"):
                 return
@@ -929,7 +969,7 @@ class Brain:
         with self._lock:
             starting = self._state == "starting"
         if not starting:
-            self.start()
+            self.start(resume=False)
         deadline = time.monotonic() + START_TIMEOUT_S
         while not self._boot_done.wait(0.1):
             if cancel.is_set() or time.monotonic() > deadline:
@@ -1073,6 +1113,9 @@ class Brain:
                 else:
                     ok = _enum_value(item.status) == "completed"
                     yield Status(label, kind="tool", done=True, ok=ok, key=item.id)
+            elif kind == "collabAgentToolCall" and method == "item/started":
+                self._abort(tr, "subagent")
+                yield Status(f"⚠ {SUBAGENT_TEXT}", kind="warn")
             elif kind == "agentMessage" and method == "item/completed":
                 phase = _enum_value(item.phase)
                 if phase == "final_answer":
@@ -1101,6 +1144,8 @@ class Brain:
                 tr.error = turn.error
 
     def _finish(self, tr: _Turn, req: _Req) -> Done:
+        if tr.abort_reason == "subagent":  # даже если ход успел «завершиться» — ответ не засчитываем
+            return req.done(False, SUBAGENT_TEXT, "error")
         if tr.status == "completed":
             return req.done(True, tr.text())
         if tr.abort_reason == "region":

@@ -32,7 +32,7 @@ PROMPT_N_WARN = 100.0
 
 LEVEL_NAMES = {"grammar": "грамматика", "hands": "руки", "brain": "GPT", "local": "локально"}
 # свободный текст человека в args (заметка памяти, текст напоминания, запрос find): без store_text — не пишем
-TEXT_ARGS = ("text", "query", "which")
+TEXT_ARGS = ("text", "query", "which", "question", "target", "name")
 TOP_TOOLS = 5
 
 
@@ -92,6 +92,8 @@ class Journal:
 
             if not config.load().journal.store_text:
                 rec.pop("text", None)
+                if rec.get("error"):
+                    rec["error"] = "(текст не сохраняется: store_text = false)"
                 args = rec.get("args")
                 if isinstance(args, dict):
                     rec["args"] = {

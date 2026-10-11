@@ -26,3 +26,30 @@
 - SDK потокобезопасен для thread_start в фоне во время чужого хода (своя очередь ответа на запрос, запись под
   CodexClient._lock) — проверено на Linux-сборке codex.
 - Глобальные уведомления читаются через `codex._client.next_notification()` — внутренности SDK (версия закреплена).
+
+## Ревью S8 (независимые ревьюеры по направлениям; каждая находка — с тестом, который до исправления падал)
+| Серьёзность | Что нашёл | Что сделал |
+|---|---|---|
+| critical | Job Object без breakaway: программы, открытые мозгом (Word, браузер), — члены job и умирают при выходе из Jarvis | SILENT_BREAKAWAY_OK; llama-server — в job явно по pid (d89f076) |
+| high | own_pids = все потомки Jarvis: Chrome/Word, открытые через Jarvis (ShellExecute), считались «самим Jarvis» — не закрыть, не свернуть, нет в списке окон | обход дерева только через свои exe (OWN_EXES) (d89f076) |
+| high | Общий флаг отмены в Core: заменённая команда рук (ждавшая загрузки модели) исполнялась после новой | свой Event на каждый запрос (5f7a186) |
+| high | Гигиена не видела файлы с кириллицей в имени (git quotePath) | `-c core.quotepath=off ls-files -z` (ee022a0) |
+| high | Конфиг exe «переезжал» в C:\Jarvis\jarvis.toml после первого запуска рук (start_hands.cmd создаёт C:\Jarvis\logs) — терялись private_paths и mode | критерий — сам файл, не папка (ee022a0) |
+| high | Грамматика при промахе apps.resolve под `jarvis run` синхронно запускала Get-StartApps (секунды на уровне 0) | grammar — apps.lookup (ee022a0) |
+| medium | Esc до старта запроса и заменённый запрос не отменялись | `_cancel_rid`/`_stale` в app (5f7a186) |
+| medium | Хоткей во время команды менял её «@cur» (закрывалось не то окно) | окно хоткея откладывается до следующей команды (5f7a186) |
+| medium | Зависшее окно: ShowWindow/BringWindowToTop висели вечно (в pc.mcp — все инструменты мозга) | IsHungAppWindow → отказ (d89f076) |
+| medium | Непарный суррогат в заголовке окна ронял руки (UnicodeEncodeError) | pc.windows.clean_text; руки — errors="replace" (a2a8e49) |
+| medium | audio.warmup() не вызывался при старте | вызов в фоне при старте (a2a8e49) |
+| medium | bench --live считал верный ask_gpt рук ошибкой уровня | handed_over (ee022a0) |
+| medium | В гигиене не было e-mail | test_no_emails (ee022a0) |
+| low | Локальный режим не снимал открытые вопросы «просит GPT» | deny_confirms("brain") + отказ новым (5f7a186) |
+| low | Выход во время загрузки модели не закрывал мозг/журнал (руки держали замок) | руки останавливаются последними (5f7a186) |
+| low | Запуск приложения ждал перечисления AppsFolder в общем STA | своё STA-перечисление (a2a8e49) |
+| low | AllowSetForegroundWindow из pc.mcp бесполезен — программы мозга не выходили наверх | из процесса Jarvis перед запросом и после «да» (d89f076) |
+| low | Зависший COM навсегда занимал поток звука | новый поток после таймаута (d89f076) |
+| low | pywintypes.error буфера обмена не OSError — «внутренняя ошибка» | обработанный отказ (d89f076) |
+| low | save_mode: ключ `"mode"` в кавычках давал дубль | регулярка (ee022a0) |
+| low | Гигиена: кэши, пути `C:/Users/…` | добавлены (ee022a0) |
+| low | Нет теста «действие грамматики/инструмент рук → строка policy» | tests/test_s8_policy_mapping.py (ee022a0) |
+| — | Программы, открытые Jarvis, наследовали QT_PLUGIN_PATH/PATH бандла (чужой Qt грузил наши плагины) | scrub_child_env; jarvis-cli ставит Qt-путь только для selftest/run (3c6f039) |

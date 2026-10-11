@@ -1,4 +1,5 @@
-"""jarvis.winapp: хоткей и запасные сочетания, автозапуск (мок реестра), Job Object (фейк win32job), mutex."""
+"""jarvis.winapp: хоткей и запасные сочетания, автозапуск (мок реестра), Job Object (фейк win32job), mutex,
+хук смены переднего окна и полноэкранные окна (фейковый слой ОС)."""
 
 import subprocess
 import sys
@@ -495,6 +496,168 @@ def test_own_descendants_finds_child() -> None:
         child.wait(10)
 
 
+# --- полноэкранные окна (сфера на рабочем столе прячется) ----------------------------------------------
+
+MONITOR = (0, 0, 1920, 1080)
+
+
+class FakeForeground:
+    """Слой ОС для хука смены переднего окна и проверки «на весь монитор»."""
+
+    def __init__(self) -> None:
+        self.hooks: list[Any] = []
+        self.unhooked: list[int] = []
+        self.windows: dict[int, tuple[str, tuple[int, int, int, int] | None]] = {}
+        self.front = 0
+        self.fail = False
+
+    def set_foreground_hook(self, callback: Any) -> tuple[int, Any]:
+        if self.fail:
+            raise OSError(5, "SetWinEventHook: ошибка 5")
+        self.hooks.append(callback)
+        return 0x4400 + len(self.hooks), ("proc", callback)
+
+    def unhook_win_event(self, handle: int) -> bool:
+        self.unhooked.append(handle)
+        return True
+
+    def foreground_window(self) -> int:
+        return self.front
+
+    def class_name(self, hwnd: int) -> str:
+        return self.windows[hwnd][0]
+
+    def window_rect(self, hwnd: int) -> tuple[int, int, int, int] | None:
+        return self.windows[hwnd][1]
+
+    def monitor_rect(self, hwnd: int) -> tuple[int, int, int, int] | None:
+        return MONITOR if self.windows[hwnd][1] is not None else None
+
+
+@pytest.fixture
+def fg(monkeypatch: pytest.MonkeyPatch) -> FakeForeground:
+    api = FakeForeground()
+    api.windows = {
+        1: ("UnrealWindow", (0, 0, 1920, 1080)),  # игра без рамки на весь экран
+        2: ("Chrome_WidgetWin_1", (-8, -8, 1928, 1088)),  # видео во весь экран (рамка за краем)
+        3: ("Chrome_WidgetWin_1", (-8, -8, 1928, 1048)),  # просто развёрнутое окно: панель задач видна
+        4: ("Notepad", (100, 100, 900, 700)),
+        5: ("WorkerW", (0, 0, 1920, 1080)),  # рабочий стол
+        6: ("Progman", (0, 0, 1920, 1080)),
+        7: ("Shell_TrayWnd", (0, 0, 1920, 1080)),
+        8: ("Gone", None),  # окно успело закрыться
+    }
+    monkeypatch.setattr(winapp, "_api", api)
+    return api
+
+
+@pytest.mark.parametrize(
+    ("hwnd", "expected"), [(1, True), (2, True), (3, False), (4, False), (5, False), (6, False), (7, False)]
+)
+def test_is_fullscreen(fg: FakeForeground, hwnd: int, expected: bool) -> None:
+    assert winapp.is_fullscreen(hwnd) is expected
+
+
+def test_is_fullscreen_missing_or_broken_window(fg: FakeForeground) -> None:
+    assert winapp.is_fullscreen(0) is False
+    assert winapp.is_fullscreen(8) is False
+    assert winapp.is_fullscreen(999) is False  # слой ОС бросил (KeyError) — не полноэкранное
+
+
+def test_foreground_fullscreen(fg: FakeForeground) -> None:
+    fg.front = 1
+    assert winapp.foreground_fullscreen()
+    fg.front = 4
+    assert not winapp.foreground_fullscreen()
+    fg.front = 0
+    assert not winapp.foreground_fullscreen()
+
+
+def test_watch_and_unwatch_foreground(fg: FakeForeground) -> None:
+    seen: list[int] = []
+    watch = winapp.watch_foreground(seen.append)
+    assert watch is not None and watch.handle == 0x4401 and watch.proc is not None  # ссылка на колбэк жива
+    fg.hooks[0](4)
+    assert seen == [4]
+    winapp.unwatch_foreground(watch)
+    winapp.unwatch_foreground(watch)  # повторно — ничего
+    winapp.unwatch_foreground(None)
+    assert fg.unhooked == [0x4401]
+
+
+def test_watch_foreground_error_is_none(fg: FakeForeground) -> None:
+    fg.fail = True
+    assert winapp.watch_foreground(lambda hwnd: None) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="на Windows слой ОС настоящий")
+def test_fullscreen_helpers_not_windows() -> None:
+    assert winapp._api is None
+    assert winapp.watch_foreground(lambda hwnd: None) is None
+    assert winapp.is_fullscreen(1) is False
+    assert winapp.foreground_fullscreen() is False
+    winapp.unwatch_foreground(None)
+
+
+def test_foreground_hook_ctypes_signatures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """argtypes/restype объявлены явно, HWND/HANDLE — 64-битные; колбэк ловит исключения (без Windows)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Fn:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.argtypes: Any = None
+            self.restype: Any = None
+            self.calls: list[tuple[Any, ...]] = []
+
+        def __call__(self, *args: Any) -> Any:
+            self.calls.append(args)
+            return 0x77 if self.name == "SetWinEventHook" else 1
+
+    class FakeDll:
+        def __init__(self, name: str, use_last_error: bool = False) -> None:
+            assert name == "user32" and use_last_error
+            self.fns: dict[str, Fn] = {}
+
+        def __getattr__(self, name: str) -> Fn:
+            return self.__dict__["fns"].setdefault(name, Fn(name))
+
+    monkeypatch.setattr(ctypes, "WinDLL", FakeDll, raising=False)
+    monkeypatch.setattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE, raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 0, raising=False)
+    api = winapp._WinApi()
+    fg = api._fg
+    hook = fg["SetWinEventHook"]
+    assert hook.argtypes[2] is wintypes.HMODULE and hook.argtypes[3] is fg["WINEVENTPROC"]
+    assert hook.restype is wintypes.HANDLE
+    assert fg["UnhookWinEvent"].argtypes == (wintypes.HANDLE,)
+    assert fg["GetForegroundWindow"].restype is wintypes.HWND
+    assert fg["MonitorFromWindow"].restype is wintypes.HMONITOR
+    assert fg["GetClassNameW"].argtypes == (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
+    assert ctypes.sizeof(wintypes.HWND) == ctypes.sizeof(ctypes.c_void_p)
+    if sys.platform == "win32":  # на Linux DWORD и LONG в ctypes — 8 байт
+        assert ctypes.sizeof(fg["MONITORINFO"]) == 40
+
+    seen: list[int] = []
+
+    def callback(hwnd: int) -> None:
+        if hwnd == 13:
+            raise RuntimeError("сломался")
+        seen.append(hwnd)
+
+    handle, proc = api.set_foreground_hook(callback)
+    assert handle == 0x77
+    args = hook.calls[0]
+    assert args[:3] == (winapp.EVENT_SYSTEM_FOREGROUND, winapp.EVENT_SYSTEM_FOREGROUND, None)
+    assert args[3] is proc
+    assert args[6] == winapp.WINEVENT_OUTOFCONTEXT | winapp.WINEVENT_SKIPOWNPROCESS
+    proc(None, 3, 0x1234, 0, 0, 0, 0)
+    proc(None, 3, 13, 0, 0, 0, 0)  # исключение не уходит в Windows
+    proc(None, 3, None, 0, 0, 0, 0)
+    assert seen == [0x1234, 0]
+
+
 # --- настоящий Windows (CI windows-latest) ------------------------------------------------------------
 
 
@@ -508,6 +671,24 @@ def test_real_ctypes_signatures(monkeypatch: pytest.MonkeyPatch) -> None:
     assert api.register_window_message("Jarvis.Test") >= 0xC000
     assert api.find_window("Jarvis.NoSuchWindow.7f3a") == 0
     assert api.set_foreground(0) is False
+
+
+@win_only
+def test_real_foreground_hook() -> None:
+    api = winapp._WinApi()
+    handle, proc = api.set_foreground_hook(lambda hwnd: None)
+    try:
+        assert handle and proc is not None
+    finally:
+        assert api.unhook_win_event(handle)
+    hwnd = api.foreground_window()
+    assert isinstance(hwnd, int)
+    assert isinstance(api.class_name(hwnd), str)
+    if hwnd:
+        assert api.window_rect(hwnd) is not None
+        mon = api.monitor_rect(hwnd)
+        assert mon is None or (mon[2] > mon[0] and mon[3] > mon[1])
+    assert winapp.is_fullscreen(0) is False
 
 
 @win_only
@@ -540,3 +721,45 @@ def test_real_job_kills_child_on_close(monkeypatch: pytest.MonkeyPatch) -> None:
     finally:
         if child.poll() is None:
             child.kill()
+
+
+# --- окна Jarvis не попадают в снимки экрана (зрение) -----------------------------------------------------
+
+
+class AffinityApi:
+    """Слой ОС только для SetWindowDisplayAffinity: ответ задаёт тест."""
+
+    def __init__(self, result: tuple[bool, int] | Exception = (True, 0)) -> None:
+        self.result = result
+        self.calls: list[tuple[int, int]] = []
+
+    def set_display_affinity(self, hwnd: int, affinity: int) -> tuple[bool, int]:
+        self.calls.append((hwnd, affinity))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def test_exclude_from_capture_sets_affinity(monkeypatch: pytest.MonkeyPatch) -> None:
+    api = AffinityApi()
+    monkeypatch.setattr(winapp, "_api", api)
+    assert winapp.exclude_from_capture(0x1234) is True
+    assert api.calls == [(0x1234, 0x11)] and winapp.WDA_EXCLUDEFROMCAPTURE == 0x11
+
+
+@pytest.mark.parametrize("result", [(False, 87), OSError("нет функции"), AttributeError("старая Windows")])
+def test_exclude_from_capture_failure_is_false(monkeypatch: pytest.MonkeyPatch, result: Any) -> None:
+    monkeypatch.setattr(winapp, "_api", AffinityApi(result))
+    assert winapp.exclude_from_capture(0x1234) is False  # Jarvis работает и без этого
+
+
+def test_exclude_from_capture_without_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    api = AffinityApi()
+    monkeypatch.setattr(winapp, "_api", api)
+    assert winapp.exclude_from_capture(0) is False and api.calls == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="на Windows слой ОС настоящий")
+def test_exclude_from_capture_is_noop_off_windows() -> None:
+    assert winapp._api is None
+    assert winapp.exclude_from_capture(0x1234) is False

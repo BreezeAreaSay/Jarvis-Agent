@@ -68,6 +68,17 @@ def settle(ms: int = 260) -> None:
     QTest.qWait(ms)
 
 
+def idle(w: LauncherWindow) -> list[str]:
+    """running() после того, как сфера доиграла. Сама она затихает за 1–2,5 с (это проверяет
+    test_orb_settles_by_itself) — здесь её модель перематывается вперёд, чтобы тесты не ждали."""
+    model = w.orb_model
+    for _ in range(100):
+        if not model.tick(0.1):
+            break
+    QTest.qWait(40)  # следующий кадр видит покой и останавливает таймер
+    return running(w)
+
+
 def blocks(w: LauncherWindow, cls: type) -> list[Any]:
     return [b for b in w._blocks if isinstance(b, cls)]
 
@@ -89,7 +100,7 @@ def test_window_flags_and_hidden_at_start(make: Any) -> None:
     assert (flags & Qt.WindowType.Tool) == Qt.WindowType.Tool
     assert w.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert not w.isVisible()
-    assert running(w) == []
+    assert idle(w) == []
 
 
 def test_show_places_top_center_with_focus(make: Any, qapp: QApplication) -> None:
@@ -114,12 +125,12 @@ def test_show_hide_animations_then_idle(make: Any) -> None:
     w.show_launcher()
     assert any(a.startswith("anim") for a in running(w))  # появление 140 мс
     settle()
-    assert running(w) == []
+    assert idle(w) == []
     w.hide_launcher()
     settle()
     assert not w.isVisible()
     assert len(hidden) == 1
-    assert running(w) == []
+    assert idle(w) == []
 
 
 def test_no_animations_mode_is_instant(make: Any) -> None:
@@ -135,7 +146,7 @@ def test_no_animations_mode_is_instant(make: Any) -> None:
     assert not any(a.startswith("anim") for a in running(w))
     w.on_event(Done(True, "Громкость 20", level="hands"))
     QApplication.processEvents()
-    assert running(w) == []
+    assert idle(w) == []
     w.hide_launcher()
     assert not w.isVisible() and len(hidden) == 1  # мгновенно
 
@@ -171,7 +182,7 @@ def test_events_change_widgets(make: Any) -> None:
     assert not w.is_busy()
     assert w._strip.mode == "line"
     settle()
-    assert running(w) == []
+    assert idle(w) == []
 
 
 def test_text_stream_appends_without_rebuild(make: Any) -> None:
@@ -210,7 +221,7 @@ def test_window_grows_smoothly_and_caps(make: Any) -> None:
     assert w._scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
     w.on_event(Done(True, level="brain"))
     settle()
-    assert running(w) == []
+    assert idle(w) == []
 
 
 def test_overflow_text_width_matches_viewport(make: Any) -> None:
@@ -601,7 +612,7 @@ def test_confirm_shows_hidden_window_and_hide_denies(make: Any) -> None:
     assert not req.done and w.isVisible()
     w.hide_launcher()
     assert req.approved is False  # спрятали — «нет»
-    assert running(w) == []
+    assert idle(w) == []
 
 
 def test_deactivate_hides_only_when_idle(make: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -634,7 +645,7 @@ def test_autohide_after_action(make: Any) -> None:
     assert blocks(w, widgets.StatusRow)[-1].icon.kind == "ok"
     QTest.qWait(400)
     assert not w.isVisible() and len(hidden) == 1
-    assert running(w) == []
+    assert idle(w) == []
 
 
 def test_keypress_cancels_autohide(make: Any) -> None:
@@ -645,7 +656,7 @@ def test_keypress_cancels_autohide(make: Any) -> None:
     QTest.keyClick(w._input, Qt.Key.Key_A)
     QTest.qWait(250)
     assert w.isVisible()
-    assert running(w) == []
+    assert idle(w) == []
 
 
 def test_idle_after_done_and_hide(make: Any) -> None:
@@ -660,10 +671,10 @@ def test_idle_after_done_and_hide(make: Any) -> None:
     w.on_event(Done(True, level="brain"))
     assert w._driver.state() != QAbstractAnimation.State.Running
     settle()
-    assert running(w) == []
+    assert idle(w) == []
     w.hide_launcher()
     settle()
-    assert running(w) == []
+    assert idle(w) == []
     assert not w.isVisible()
 
 
@@ -674,13 +685,13 @@ def test_hidden_while_busy_stops_motion_and_resumes(make: Any) -> None:
     w.on_event(Level("brain", "prefix"))
     w.hide_launcher()
     settle()
-    assert running(w) == []  # невидимое окно не анимируется
+    assert idle(w) == []  # невидимое окно не анимируется
     assert w.is_busy()
     w.show_launcher()
     assert w._driver.state() == QAbstractAnimation.State.Running
     w.on_event(Done(True, level="brain"))
     settle()
-    assert running(w) == []
+    assert idle(w) == []
 
 
 def test_hide_clears_answer_when_idle(make: Any) -> None:
@@ -725,6 +736,109 @@ def _spontaneous(ev: Any) -> Any:
             ev.ignore()
 
     return Spontaneous()
+
+
+# --- сфера слева от строки ввода ---------------------------------------------------------------------
+
+
+def test_orb_sits_where_glyph_was(make: Any) -> None:
+    """Сфера шире прежнего значка, но лежит по центру его места: текст ввода и колонка ответа на месте."""
+    from jarvis.ui import theme
+    from jarvis.ui.orb import OrbWidget
+
+    w = make()
+    w.show_launcher()
+    settle()
+    orb = w._orb
+    assert isinstance(orb, OrbWidget) and orb.parent() is w._input_row
+    assert orb.width() == orb.height() == theme.ORB_PX
+    assert orb.x() + orb.width() / 2 == theme.PAD_X + theme.ORB_SLOT / 2
+    assert abs(orb.y() + orb.height() / 2 - theme.INPUT_H / 2) <= 1
+    assert w._input.geometry().left() == theme.PAD_X + theme.ORB_SLOT + 10  # как с прежним значком
+    assert orb.geometry().right() < w._input.geometry().left()  # сфера не залезает на текст
+    assert orb.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+
+def test_orb_follows_window_events(make: Any) -> None:
+    w = make()
+    m = w.orb_model
+    assert m.state == "idle" and not m.shown
+    w.show_launcher()
+    assert m.state == "wake" and m.shown and w._orb.is_animating()
+    pulse = m.pulse
+    QTest.keyClicks(w._input, "ab")  # QTest: только ASCII
+    assert m.pulse > pulse  # каждое нажатие — импульс
+    w.begin_request("gpt: расскажи")
+    assert m.state == "work" and m.busy
+    w.on_event(Level("brain", "prefix"))
+    assert m.level == "brain"
+    w.on_event(TextChunk("ответ"))
+    assert m.state == "speak"
+    req = ConfirmRequest("Открыть https://example.com/?", "", "brain")
+    w.ask_confirm(req)
+    assert m.state == "confirm"
+    w._confirms.deny_all()
+    w._render_confirm()
+    assert m.state == "speak"  # карточка убрана — снова поток
+    w.on_event(Done(True, level="brain"))
+    assert m.state == "success" and not m.busy
+    w.hide_launcher()
+    settle()
+    assert not m.shown and not w._orb.is_animating()  # спрятанная сфера окна не рисует
+
+
+def test_orb_error_and_cancel(make: Any) -> None:
+    w = make()
+    w.show_launcher()
+    w.begin_request("громкость 20")
+    w.on_event(Done(False, "Нет устройства вывода звука", level="grammar"))
+    assert w.orb_model.state == "error" and w.orb_model.flash_kind == "error"
+    w.begin_request("gpt: долго")
+    w.on_event(Done(False, "Отменено", reason="cancelled", cancelled=True))
+    assert w.orb_model.state == "listen"  # отмена — мягкое затухание без вспышки
+
+
+def test_orb_settles_by_itself(make: Any) -> None:
+    """Без перемотки: после показа сфера сама затихает (~2 с), и в окне не остаётся ни одного таймера."""
+    w = make()
+    w.show_launcher()
+    QTest.keyClicks(w._input, "hello")
+    assert w._orb.is_animating()
+    deadline = time.monotonic() + 4.0
+    while w._orb.is_animating() and time.monotonic() < deadline:
+        QTest.qWait(20)
+    assert not w._orb.is_animating()
+    assert running(w) == []
+    frozen = w.orb_model.t
+    QTest.qWait(60)
+    assert w.orb_model.t == frozen  # кадр застыл
+
+
+def test_orb_without_animations_never_starts_timer(make: Any) -> None:
+    w = make(animations=False)
+    w.show_launcher()
+    QTest.keyClicks(w._input, "ab")  # QTest: только ASCII
+    w.begin_request("громкость 20")
+    w.on_event(Level("hands", "router"))
+    w.on_event(Done(True, "Громкость 20", level="hands"))
+    QApplication.processEvents()
+    assert not w._orb.is_animating()
+    assert w.orb_model.state == "listen"  # статичные кадры состояний, без вспышек
+
+
+def test_orb_model_can_be_shared(make: Any, qapp: QApplication) -> None:
+    from jarvis.ui.logic import OrbModel
+
+    shared = OrbModel()
+    w = LauncherWindow(UiConfig(), orb=shared)
+    try:
+        assert w.orb_model is shared and w._orb.model is shared
+        w.set_local_mode(True)
+        assert shared.local
+    finally:
+        w.close()
+        w.deleteLater()
+        qapp.processEvents()
 
 
 # --- DWM (Windows 11: скругления, тёмная рамка, acrylic) ---------------------------------------------

@@ -36,11 +36,13 @@
 
 ## Структура
 - src/jarvis/ — приложение: app.py (вход, трей, хоткей), ui/, core.py (оркестрация), router.py, grammar.py,
-  context.py, hands.py, execute.py, brain.py, journal.py, log.py, config.py, cli.py
+  context.py, hands.py, execute.py, brain.py, journal.py, log.py, config.py, cli.py,
+  vision.py (зрение: «посмотри на экран» → снимок и вопрос мозгу)
 - src/pc/ — библиотека действий Windows, без UI и без моделей: settings.py (пути и секции [pc]/[aliases]),
   subproc.py (запуск внешних процессов), result.py, paths.py, policy.py, privacy.py, apps.py, windows.py,
   audio.py, media.py, procs.py (список и завершение процессов), files.py, system.py, confirm_client.py,
-  mcp.py (`python -m pc.mcp` — MCP-сервер для мозга)
+  screen.py (снимок окна или экрана для GPT — только по команде человека), mcp.py (`python -m pc.mcp` —
+  MCP-сервер для мозга)
 - tests/ — pytest; тесты, которым нужен реальный рабочий стол, GPU, Everything или сеть, помечены @pytest.mark.live
 - bench/phrases.ru.jsonl — корпус фраз с ожидаемым уровнем и инструментом
 - scripts/start_hands.cmd [4b|8b] — запуск llama-server (флаги не менять без замера); весь вывод сервера, включая
@@ -91,6 +93,7 @@ PySide6 (окно и трей), pytest, ruff. Позже для голоса: sh
 | прочитать буфер обмена | сразу | спросить (уходит в облако) |
 | записать в буфер обмена | сразу | сразу, текст виден в окне строкой «⚙ буфер: …» |
 | заблокировать компьютер | сразу | сразу |
+| снимок окна или экрана для GPT (по команде «посмотри на экран», «что в этом окне») | сразу; окно — активное до Jarvis; менеджеры паролей — отказ | нет (инструмента нет) |
 | прочитать текст файла (≤64 КБ) | — | спросить |
 | ввести текст в окно | — | спросить (окно и текст целиком в подтверждении) |
 | завершить процесс | спросить | спросить |
@@ -149,6 +152,8 @@ autohide_s = 1.2
 width = 720                          # ширина окна, px
 backdrop = "solid"                   # solid | acrylic (Windows 11; не вышло — сплошной фон)
 animations = true                    # false — без анимаций
+orb = "always"                       # сфера на рабочем столе: always | auto (при хоткее и работе) | off
+orb_size = 64                        # диаметр сферы на рабочем столе, px (40..160)
 
 [hands]
 url = "http://127.0.0.1:8081"
@@ -176,6 +181,13 @@ private_paths = []
 
 [journal]
 store_text = true
+
+[vision]
+enabled = true                       # «посмотри на экран», «окно: вопрос» — снимок уходит GPT; false — выключено
+max_side = 1600                      # длинная сторона снимка для GPT, px (640..2560)
+jpeg_quality = 80                    # качество JPEG (50..95)
+hide_jarvis = true                   # окна Jarvis не попадают в снимки экрана (Windows 10 2004+)
+deny_apps = []                       # чьи окна не отправлять, например ["Telegram.exe"]; менеджеры паролей — всегда
 ```
 
 ## Стиль

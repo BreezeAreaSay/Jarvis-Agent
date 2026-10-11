@@ -1,10 +1,11 @@
-"""Снимки окна Jarvis во всех состояниях (офскрин) — проверка вёрстки глазами.
+"""Снимки окна Jarvis и сферы во всех состояниях (офскрин) — проверка вёрстки глазами.
 
     uv run python scripts/ui_screenshots.py [--out docs/screenshots] [--scale 2]
 
 Без долгого событийного цикла: выставить состояние → processEvents → довести анимации до конца
-(бегущий градиент и спиннер — в середине оборота) → grab() → PNG на фоне «рабочего стола».
-docs/screenshots/ — в .gitignore: снимки в git не попадают.
+(бегущий градиент и спиннер — в середине оборота, сфера — на характерном кадре) → grab() → PNG на фоне
+«рабочего стола». 13-orb-states — сфера во всех состояниях, 14-orb-desktop — сфера в углу рабочего стола
+рядом с окном. docs/screenshots/ — в .gitignore: снимки в git не попадают.
 """
 
 import argparse
@@ -57,13 +58,23 @@ def main(argv: list[str] | None = None) -> int:
     _platform(args.scale)
     sys.path.insert(0, str(ROOT / "src"))
 
-    from PySide6.QtCore import QAbstractAnimation, QPointF, QtMsgType, qInstallMessageHandler
+    from PySide6.QtCore import (
+        QAbstractAnimation,
+        QPoint,
+        QPointF,
+        QRectF,
+        Qt,
+        QtMsgType,
+        qInstallMessageHandler,
+    )
     from PySide6.QtGui import QColor, QFont, QFontDatabase, QImage, QLinearGradient, QPainter, QRadialGradient
     from PySide6.QtWidgets import QApplication
 
     from jarvis.config import UiConfig
     from jarvis.events import Done, Items, Level, Status, TextChunk
-    from jarvis.ui.logic import ConfirmRequest
+    from jarvis.ui import theme
+    from jarvis.ui.logic import ORB_LEVELS, ConfirmRequest, OrbModel
+    from jarvis.ui.orb import OrbWindow, paint_orb
     from jarvis.ui.window import LauncherWindow
 
     def quiet(mode: QtMsgType, context: object, message: str) -> None:
@@ -81,8 +92,15 @@ def main(argv: list[str] | None = None) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
+    def orb_frame(m: OrbModel) -> None:
+        """Сфера — на характерном кадре: вспышка в разгаре, работа в полную силу, покой — застывший."""
+        seconds = 0.14 if m.state in ("success", "error") else 1.4
+        for _ in range(round(seconds * 60)):
+            m.tick(1 / 60)
+
     def settle(w: LauncherWindow, phase: float = 0.36) -> None:
         """Дойти до конечного кадра: обработать события и довести конечные анимации до конца."""
+        orb_frame(w.orb_model)
         for _ in range(6):
             app.processEvents()
             for anim in w.findChildren(QAbstractAnimation):
@@ -94,6 +112,18 @@ def main(argv: list[str] | None = None) -> int:
                     anim.setCurrentTime(anim.totalDuration())
         app.processEvents()
 
+    def wallpaper(p: QPainter, width: int, height: int) -> None:
+        """Фон «рабочего стола»: сине-фиолетовый градиент и тёплый блик."""
+        bg = QLinearGradient(0, 0, width, height)
+        bg.setColorAt(0.0, QColor("#2B3A55"))
+        bg.setColorAt(0.55, QColor("#3B2F4A"))
+        bg.setColorAt(1.0, QColor("#1F2B33"))
+        p.fillRect(0, 0, width, height, bg)
+        glow = QRadialGradient(QPointF(width * 0.8, height * 0.1), width * 0.5)
+        glow.setColorAt(0.0, QColor(255, 190, 120, 70))
+        glow.setColorAt(1.0, QColor(255, 190, 120, 0))
+        p.fillRect(0, 0, width, height, glow)
+
     def save(w: LauncherWindow, name: str) -> Path:
         shot = w.grab().toImage()
         dpr = shot.devicePixelRatio()
@@ -104,20 +134,121 @@ def main(argv: list[str] | None = None) -> int:
         canvas.setDevicePixelRatio(1.0)
         p = QPainter(canvas)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bg = QLinearGradient(0, 0, canvas.width(), canvas.height())
-        bg.setColorAt(0.0, QColor("#2B3A55"))
-        bg.setColorAt(0.55, QColor("#3B2F4A"))
-        bg.setColorAt(1.0, QColor("#1F2B33"))
-        p.fillRect(canvas.rect(), bg)
-        glow = QRadialGradient(QPointF(canvas.width() * 0.8, canvas.height() * 0.1), canvas.width() * 0.5)
-        glow.setColorAt(0.0, QColor(255, 190, 120, 70))
-        glow.setColorAt(1.0, QColor(255, 190, 120, 0))
-        p.fillRect(canvas.rect(), glow)
+        wallpaper(p, canvas.width(), canvas.height())
         shot.setDevicePixelRatio(1.0)
         p.drawImage(pad, pad, shot)
         p.end()
         path = out / f"{name}.png"
         canvas.save(str(path), "PNG")
+        return path
+
+    def run(m: OrbModel, seconds: float) -> OrbModel:
+        for _ in range(round(seconds * 60)):
+            m.tick(1 / 60)
+        return m
+
+    def orb_states() -> list[tuple[str, OrbModel]]:
+        """Сфера в каждом состоянии — как её видит человек."""
+        items: list[tuple[str, OrbModel]] = [("покой", OrbModel())]
+        m = OrbModel()
+        m.wake()
+        items.append(("пробуждение", run(m, 0.22)))
+        m = OrbModel()
+        m.wake()
+        run(m, 3.0)
+        m.key()
+        items.append(("ввод", run(m, 0.05)))
+        names = {"grammar": "грамматика", "hands": "руки", "brain": "GPT", "local": "локально"}
+        for level in ORB_LEVELS:
+            m = OrbModel()
+            m.set_local(level == "local")
+            m.wake()
+            m.begin()
+            m.set_level(level)
+            items.append((f"работа: {names[level]}", run(m, 1.4)))
+        m = OrbModel()
+        m.wake()
+        m.begin()
+        m.set_level("brain")
+        run(m, 0.8)
+        for _ in range(6):
+            m.chunk()
+            run(m, 0.12)
+        items.append(("поток GPT", m))
+        m = OrbModel()
+        m.wake()
+        m.begin()
+        m.set_level("brain")
+        run(m, 0.5)
+        m.confirm(True)
+        items.append(("подтверждение", run(m, 1.4)))
+        for ok, title in ((True, "успех"), (False, "ошибка")):
+            m = OrbModel()
+            m.wake()
+            m.begin()
+            m.set_level("hands")
+            run(m, 0.6)
+            m.done(ok)
+            items.append((title, run(m, 0.14)))
+        return items
+
+    def orb_grid(name: str, scale: float) -> Path:
+        """13-orb-states: сетка состояний сферы, каждая — на тёмной плитке с подписью."""
+        items = orb_states()
+        cols, size, label = 4, 150, 26
+        cell_w, cell_h = size + 24, size + label + 18
+        width, height = cols * cell_w + 24, ((len(items) + cols - 1) // cols) * cell_h + 24
+        img = QImage(round(width * scale), round(height * scale), QImage.Format.Format_ARGB32_Premultiplied)
+        img.setDevicePixelRatio(scale)
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(QRectF(0, 0, width, height), QColor("#0E0E12"))
+        font = theme.font(theme.FONT_ROW)
+        p.setFont(font)
+        for i, (title, m) in enumerate(items):
+            x, y = 12 + (i % cols) * cell_w, 12 + (i // cols) * cell_h
+            tile = QRectF(x + 4, y + 4, cell_w - 8, cell_h - 8)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(theme.BG))
+            p.drawRoundedRect(tile, theme.RADIUS_CARD, theme.RADIUS_CARD)
+            paint_orb(p, QRectF(x + 12, y + 8, size, size), m)
+            p.setPen(theme.color(theme.TEXT_MUTED))
+            p.drawText(QRectF(x, y + size + 8, cell_w, label), Qt.AlignmentFlag.AlignCenter, title)
+        p.end()
+        path = out / f"{name}.png"
+        img.save(str(path), "PNG")
+        return path
+
+    def orb_desktop(name: str, scale: float) -> Path:
+        """14-orb-desktop: «рабочий стол» 1920×1080 — окно Jarvis отвечает, сфера в углу над панелью задач."""
+        width, height, taskbar = 1920, 1080, 48
+        model = OrbModel()
+        w = LauncherWindow(UiConfig(), orb=model)
+        brain_stream(w)
+        orb = OrbWindow(model, UiConfig(), state={}, writer=lambda update: None)
+        r = orb.orb_size // 2
+        center = QPoint(width - 1 - 24 - r, height - taskbar - 1 - 24 - r)  # как default_center над панелью
+        orb.place({"orb": {"x": center.x(), "y": center.y()}})
+        orb.start()
+        settle(w)
+        img = QImage(round(width * scale), round(height * scale), QImage.Format.Format_ARGB32_Premultiplied)
+        img.setDevicePixelRatio(scale)
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        wallpaper(p, width, height)
+        p.fillRect(QRectF(0, height - taskbar, width, taskbar), QColor(24, 24, 30, 235))
+        p.fillRect(QRectF(0, height - taskbar, width, 1), QColor(255, 255, 255, 20))
+        for pos, shot in ((w.pos(), w.grab().toImage()), (orb.pos(), orb.grab().toImage())):
+            shot_dpr = shot.devicePixelRatio()
+            p.drawImage(QRectF(pos.x(), pos.y(), shot.width() / shot_dpr, shot.height() / shot_dpr), shot)
+        p.end()
+        path = out / f"{name}.png"
+        img.save(str(path), "PNG")
+        orb.close_orb()
+        orb.deleteLater()
+        w.close()
+        w.deleteLater()
+        app.processEvents()
         return path
 
     def empty(w: LauncherWindow) -> None:
@@ -233,6 +364,8 @@ def main(argv: list[str] | None = None) -> int:
         w.close()
         w.deleteLater()
         app.processEvents()
+    print(orb_grid("13-orb-states", max(2.0, args.scale)))
+    print(orb_desktop("14-orb-desktop", args.scale))
     return 0
 
 

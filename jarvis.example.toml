@@ -6,6 +6,8 @@ autohide_s = 1.2
 width = 720                          # ширина окна, px
 backdrop = "solid"                   # solid | acrylic (Windows 11; не вышло — сплошной фон)
 animations = true                    # false — без анимаций
+orb = "always"                       # сфера на рабочем столе: always | auto (при хоткее и работе) | off
+orb_size = 64                        # диаметр сферы на рабочем столе, px (40..160)
 
 [hands]
 url = "http://127.0.0.1:8081"
@@ -33,3 +35,10 @@ private_paths = []
 
 [journal]
 store_text = true
+
+[vision]
+enabled = true                       # «посмотри на экран», «окно: вопрос» — снимок уходит GPT; false — выключено
+max_side = 1600                      # длинная сторона снимка для GPT, px (640..2560)
+jpeg_quality = 80                    # качество JPEG (50..95)
+hide_jarvis = true                   # окна Jarvis не попадают в снимки экрана (Windows 10 2004+)
+deny_apps = []                       # чьи окна не отправлять, например ["Telegram.exe"]; менеджеры паролей — всегда

@@ -39,6 +39,8 @@ TABLE: dict[str, tuple[Decision, Decision]] = {
     "clipboard_get": ("allow", "confirm"),
     "clipboard_set": ("allow", "allow"),
     "lock": ("allow", "allow"),
+    # снимок окна или экрана для GPT — только по команде человека; у мозга такого инструмента нет (pc.screen)
+    "screenshot": ("allow", "deny"),
     # «—» в таблице для user: у человека нет такой команды — отказ
     "read_text": ("deny", "confirm"),
     "type_text": ("deny", "confirm"),

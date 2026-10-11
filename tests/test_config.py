@@ -112,6 +112,54 @@ def test_backdrop(config_file, value: str, expected: str) -> None:
     assert config.load().ui.backdrop == expected
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ('"always"', "always"),
+        ('"auto"', "auto"),
+        ('"off"', "off"),
+        ('"never"', "always"),
+        ('"AUTO"', "always"),  # как mode: регистр важен
+        ("1", "always"),
+        ("true", "always"),
+    ],
+)
+def test_orb_mode(config_file, value: str, expected: str) -> None:
+    config_file(f"[ui]\norb = {value}\n")
+    assert config.load().ui.orb == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("64", 64),
+        ("40", 40),
+        ("160", 160),
+        ("39", 40),
+        ("0", 40),
+        ("-5", 40),
+        ("500", 160),
+        ('"big"', 64),
+        ("72.5", 64),
+        ("true", 64),
+    ],
+)
+def test_orb_size_clamped(config_file, value: str, expected: int) -> None:
+    config_file(f"[ui]\norb_size = {value}\n")
+    assert config.load().ui.orb_size == expected
+
+
+def test_orb_defaults_and_example_lines() -> None:
+    ui = config.UiConfig()
+    assert (ui.orb, ui.orb_size) == ("always", 64)
+    example = tomllib.loads(EXAMPLE)["ui"]
+    assert (example["orb"], example["orb_size"]) == ("always", 64)
+    agents = (settings.app_root() / "AGENTS.md").read_text(encoding="utf-8")
+    for line in EXAMPLE.splitlines():
+        if line.startswith(("orb ", "orb_size ")):
+            assert line in agents  # блок конфига в AGENTS.md совпадает с примером
+
+
 def test_load_cache_follows_file(config_file) -> None:
     config_file('mode = "local"\n')
     first = config.load()
@@ -268,3 +316,71 @@ def test_save_mode_with_non_string_mode_line(config_file) -> None:
     config.save_mode("local")
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     assert data["mode"] == "local" and data["ui"]["width"] == 800
+
+
+# --- [vision] ---------------------------------------------------------------------------------------
+
+
+def test_vision_defaults_and_example(config_file) -> None:
+    assert config.load().vision == config.VisionConfig(True, 1600, 80, True, [])
+    config_file(EXAMPLE)
+    assert config.load().vision == config.VisionConfig()
+    assert tomllib.loads(EXAMPLE)["vision"] == {
+        "enabled": True,
+        "max_side": 1600,
+        "jpeg_quality": 80,
+        "hide_jarvis": True,
+        "deny_apps": [],
+    }
+
+
+def test_vision_custom(config_file) -> None:
+    config_file(
+        "[vision]\nenabled = false\nmax_side = 1280\njpeg_quality = 70\nhide_jarvis = false\n"
+        'deny_apps = ["Telegram.exe", "  ", " KeePassXC.exe "]\n'
+    )
+    v = config.load().vision
+    assert (v.enabled, v.max_side, v.jpeg_quality, v.hide_jarvis) == (False, 1280, 70, False)
+    assert v.deny_apps == ["Telegram.exe", "KeePassXC.exe"]
+
+
+@pytest.mark.parametrize(
+    ("text", "name"),
+    [
+        ("max_side = 100", "max_side"),
+        ("max_side = 5000", "max_side"),
+        ("max_side = 1600.5", "max_side"),
+        ('max_side = "1600"', "max_side"),
+        ("jpeg_quality = 10", "jpeg_quality"),
+        ("jpeg_quality = 100", "jpeg_quality"),
+        ("jpeg_quality = true", "jpeg_quality"),
+        ('enabled = "yes"', "enabled"),
+        ("hide_jarvis = 1", "hide_jarvis"),
+        ('deny_apps = "Telegram.exe"', "deny_apps"),
+        ("deny_apps = [1, 2]", "deny_apps"),
+    ],
+)
+def test_vision_bad_values_fall_back_to_defaults(config_file, text: str, name: str) -> None:
+    config_file(f"[vision]\n{text}\n")
+    assert getattr(config.load().vision, name) == getattr(config.VisionConfig(), name)
+
+
+@pytest.mark.parametrize(("side", "quality"), [(640, 50), (2560, 95)])
+def test_vision_limits_inclusive(config_file, side: int, quality: int) -> None:
+    config_file(f"[vision]\nmax_side = {side}\njpeg_quality = {quality}\n")
+    v = config.load().vision
+    assert (v.max_side, v.jpeg_quality) == (side, quality)
+
+
+def test_vision_section_wrong_type(config_file) -> None:
+    config_file("vision = 5\n")
+    assert config.load().vision == config.VisionConfig()
+
+
+def test_vision_example_block_in_agents() -> None:
+    """Секция [vision] примера слово в слово есть в блоке конфига AGENTS.md."""
+    agents = (settings.app_root() / "AGENTS.md").read_text(encoding="utf-8")
+    block = EXAMPLE[EXAMPLE.index("[vision]") :].split("\n\n")[0].splitlines()
+    assert len(block) == 6
+    for line in block:
+        assert line in agents, line

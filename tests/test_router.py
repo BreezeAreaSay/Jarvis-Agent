@@ -10,6 +10,7 @@ from jarvis import router
 from jarvis.context import Context
 from jarvis.router import Route, route
 from pc import apps
+from pc.windows import WindowInfo
 
 _KNOWN = {"телега": "Telegram", "телегу": "Telegram", "хром": "Google Chrome"}
 
@@ -192,3 +193,88 @@ def test_local_mode() -> None:
     assert (r.level, r.reason, r.local_only) == ("grammar", "grammar:vol", True)
     r = route("заверши процесс дискорда", ctx(), "local")
     assert (r.level, r.reason, r.local_only) == ("hands", "hands", True)
+
+
+# --- зрение ------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "target", "question"),
+    [
+        ("посмотри на экран", "screen", "Что на снимке? Коротко опиши главное."),
+        ("глянь на экран и скажи, что не так", "screen", "скажи, что не так"),
+        ("экран: что тут не так?", "screen", "что тут не так?"),
+        ("окно: переведи", "window", "переведи"),
+        ("что в этом окне?", "window", "что в этом окне?"),
+        ("прочитай ошибку в окне", "window", "прочитай ошибку в окне"),
+        ("переведи текст на экране", "screen", "переведи текст на экране"),
+    ],
+)
+def test_vision_route(text: str, target: str, question: str) -> None:
+    """Зрение — до грамматики и эвристик («переведи» иначе ушло бы мозгу без снимка)."""
+    r = route(text, ctx(), "normal")
+    assert (r.level, r.reason, r.text, r.vision, r.deep, r.local_only, r.hit) == (
+        "brain",
+        f"vision:{target}",
+        question,
+        target,
+        False,
+        False,
+        None,
+    )
+
+
+def test_vision_with_gpt_and_think_prefix() -> None:
+    r = route("думай: посмотри на экран и найди ошибку", ctx(), "normal")
+    assert (r.level, r.reason, r.text, r.vision, r.deep) == (
+        "brain",
+        "vision:screen",
+        "найди ошибку",
+        "screen",
+        True,
+    )
+    r = route("gpt: окно: что это", ctx(), "normal")
+    assert (r.reason, r.text, r.vision, r.deep) == ("vision:window", "что это", "window", False)
+
+
+def test_vision_local_needs_gpt_without_shot() -> None:
+    """Без облака — как любой вопрос мозгу: снимок не делается (core видит level local)."""
+    for text, mode in (("локально: посмотри на экран", "normal"), ("что у меня на экране", "local")):
+        r = route(text, ctx(), mode)
+        assert (r.level, r.reason, r.local_only) == ("local", "local:needs_gpt", True)
+
+
+@pytest.mark.parametrize(
+    ("text", "level", "reason"),
+    [("сверни окно", "grammar", "grammar:win"), ("закрой это окно", "grammar", "grammar:close"),
+     ("разверни на весь экран", "grammar", "grammar:win"), ("заблокируй экран", "grammar", "grammar:lock"),
+     ("сверни все окна", "grammar", "grammar:win"), ("как сделать скриншот", "brain", "heur:question"),
+     ("найди скриншот", "hands", "hands"), ("открой экран блокировки", "hands", "hands")],
+)  # fmt: skip
+def test_vision_lookalikes_keep_their_route(text: str, level: str, reason: str) -> None:
+    c = Context()
+    c.active_window = WindowInfo(5, "Безымянный - Блокнот", 7, "notepad.exe")
+    r = route(text, c, "normal")
+    assert (r.level, r.reason, r.vision) == (level, reason, "")
+
+
+def test_vision_check_is_cheap() -> None:
+    """Зрение проверяется на горячем пути грамматики: предпроверка подстрок и регулярки — микросекунды."""
+    from jarvis import vision
+
+    texts = [
+        "громкость 30",
+        "открой телегу",
+        "пауза",
+        "сверни окно",
+        "заблокируй экран",
+        "почему тормозит комп",
+    ]
+    for t in texts * 3:
+        route(t, ctx(), "normal")
+    t0 = time.perf_counter()
+    for _ in range(200):
+        for t in texts:
+            vision.match(t)
+    per_call = (time.perf_counter() - t0) / (200 * len(texts))
+    assert per_call <= 0.00005 * (3 if os.environ.get("CI") else 1)  # ≤50 мкс даже с регулярками

@@ -1,4 +1,5 @@
-"""Windows-обвязка приложения без Qt: Job Object, один экземпляр, автозапуск, хоткей, передний план.
+"""Windows-обвязка приложения без Qt: Job Object, один экземпляр, автозапуск, хоткей, передний план,
+хук смены переднего окна (полноэкранные окна прячут сферу на рабочем столе).
 
 Все вызовы ОС — за тонким слоем `_api` (создаётся лениво функцией api()); тесты подменяют `winapp._api`.
 На Linux модуль импортируется, но без фейка `available()` ложно, и приложение эти функции не вызывает.
@@ -37,6 +38,13 @@ SHOW_MESSAGE_NAME = "Jarvis.Show"
 RECEIVER_TITLE = "Jarvis.Receiver"  # заголовок скрытого окна-приёмника (хоткей и «покажись»)
 
 FALLBACK_HOTKEYS = ["ctrl+alt+shift+space", "ctrl+alt+j"]
+
+EVENT_SYSTEM_FOREGROUND = 0x0003
+WINEVENT_OUTOFCONTEXT = 0x0000
+WINEVENT_SKIPOWNPROCESS = 0x0002
+MONITOR_DEFAULTTONULL = 0x00000000
+SHELL_CLASSES = frozenset({"Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"})
+"""Рабочий стол и панель задач закрывают монитор целиком, но полноэкранными не считаются."""
 
 
 # --- слой ОС -------------------------------------------------------------------------------------------
@@ -221,6 +229,134 @@ class _WinApi:
         except FileNotFoundError:
             return False
         return True
+
+    # --- снимки экрана
+
+    def set_display_affinity(self, hwnd: int, affinity: int) -> tuple[bool, int]:
+        """SetWindowDisplayAffinity; (успех, GetLastError)."""
+        import ctypes
+        from ctypes import wintypes
+
+        dll = ctypes.WinDLL("user32", use_last_error=True)  # type: ignore[attr-defined]
+        fn = _fn(dll, "SetWindowDisplayAffinity", (wintypes.HWND, wintypes.DWORD), wintypes.BOOL)
+        ok = bool(fn(hwnd, affinity))
+        return ok, 0 if ok else self._last_error()
+
+    # --- передний план: хук смены окна и полноэкранные окна
+
+    @functools.cached_property
+    def _fg(self) -> dict[str, Any]:
+        import ctypes
+        from ctypes import wintypes
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = (
+                ("cbSize", wintypes.DWORD),
+                ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT),
+                ("dwFlags", wintypes.DWORD),
+            )
+
+        dll = ctypes.WinDLL("user32", use_last_error=True)  # type: ignore[attr-defined]
+        proc = ctypes.WINFUNCTYPE(  # type: ignore[attr-defined]
+            None,
+            wintypes.HANDLE,  # HWINEVENTHOOK
+            wintypes.DWORD,  # event
+            wintypes.HWND,
+            wintypes.LONG,  # idObject
+            wintypes.LONG,  # idChild
+            wintypes.DWORD,  # idEventThread
+            wintypes.DWORD,  # dwmsEventTime
+        )
+        return {
+            "MONITORINFO": MONITORINFO,
+            "WINEVENTPROC": proc,
+            "SetWinEventHook": _fn(
+                dll,
+                "SetWinEventHook",
+                (
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.HMODULE,
+                    proc,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                ),
+                wintypes.HANDLE,
+            ),
+            "UnhookWinEvent": _fn(dll, "UnhookWinEvent", (wintypes.HANDLE,), wintypes.BOOL),
+            "GetForegroundWindow": _fn(dll, "GetForegroundWindow", (), wintypes.HWND),
+            "GetWindowRect": _fn(
+                dll, "GetWindowRect", (wintypes.HWND, ctypes.POINTER(wintypes.RECT)), wintypes.BOOL
+            ),
+            "MonitorFromWindow": _fn(
+                dll, "MonitorFromWindow", (wintypes.HWND, wintypes.DWORD), wintypes.HMONITOR
+            ),
+            "GetMonitorInfoW": _fn(
+                dll, "GetMonitorInfoW", (wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)), wintypes.BOOL
+            ),
+            "GetClassNameW": _fn(
+                dll, "GetClassNameW", (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int), ctypes.c_int
+            ),
+        }
+
+    def set_foreground_hook(self, callback: Callable[[int], None]) -> tuple[int, Any]:
+        """SetWinEventHook(EVENT_SYSTEM_FOREGROUND), вне контекста, без своих окон: (handle, колбэк)."""
+        fg = self._fg
+
+        def on_event(_hook: Any, _event: int, hwnd: Any, *_rest: Any) -> None:
+            try:
+                callback(int(hwnd or 0))
+            except Exception:  # исключение не должно уйти в Windows через ctypes
+                log.exception("обработчик смены переднего окна")
+
+        proc = fg["WINEVENTPROC"](on_event)
+        flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+        handle = fg["SetWinEventHook"](
+            EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, None, proc, 0, 0, flags
+        )
+        if not handle:
+            err = self._last_error()
+            raise OSError(err, f"SetWinEventHook: ошибка {err}")
+        return int(handle), proc
+
+    def unhook_win_event(self, handle: int) -> bool:
+        return bool(self._fg["UnhookWinEvent"](handle))
+
+    def foreground_window(self) -> int:
+        return int(self._fg["GetForegroundWindow"]() or 0)
+
+    def window_rect(self, hwnd: int) -> tuple[int, int, int, int] | None:
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        if not self._fg["GetWindowRect"](hwnd, ctypes.byref(rect)):
+            return None
+        return rect.left, rect.top, rect.right, rect.bottom
+
+    def monitor_rect(self, hwnd: int) -> tuple[int, int, int, int] | None:
+        """Прямоугольник монитора, на котором окно (без учёта панели задач); окна нет — None."""
+        import ctypes
+
+        fg = self._fg
+        monitor = fg["MonitorFromWindow"](hwnd, MONITOR_DEFAULTTONULL)
+        if not monitor:
+            return None
+        info = fg["MONITORINFO"]()
+        info.cbSize = ctypes.sizeof(info)
+        if not fg["GetMonitorInfoW"](monitor, ctypes.byref(info)):
+            return None
+        r = info.rcMonitor
+        return r.left, r.top, r.right, r.bottom
+
+    def class_name(self, hwnd: int) -> str:
+        import ctypes
+
+        buf = ctypes.create_unicode_buffer(256)
+        n = self._fg["GetClassNameW"](hwnd, buf, len(buf))
+        return buf.value if n > 0 else ""
 
 
 _api: Any = None
@@ -616,3 +752,98 @@ def set_foreground(hwnd: int) -> bool:
 def tick_count() -> int:
     """GetTickCount (мс, 32 бита) — для задержки сообщения в очереди: MSG.time в тех же единицах."""
     return api().tick_count()
+
+
+# --- снимки экрана -------------------------------------------------------------------------------------
+
+WDA_EXCLUDEFROMCAPTURE = 0x00000011
+
+
+def exclude_from_capture(hwnd: int) -> bool:
+    """Окно Jarvis не попадает в снимки экрана («экран: …» для GPT, PrintScreen, запись экрана):
+    SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE), Windows 10 2004+; на более старой Windows то же значение
+    работает как WDA_MONITOR (в снимке — чёрный прямоугольник). Не Windows, нет окна или ошибка — False и лог.
+    Действует на HWND: пересозданное окно нужно исключить снова."""
+    if not hwnd or not available():
+        return False
+    try:
+        ok, err = api().set_display_affinity(int(hwnd), WDA_EXCLUDEFROMCAPTURE)
+    except Exception as e:
+        log.warning("окно Jarvis не исключено из снимков экрана: %s", e)
+        return False
+    if ok:
+        log.info("окно %#x исключено из снимков экрана", int(hwnd))
+    else:
+        log.warning("окно Jarvis не исключено из снимков экрана: ошибка %d", err)
+    return ok
+
+
+# --- полноэкранные окна (сфера на рабочем столе прячется) -------------------------------------------------
+
+
+@dataclass
+class ForegroundWatch:
+    """Поставленный хук смены переднего окна. proc — колбэк ctypes: пока хук жив, ссылку на него держим здесь,
+    иначе сборщик мусора освободит его и Windows позовёт освобождённую память."""
+
+    handle: int
+    proc: Any
+
+
+def watch_foreground(callback: Callable[[int], None]) -> ForegroundWatch | None:
+    """callback(hwnd) при смене переднего окна — без опроса по таймеру.
+
+    Хук вне контекста (WINEVENT_OUTOFCONTEXT): колбэк приходит в цикле сообщений потока, который его поставил
+    (UI-поток Qt). Свои окна не сообщаются (WINEVENT_SKIPOWNPROCESS). Не Windows или ошибка — None и лог.
+    Ограничение: окно, ставшее полноэкранным без смены переднего окна (F11 в браузере), хук не заметит.
+    """
+    if not available():
+        return None
+    try:
+        handle, proc = api().set_foreground_hook(callback)
+    except Exception as e:
+        log.warning("хук смены переднего окна не поставлен: %s", e)
+        return None
+    return ForegroundWatch(handle, proc)
+
+
+def unwatch_foreground(watch: ForegroundWatch | None) -> None:
+    """UnhookWinEvent; повторно — ничего."""
+    if watch is None or not watch.handle:
+        return
+    try:
+        api().unhook_win_event(watch.handle)
+    except Exception as e:
+        log.warning("хук смены переднего окна не снят: %s", e)
+    watch.handle = 0
+
+
+def is_fullscreen(hwnd: int) -> bool:
+    """Окно закрывает весь свой монитор (игра, видео во весь экран).
+
+    Рабочий стол и панель задач — нет; развёрнутое обычное окно (панель задач видна) — нет. Ошибка — нет.
+    """
+    if not hwnd or not available():
+        return False
+    try:
+        if api().class_name(hwnd) in SHELL_CLASSES:
+            return False
+        win, mon = api().window_rect(hwnd), api().monitor_rect(hwnd)
+    except Exception as e:
+        log.debug("размер окна %s: %s", hwnd, e)
+        return False
+    if win is None or mon is None:
+        return False
+    return win[0] <= mon[0] and win[1] <= mon[1] and win[2] >= mon[2] and win[3] >= mon[3]
+
+
+def foreground_fullscreen() -> bool:
+    """Сейчас впереди полноэкранное окно (при старте: хук сообщает только о сменах)."""
+    if not available():
+        return False
+    try:
+        hwnd = api().foreground_window()
+    except Exception as e:
+        log.debug("переднее окно: %s", e)
+        return False
+    return is_fullscreen(hwnd)

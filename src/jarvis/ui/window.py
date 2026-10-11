@@ -2,7 +2,9 @@
 
 Создаётся один раз при старте, дальше только show_launcher()/hide_launcher(). Все методы — в UI-потоке;
 on_event — O(1) на событие (текст дописывается, блоки добавляются, ничего не пересобирается).
-Покой: без запроса не работает ни одна анимация и ни один таймер.
+Слева от строки ввода — сфера (ui/orb.py): окно ведёт её модель OrbModel (показ, ввод, запрос, события,
+подтверждение, скрытие); ту же модель app.py отдаёт сфере на рабочем столе.
+Покой: без запроса не работает ни одна анимация и ни один таймер (сфера тоже застывает сама).
 """
 
 import logging
@@ -38,12 +40,12 @@ from PySide6.QtWidgets import (
 from jarvis.config import UiConfig
 from jarvis.events import Done, Items, Level, Status, TextChunk
 from jarvis.ui import logic, theme
-from jarvis.ui.logic import ConfirmRequest
+from jarvis.ui.logic import ConfirmRequest, OrbModel
+from jarvis.ui.orb import OrbWidget
 from jarvis.ui.widgets import (
     Badge,
     ConfirmCard,
     Footer,
-    Glyph,
     IconKind,
     ItemsBlock,
     Panel,
@@ -85,9 +87,13 @@ class LauncherWindow(QWidget):
     open_item = Signal(int)
     hidden = Signal()
 
-    def __init__(self, ui_cfg: UiConfig, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, ui_cfg: UiConfig, parent: QWidget | None = None, *, orb: OrbModel | None = None
+    ) -> None:
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
         super().__init__(parent, flags)
+        # модель сферы: своя или общая со сферой на рабочем столе (её создаёт app.py)
+        self.orb_model = orb if orb is not None else OrbModel(animations=bool(ui_cfg.animations))
         self.setObjectName("launcher")
         self.setWindowTitle("Jarvis")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -151,8 +157,12 @@ class LauncherWindow(QWidget):
         row = QHBoxLayout(self._input_row)
         row.setContentsMargins(theme.PAD_X, 0, theme.PAD_X - 4, 0)
         row.setSpacing(10)
-        self._glyph = Glyph(self._input_row)
-        row.addWidget(self._glyph)
+        # место сферы в раскладке — как у прежнего значка; сама сфера шире (поля под ауру) и лежит поверх,
+        # по центру этого места: текст ввода и колонка ответа не сдвигаются
+        slot = QWidget(self._input_row)
+        slot.setFixedSize(theme.ORB_SLOT, theme.ORB_SLOT)
+        slot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        row.addWidget(slot)
         self._input = QLineEdit(self._input_row)
         self._input.setObjectName("input")
         self._input.setFont(theme.font(theme.FONT_INPUT, display=True))
@@ -164,6 +174,7 @@ class LauncherWindow(QWidget):
         pal.setColor(QPalette.ColorRole.Text, theme.color(theme.TEXT))
         self._input.setPalette(pal)
         self._input.installEventFilter(self)
+        self._input.textEdited.connect(self._on_typed)
         row.addWidget(self._input, 1)
         self._level_badge = Badge(self._input_row, animations=self._anim)
         self._level_badge.hide()
@@ -173,6 +184,9 @@ class LauncherWindow(QWidget):
         self._local_badge.hide()
         row.addWidget(self._local_badge)
         lay.addWidget(self._input_row)
+        self._orb = OrbWidget(self.orb_model, self._input_row, size=theme.ORB_PX)
+        center_x = theme.PAD_X + theme.ORB_SLOT // 2
+        self._orb.move(center_x - theme.ORB_PX // 2, (theme.INPUT_H - theme.ORB_PX) // 2)
 
         self._strip = ProgressStrip(self._panel)
         lay.addWidget(self._strip)
@@ -320,6 +334,7 @@ class LauncherWindow(QWidget):
                 self.move(self._home)
                 self.show()
         self.raise_()
+        self.orb_model.wake()
         if not self.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating):
             self.activateWindow()
         if self._confirms.current is not None and self._buttons_shown:
@@ -386,10 +401,11 @@ class LauncherWindow(QWidget):
             self._render_confirm()
 
     def set_local_mode(self, on: bool) -> None:
-        """Локальный режим: спокойный бейдж «локально» в строке ввода."""
+        """Локальный режим: спокойный бейдж «локально» в строке ввода и бирюзовый оттенок сферы."""
         self._local = bool(on)
         self._local_badge.setVisible(self._local)
         self._refresh_level_badge()
+        self.orb_model.set_local(self._local)
 
     def show_toast(self, text: str, kind: str = "error") -> None:
         """Ошибка или предупреждение внутри окна (до следующего запроса)."""
@@ -408,6 +424,7 @@ class LauncherWindow(QWidget):
     def _start_busy(self) -> None:
         self._reset_body()
         self._busy = True
+        self.orb_model.begin()
         self._cancel_sent = False
         self._level = ""
         self._refresh_level_badge()
@@ -422,8 +439,10 @@ class LauncherWindow(QWidget):
         self._level = ev.level
         self._refresh_level_badge()
         self._set_tone(QColor(theme.LEVEL_COLORS.get(ev.level, theme.ACCENT)))
+        self.orb_model.set_level(ev.level)
 
     def _on_status(self, ev: Status) -> None:
+        self.orb_model.status()
         text = _strip_gear(ev.text)
         if ev.kind == "warn":
             self.show_toast(text, "warn")
@@ -455,6 +474,7 @@ class LauncherWindow(QWidget):
             view = self._new_text_view()
         view.append_text(chunk)
         self._got_text = True
+        self.orb_model.chunk()
         self._schedule_relayout()
 
     def _on_items(self, items: list[str]) -> None:
@@ -464,6 +484,7 @@ class LauncherWindow(QWidget):
         block.activated.connect(self._open_item)
         self._add_block(block)
         self._items_count = len(items)
+        self.orb_model.status()
 
     def _on_done(self, ev: Done) -> None:
         cancelled = bool(ev.cancelled)
@@ -473,6 +494,7 @@ class LauncherWindow(QWidget):
         self._spinners.clear()
         self._busy = False
         self._cancel_sent = False
+        self.orb_model.done(bool(ev.ok), cancelled)
         cancel_row, self._cancel_row = self._cancel_row, None
         if cancelled:
             if cancel_row is not None:
@@ -559,6 +581,7 @@ class LauncherWindow(QWidget):
 
     def _render_confirm(self) -> None:
         req = self._confirms.current
+        self.orb_model.confirm(req is not None)
         if req is None:
             self._confirm_timer.stop()
             self._buttons_anim.stop()
@@ -691,6 +714,10 @@ class LauncherWindow(QWidget):
             self._add_block(self._cancel_row)
         self.cancel_requested.emit()
 
+    def _on_typed(self, _text: str) -> None:
+        """Человек печатает: каждое изменение строки — короткий импульс сферы."""
+        self.orb_model.key()
+
     def _submit(self) -> None:
         text = self._input.text()
         index = logic.parse_index(text, self._items_count)
@@ -787,6 +814,7 @@ class LauncherWindow(QWidget):
         self._stop_motion()
         self.hide()
         self._hiding = False
+        self.orb_model.hide()
         self.setWindowOpacity(1.0)
         self.move(self._home)
         if not self._busy:
@@ -902,7 +930,6 @@ class LauncherWindow(QWidget):
 
     def _set_tone(self, value: QColor) -> None:
         self._strip.set_color(value)
-        self._glyph.set_color(value)
         for icon in self._spinners:
             icon.set_color(value)
 

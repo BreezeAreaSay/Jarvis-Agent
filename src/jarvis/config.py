@@ -1,5 +1,6 @@
-"""Конфиг Jarvis: mode, [ui], [hands], [brain], [journal]. Пути и кэш файла — из pc.settings."""
+"""Конфиг Jarvis: mode, [ui], [hands], [brain], [journal], [vision]. Пути и кэш — из pc.settings."""
 
+import dataclasses
 import os
 import re
 import threading
@@ -9,6 +10,8 @@ from typing import Any, Literal
 from pc import settings
 
 Mode = Literal["normal", "local"]
+OrbMode = Literal["always", "auto", "off"]
+ORB_SIZE_MIN, ORB_SIZE_MAX = 40, 160
 
 
 @dataclass(frozen=True)
@@ -18,6 +21,21 @@ class UiConfig:
     width: int = 720
     backdrop: Literal["solid", "acrylic"] = "solid"
     animations: bool = True
+    orb: OrbMode = "always"  # сфера на рабочем столе: всегда | при хоткее и работе | только в окне
+    orb_size: int = 64  # диаметр сферы на рабочем столе, px (40..160)
+
+
+def _fix_ui(ui: UiConfig) -> UiConfig:
+    """Неверные значения [ui] — умолчания; размер сферы — в пределах ORB_SIZE_MIN..ORB_SIZE_MAX."""
+    fixes: dict[str, Any] = {}
+    if ui.backdrop not in ("solid", "acrylic"):
+        fixes["backdrop"] = "solid"
+    if ui.orb not in ("always", "auto", "off"):
+        fixes["orb"] = "always"
+    size = min(ORB_SIZE_MAX, max(ORB_SIZE_MIN, ui.orb_size))
+    if size != ui.orb_size:
+        fixes["orb_size"] = size
+    return dataclasses.replace(ui, **fixes) if fixes else ui
 
 
 def _default_server_cmd() -> list[str]:
@@ -49,6 +67,34 @@ class JournalConfig:
     store_text: bool = True
 
 
+VISION_SIDE_MIN, VISION_SIDE_MAX = 640, 2560
+VISION_QUALITY_MIN, VISION_QUALITY_MAX = 50, 95
+
+
+@dataclass(frozen=True)
+class VisionConfig:
+    """[vision]: снимок окна или экрана для GPT по команде «посмотри на экран» (jarvis.vision, pc.screen)."""
+
+    enabled: bool = True
+    max_side: int = 1600  # длинная сторона JPEG, px (640..2560)
+    jpeg_quality: int = 80  # 50..95
+    hide_jarvis: bool = True  # окна Jarvis не попадают в снимки экрана (WDA_EXCLUDEFROMCAPTURE)
+    deny_apps: list[str] = field(default_factory=list)  # exe, чьи окна не отправлять (к менеджерам паролей)
+
+
+def _fix_vision(v: VisionConfig) -> VisionConfig:
+    """Размер и качество вне пределов — умолчания; пустые имена в deny_apps отбрасываются."""
+    fixes: dict[str, Any] = {}
+    if not VISION_SIDE_MIN <= v.max_side <= VISION_SIDE_MAX:
+        fixes["max_side"] = VisionConfig.max_side
+    if not VISION_QUALITY_MIN <= v.jpeg_quality <= VISION_QUALITY_MAX:
+        fixes["jpeg_quality"] = VisionConfig.jpeg_quality
+    apps = [a.strip() for a in v.deny_apps if a.strip()]
+    if apps != v.deny_apps:
+        fixes["deny_apps"] = apps
+    return dataclasses.replace(v, **fixes) if fixes else v
+
+
 @dataclass(frozen=True)
 class Config:
     mode: Mode = "normal"
@@ -56,6 +102,7 @@ class Config:
     hands: HandsConfig = field(default_factory=HandsConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
     journal: JournalConfig = field(default_factory=JournalConfig)
+    vision: VisionConfig = field(default_factory=VisionConfig)
 
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -102,15 +149,14 @@ def load() -> Config:
         if _cache["src"] is data and _cache["cfg"] is not None:
             return _cache["cfg"]
         mode = data.get("mode", "normal")
-        ui = _pick(UiConfig, _section(data, "ui"))
-        if ui.backdrop not in ("solid", "acrylic"):
-            ui = UiConfig(**{**ui.__dict__, "backdrop": "solid"})
+        ui = _fix_ui(_pick(UiConfig, _section(data, "ui")))
         cfg = Config(
             mode=mode if mode in ("normal", "local") else "normal",
             ui=ui,
             hands=_pick(HandsConfig, _section(data, "hands")),
             brain=_pick(BrainConfig, _section(data, "brain")),
             journal=_pick(JournalConfig, _section(data, "journal")),
+            vision=_fix_vision(_pick(VisionConfig, _section(data, "vision"))),
         )
         _cache.update(src=data, cfg=cfg)
         return cfg

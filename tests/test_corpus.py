@@ -1,8 +1,9 @@
 """Корпус фраз bench/phrases.ru.jsonl: грамматика ловит свои фразы и только их, роутер выбирает уровень.
 
-Ложное срабатывание грамматики хуже промаха, поэтому ни одна hands/brain-фраза не должна ловиться. Инвентарь —
-общая фикстура tests/fixtures/apps.json через apps.set_inventory, а не приложения с ПК. Точность выбора уровня
-печатается: `uv run pytest -s tests/test_corpus.py`.
+Ложное срабатывание грамматики хуже промаха, поэтому ни одна hands/brain-фраза не должна ловиться. Зрение
+(«посмотри на экран») — строки brain с ключом vision ("window" | "screen"): роутер узнаёт их и только их.
+Инвентарь — общая фикстура tests/fixtures/apps.json через apps.set_inventory, а не приложения с ПК. Точность
+выбора уровня печатается: `uv run pytest -s tests/test_corpus.py`.
 """
 
 import json
@@ -59,15 +60,18 @@ def inventory(apps_fixture: list[dict[str, str]]) -> Any:
 
 def test_corpus_shape() -> None:
     levels = Counter(p["level"] for p in PHRASES)
-    assert levels == {"grammar": 77, "hands": 60, "brain": 30}
+    assert levels == {"grammar": 84, "hands": 61, "brain": 46}
     texts = [p["text"] for p in PHRASES]
     assert (
-        len(set(zip(texts, [json.dumps(p.get("ctx"), sort_keys=True) for p in PHRASES], strict=True))) == 167
+        len(set(zip(texts, [json.dumps(p.get("ctx"), sort_keys=True) for p in PHRASES], strict=True))) == 191
     )
+    assert Counter(p["vision"] for p in PHRASES if "vision" in p) == {"screen": 9, "window": 5}
     # новые команды грамматики (отмена, напоминания, память, помощь) — в корпусе каждая
     assert GRAMMAR_TOOLS - {p.get("tool") for p in PHRASES if p["level"] == "grammar"} == set()
     for p in PHRASES:
-        assert set(p) <= {"text", "level", "tool", "args", "ctx"}, p
+        assert set(p) <= {"text", "level", "tool", "args", "vision", "ctx"}, p
+        if "vision" in p:
+            assert p["level"] == "brain" and p["vision"] in ("window", "screen") and "tool" not in p, p
         assert p["text"] == p["text"].strip() and p["text"], p
         if p["level"] == "grammar":
             assert p["tool"] in GRAMMAR_TOOLS and isinstance(p["args"], dict), p
@@ -134,6 +138,18 @@ def test_router_levels() -> None:
         print(f"  {level}: {right[level]}/{per_level[level]}")
     for line in bad:
         print("  ✗", line)
+    assert not bad, "\n".join(bad)
+
+
+def test_vision_rows_and_only_them() -> None:
+    """Зрение узнаётся во всех своих фразах (с нужной целью) и ни в одной чужой: «сверни окно», «заблокируй
+    экран», «как сделать скриншот части экрана» остаются грамматике, рукам и мозгу без снимка."""
+    bad = []
+    for p in PHRASES:
+        r = route(p["text"], make_ctx(p.get("ctx")), "normal")
+        want = p.get("vision", "")
+        if r.vision != want or (want and r.reason != f"vision:{want}"):
+            bad.append(f"{p['text']!r}: ждали vision={want!r}, получили {r.vision!r} ({r.reason})")
     assert not bad, "\n".join(bad)
 
 

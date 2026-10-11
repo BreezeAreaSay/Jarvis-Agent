@@ -97,7 +97,7 @@ def fakes(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespace:
         def start(self) -> None:
             pass
 
-        def ask(self, text: str, ctx: Any, deep: bool = False):
+        def ask(self, text: str, ctx: Any, deep: bool = False, images: Any = ()):
             st.asks.append(text)
             yield Status("⚙ list_windows", kind="tool")
             yield TextChunk("Потому что ")
@@ -427,3 +427,23 @@ def test_fmt_timings() -> None:
         "роутер 0,42 мс · руки 352 мс (prompt_n 12, cache_n 1183, 74 т/с) · действие 20 мс"
         " · GPT до первых слов 1,5 с · всего 1,9 с"
     )
+
+
+def test_fmt_timings_vision_shot_and_encode() -> None:
+    line = cli.fmt_timings({"route": 0.05, "shot": 38.0, "encode": 18.0, "total": 2400.0})
+    assert line == "роутер 0,05 мс · снимок 38 мс · JPEG 18 мс · всего 2,4 с"
+
+
+def test_lazy_brain_passes_images(monkeypatch: pytest.MonkeyPatch) -> None:
+    """jarvis ask «посмотри на экран»: core зовёт brain.ask(…, images=[…]) — CLI-обёртка передаёт картинки."""
+    seen: dict[str, Any] = {}
+
+    class Real:
+        def ask(self, text: str, ctx: Any, deep: bool = False, images: Any = ()) -> list[str]:
+            seen.update(text=text, deep=deep, images=list(images))
+            return []
+
+    lazy = cli._LazyBrain(object())
+    monkeypatch.setattr(lazy, "_get", lambda: Real())
+    lazy.ask("что тут?", None, deep=False, images=["data:image/jpeg;base64,AAAA"])
+    assert seen == {"text": "что тут?", "deep": False, "images": ["data:image/jpeg;base64,AAAA"]}

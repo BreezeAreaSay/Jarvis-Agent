@@ -291,8 +291,8 @@ class _LazyBrain:
     def created(self) -> bool:
         return self._brain is not None
 
-    def ask(self, text: str, ctx: Any, deep: bool = False) -> Any:
-        return self._get().ask(text, ctx, deep=deep)
+    def ask(self, text: str, ctx: Any, deep: bool = False, images: Any = ()) -> Any:
+        return self._get().ask(text, ctx, deep=deep, images=images)
 
     def cancel(self) -> None:
         if self._brain is not None:
@@ -338,6 +338,9 @@ def fmt_timings(t: dict[str, Any]) -> str:
         parts.append(f"руки {total}" + (f" ({', '.join(extra)})" if extra else ""))
     if isinstance(t.get("exec"), int | float):
         parts.append(f"действие {fmt_ms(t['exec'])}")
+    for key, name in (("shot", "снимок"), ("encode", "JPEG")):
+        if isinstance(t.get(key), int | float):
+            parts.append(f"{name} {fmt_ms(t[key])}")
     brain = t.get("brain")
     if isinstance(brain, dict) and brain:
         first = fmt_ms(brain.get("first_token")) if isinstance(brain.get("first_token"), int | float) else "—"

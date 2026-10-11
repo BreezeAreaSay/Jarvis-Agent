@@ -2,8 +2,9 @@
 
 Старт (значок в трее ≤1,5 с, всё тяжёлое — в фоне): логи → один экземпляр → QApplication → конфиг →
 инвентарь приложений из кэша → ConfirmServer и обработчик подтверждений → окно (создаётся скрытым, дальше
-только show/hide) → трей («занят») → хоткей → в фоне: Job Object, журнал, руки (ensure_server + warmup),
-мозг (start, если режим не local), Core; обновление инвентаря через 15 с и раз в сутки.
+только show/hide) → трей («занят») → сфера на рабочем столе ([ui] orb; модель общая с окном) → хоткей →
+в фоне: Job Object, журнал, руки (ensure_server + warmup), мозг (start, если режим не local), Core;
+обновление инвентаря через 15 с и раз в сутки.
 
 PySide6 импортируют только этот модуль и jarvis/ui. UI-поток только ставит задачи: модели, действия, реестр,
 процессы — в рабочих потоках; события и подтверждения приходят в UI сигналами Qt (QueuedConnection).
@@ -189,6 +190,9 @@ class JarvisApp(QObject):
         self.ctx = Context()
         self.health = Health()
         self.window: Any = None
+        self.orb_model: Any = None  # ui.logic.OrbModel: её ведёт окно, рисуют сфера в окне и на рабочем столе
+        self.orb: Any = None  # ui.orb.OrbWindow (нет при [ui] orb = "off")
+        self._fg_watch: Any = None  # хук смены переднего окна (полноэкранное — сфера прячется)
         self.tray: Tray | None = None
         self.receiver: QWidget | None = None
         self.hands: Any = None
@@ -233,6 +237,7 @@ class JarvisApp(QObject):
         self._start_confirm_server()
         self._create_window()
         self._create_tray()
+        self._create_orb()
         self._setup_hotkey()
         self._refresh_tray()
         tray_ms = (time.perf_counter() - self.started) * 1000
@@ -264,15 +269,19 @@ class JarvisApp(QObject):
         confirm_client.set_confirm_handler(self._confirm)
 
     def _create_window(self) -> None:
+        from jarvis.ui.logic import OrbModel
         from jarvis.ui.window import LauncherWindow
 
-        w = LauncherWindow(self.cfg.ui)
+        self.orb_model = OrbModel(animations=bool(self.cfg.ui.animations))
+        w = LauncherWindow(self.cfg.ui, orb=self.orb_model)
         w.submitted.connect(self._on_submitted)
         w.cancel_requested.connect(self._on_cancel)
         w.open_item.connect(self._on_open_item)
         w.hidden.connect(self._on_hidden)
         w.set_local_mode(self.cfg.mode == "local")
         w.winId()  # родное окно создаётся сейчас, а не при первом хоткее
+        if self.cfg.vision.hide_jarvis and winapp.available():
+            winapp.exclude_from_capture(int(w.winId()))  # «экран: …» для GPT — без окна Jarvis
         self.window = w
 
     def _create_tray(self) -> None:
@@ -290,6 +299,30 @@ class JarvisApp(QObject):
         t.set_state("busy")
         t.show()
         self.tray = t
+
+    def _create_orb(self) -> None:
+        """Сфера на рабочем столе ([ui] orb = always | auto; off — только сфера в окне).
+
+        Создаётся сразу, дальше только show/hide; модель — общая с окном. Меню — пункты трея. Полноэкранное
+        окно впереди (игра, видео) — сфера прячется: хук смены переднего окна, без опроса по таймеру.
+        """
+        if self.cfg.ui.orb == "off" or self.orb_model is None:
+            return
+        from jarvis.ui.orb import OrbWindow
+
+        orb = OrbWindow(self.orb_model, self.cfg.ui)
+        orb.clicked.connect(self._on_orb_clicked)
+        if self.tray is not None:
+            menu = self.tray.menu()
+            orb.set_menu_actions([a for a in menu.actions() if a is not menu.defaultAction()])
+        hwnd = int(orb.winId())  # родное окно создаётся сейчас
+        if self.cfg.vision.hide_jarvis and winapp.available():
+            winapp.exclude_from_capture(hwnd)  # «экран: …» для GPT — без сферы
+        self.orb = orb
+        if winapp.available():
+            self._fg_watch = winapp.watch_foreground(self._on_foreground)
+            orb.set_suppressed(winapp.foreground_fullscreen())
+        orb.start()
 
     def _setup_hotkey(self) -> None:
         """Скрытое окно-приёмник (top-level, не показывается): на его HWND — RegisterHotKey и «покажись»."""
@@ -631,6 +664,20 @@ class JarvisApp(QObject):
     def _on_hidden(self) -> None:
         self._hotkey_ms = None
 
+    @Slot()
+    def _on_orb_clicked(self) -> None:
+        """Клик по сфере — как хоткей: окно показано и активно (запроса нет) — спрятать, иначе — показать."""
+        w = self.window
+        if w.isVisible() and w.isActiveWindow() and not w.is_busy():
+            w.hide_launcher()
+            return
+        self.show_window()
+
+    def _on_foreground(self, hwnd: int) -> None:
+        """Сменилось переднее окно (хук winapp, в UI-потоке): полноэкранное — сфера прячется."""
+        if self.orb is not None:
+            self.orb.set_suppressed(winapp.is_fullscreen(hwnd))
+
     # --- запросы
 
     @Slot(str)
@@ -785,6 +832,10 @@ class JarvisApp(QObject):
             self._filter = None
         if self.tray is not None:
             self.tray.hide()
+        winapp.unwatch_foreground(self._fg_watch)
+        self._fg_watch = None
+        if self.orb is not None:
+            self.orb.close_orb()
         if self.window is not None and self.window.isVisible():
             self.window.hide_launcher()
         self._bg(self._exit_worker, name="jarvis-exit")

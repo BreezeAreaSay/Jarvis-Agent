@@ -457,34 +457,6 @@ class StatusIcon(QWidget):
         p.end()
 
 
-class Glyph(QWidget):
-    """Значок слева от строки ввода: кольцо с точкой цвета текущего уровня."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._color = QColor(theme.ACCENT)
-        self.setFixedSize(22, 22)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-
-    def set_color(self, value: QColor) -> None:
-        self._color = QColor(value)
-        self.update()
-
-    def paintEvent(self, event: object) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        c = QPointF(11, 11)
-        ring = QColor(self._color)
-        ring.setAlphaF(0.85)
-        p.setPen(QPen(ring, 2.0))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(c, 7.5, 7.5)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(self._color)
-        p.drawEllipse(c, 2.6, 2.6)
-        p.end()
-
-
 # --- блоки ответа -------------------------------------------------------------------------------------
 
 

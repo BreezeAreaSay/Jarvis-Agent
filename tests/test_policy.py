@@ -34,6 +34,8 @@ AGENTS_TABLE: dict[str, tuple[str, str]] = {
     "clipboard_set": ("allow", "allow"),
     # заблокировать компьютер — сразу | сразу
     "lock": ("allow", "allow"),
+    # снимок окна или экрана для GPT (по команде человека) — сразу | нет (инструмента нет)
+    "screenshot": ("allow", "deny"),
     # прочитать текст файла, ввести текст в окно — «—» | спросить
     "read_text": ("deny", "confirm"),
     "type_text": ("deny", "confirm"),

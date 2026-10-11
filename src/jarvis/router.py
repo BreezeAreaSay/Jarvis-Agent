@@ -5,13 +5,16 @@
 "local:needs_gpt" — core покажет «Это нужно GPT, а включён локальный режим»; грамматика и руки работают как
 обычно, а Route.local_only=True говорит core, что и после рук (ask_gpt, ошибка) мозг недоступен.
 Ответ рук ask_gpt или ошибка → мозг (reason «hands→ask_gpt» / «hands→error») решает core, не роутер.
+Зрение («посмотри на экран», «окно: …», jarvis.vision.match) проверяется сразу после префиксов, до грамматики:
+level "brain", reason "vision:window" | "vision:screen", text — вопрос, Route.vision — что снимать (снимок
+делает core). Без облака — как любой вопрос мозгу: "local:needs_gpt", снимка нет.
 """
 
 import re
 from dataclasses import dataclass
 from typing import Literal
 
-from jarvis import grammar
+from jarvis import grammar, vision
 from jarvis.context import Context
 from jarvis.grammar import GrammarHit
 
@@ -26,6 +29,7 @@ class Route:
     deep: bool = False  # мозг: основная модель (high), а не быстрая
     hit: GrammarHit | None = None  # для level == "grammar"
     local_only: bool = False  # облако недоступно для этого запроса (префикс «локально:» или mode == "local")
+    vision: str = ""  # "window" | "screen" — к вопросу мозгу нужен снимок (jarvis.vision)
 
 
 _PREFIX = re.compile(r"^\s*(локально|gpt|гпт|думай)\s*:\s*", re.IGNORECASE)
@@ -59,10 +63,10 @@ def _heuristic(text: str) -> str | None:
     return None
 
 
-def _brain(text: str, reason: str, deep: bool, local_only: bool) -> Route:
+def _brain(text: str, reason: str, deep: bool, local_only: bool, seen: str = "") -> Route:
     if local_only:
-        return Route("local", "local:needs_gpt", text, deep=deep, local_only=True)
-    return Route("brain", reason, text, deep=deep)
+        return Route("local", "local:needs_gpt", text, deep=deep, local_only=True, vision=seen)
+    return Route("brain", reason, text, deep=deep, vision=seen)
 
 
 def route(text: str, ctx: Context, mode: str) -> Route:
@@ -79,6 +83,10 @@ def route(text: str, ctx: Context, mode: str) -> Route:
         else:
             forced = ("prefix:gpt", False)
     text = text.strip()
+    seen = vision.match(text)  # предпроверка подстрок: обычная команда выходит отсюда за микросекунды
+    if seen is not None:
+        deep = forced[1] if forced is not None else False
+        return _brain(seen.question, f"vision:{seen.target}", deep, local_only, seen.target)
     if forced is not None:
         return _brain(text, forced[0], forced[1], local_only)
     if not text:

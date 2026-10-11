@@ -32,9 +32,12 @@ from pc.windows import WindowInfo
 
 try:  # настоящее окно — для проверки контракта app ↔ ui (тест ниже пропускается, если окна ещё нет)
     from jarvis.ui import logic as real_logic
+    from jarvis.ui import orb as real_orb
     from jarvis.ui import window as real_window
 except Exception:  # pragma: no cover
-    real_logic = real_window = None
+    real_logic = real_orb = real_window = None
+
+from jarvis.ui.logic import OrbModel as RealOrbModel  # настоящая модель сферы: без Qt, фейк не нужен
 
 CALLS: list[str] = []
 
@@ -71,10 +74,11 @@ class FakeWindow(QWidget):
 
     last: "FakeWindow | None" = None
 
-    def __init__(self, ui_cfg: Any) -> None:
+    def __init__(self, ui_cfg: Any, orb: Any = None) -> None:
         super().__init__()
         rec("window")
         self.ui_cfg = ui_cfg
+        self.orb = orb
         self.events: list[Any] = []
         self.begun: list[str] = []
         self.confirms: list[Any] = []
@@ -116,6 +120,36 @@ class FakeWindow(QWidget):
 
     def is_busy(self) -> bool:
         return self.busy
+
+
+class FakeOrbWindow(QWidget):
+    """Сфера на рабочем столе: записывает, что с ней делает app."""
+
+    clicked = Signal()
+    last: "FakeOrbWindow | None" = None
+
+    def __init__(self, model: Any, ui_cfg: Any) -> None:
+        super().__init__()
+        rec("orb")
+        self.model, self.ui_cfg = model, ui_cfg
+        self.menu_actions: list[Any] = []
+        self.suppressed: list[bool] = []
+        self.started = self.closed = False
+        FakeOrbWindow.last = self
+
+    def set_menu_actions(self, actions: Any) -> None:
+        self.menu_actions = list(actions)
+
+    def set_suppressed(self, on: bool) -> None:
+        self.suppressed.append(on)
+
+    def start(self) -> None:
+        rec("orb.start")
+        self.started = True
+
+    def close_orb(self) -> None:
+        rec("orb.close")
+        self.closed = True
 
 
 class FakeConfirmRequest:
@@ -258,6 +292,11 @@ class FakeWinApi:
         self.tick = 1_000_000
         self.mutex_exists = False
         self.posted: list[tuple[int, int]] = []
+        self.fg_hooks: list[Callable[[int], None]] = []
+        self.unhooked: list[int] = []
+        self.front = 0
+        self.rects: dict[int, tuple[int, int, int, int]] = {}  # окна на мониторе 1920×1080
+        self.affinity: list[tuple[int, int]] = []
 
     def register_hotkey(self, hwnd: int, hotkey_id: int, mods: int, vk: int) -> tuple[bool, int]:
         rec(f"hotkey:{mods:#x}:{vk:#x}")
@@ -320,6 +359,32 @@ class FakeWinApi:
         self.posted.append((hwnd, msg))
         return True
 
+    def set_foreground_hook(self, callback: Callable[[int], None]) -> tuple[int, Any]:
+        rec("fg.hook")
+        self.fg_hooks.append(callback)
+        return 0x4400 + len(self.fg_hooks), callback
+
+    def unhook_win_event(self, handle: int) -> bool:
+        rec("fg.unhook")
+        self.unhooked.append(handle)
+        return True
+
+    def foreground_window(self) -> int:
+        return self.front
+
+    def class_name(self, hwnd: int) -> str:
+        return "Game"
+
+    def window_rect(self, hwnd: int) -> tuple[int, int, int, int] | None:
+        return self.rects.get(hwnd)
+
+    def monitor_rect(self, hwnd: int) -> tuple[int, int, int, int] | None:
+        return (0, 0, 1920, 1080) if hwnd in self.rects else None
+
+    def set_display_affinity(self, hwnd: int, affinity: int) -> tuple[bool, int]:
+        self.affinity.append((hwnd, affinity))
+        return True, 0
+
 
 class RecTray(Tray):
     notes: ClassVar[list[tuple[str, str]]] = []
@@ -351,9 +416,11 @@ def fakes(monkeypatch: pytest.MonkeyPatch) -> FakeWinApi:
     FakeBrain.close_delay = 0.0
     FakeServer.last = None
     FakeWindow.last = None
+    FakeOrbWindow.last = None
     for name, attrs in {
         "jarvis.ui.window": {"LauncherWindow": FakeWindow},
-        "jarvis.ui.logic": {"ConfirmRequest": FakeConfirmRequest},
+        "jarvis.ui.logic": {"ConfirmRequest": FakeConfirmRequest, "OrbModel": RealOrbModel},
+        "jarvis.ui.orb": {"OrbWindow": FakeOrbWindow},
         "jarvis.hands": {"Hands": FakeHands},
         "jarvis.brain": {"Brain": FakeBrain},
         "jarvis.core": {"Core": FakeCore},
@@ -405,12 +472,12 @@ def dispose(qapp: QApplication, a: app_mod.JarvisApp) -> None:
     for t in threading.enumerate():
         if t.name.startswith("jarvis-") and t is not threading.current_thread():
             t.join(5)
-    for obj in (a.window, a.receiver, a.tray):
+    for obj in (a.window, a.orb, a.receiver, a.tray):
         if obj is not None:
             if isinstance(obj, QWidget):
                 obj.hide()
             obj.deleteLater()
-    a.window = a.receiver = a.tray = None
+    a.window = a.orb = a.receiver = a.tray = None
     qapp.processEvents()
     gc.collect()
 
@@ -883,6 +950,81 @@ def test_main_second_instance_shows_first(fakes: FakeWinApi) -> None:
     assert "window" not in CALLS  # второй экземпляр ничего не создаёт
 
 
+# --- сфера на рабочем столе ---------------------------------------------------------------------------
+
+
+def test_orb_created_after_tray_with_shared_model(
+    qapp: QApplication, make_app: Any, fakes: FakeWinApi
+) -> None:
+    a = make_app()
+    orb = FakeOrbWindow.last
+    assert orb is not None and a.orb is orb and orb.started
+    assert isinstance(a.orb_model, RealOrbModel)
+    assert a.window.orb is a.orb_model and orb.model is a.orb_model  # одна модель: окно ведёт, сферы рисуют
+    hotkey = next(c for c in CALLS if c.startswith("hotkey:"))
+    before("window", "tray.show", "orb", "orb.start", hotkey)
+    assert orb.ui_cfg.orb == "always" and orb.ui_cfg.orb_size == 64
+    texts = [act.text() for act in orb.menu_actions if not act.isSeparator()]
+    assert "Открыть" not in texts  # своё «Открыть Jarvis» у сферы уже есть
+    assert {"Локальный режим", "Новый разговор", "Выход"} <= set(texts)
+    assert (int(orb.winId()), winapp.WDA_EXCLUDEFROMCAPTURE) in fakes.affinity  # не в снимке для GPT
+
+
+def test_orb_off_creates_nothing(
+    qapp: QApplication, make_app: Any, config_file: Callable[[str], Path]
+) -> None:
+    config_file('[ui]\norb = "off"\n')
+    a = make_app()
+    assert a.orb is None and "orb" not in CALLS and "fg.hook" not in CALLS
+    assert a.window.orb is a.orb_model  # сфера в окне — всегда
+    a.shutdown()
+
+
+def test_orb_auto_mode_and_size(
+    qapp: QApplication, make_app: Any, config_file: Callable[[str], Path]
+) -> None:
+    config_file('[ui]\norb = "auto"\norb_size = 96\nanimations = false\n')
+    a = make_app()
+    assert a.orb.ui_cfg.orb == "auto" and a.orb.ui_cfg.orb_size == 96
+    assert a.orb_model.animated is False
+
+
+def test_orb_click_toggles_window(qapp: QApplication, make_app: Any) -> None:
+    a = make_app()
+    a.orb.clicked.emit()
+    assert a.window.isVisible() and "set_foreground" in CALLS
+    assert a.ctx.active_window is None  # как из трея: окна «до Jarvis» нет
+    a.window.active = True
+    a.window.busy = True
+    a.orb.clicked.emit()
+    assert a.window.isVisible()  # идёт запрос — не прячем
+    a.window.busy = False
+    a.orb.clicked.emit()
+    assert not a.window.isVisible()
+
+
+def test_orb_hides_over_fullscreen_window(qapp: QApplication, make_app: Any, fakes: FakeWinApi) -> None:
+    fakes.rects = {0x10: (0, 0, 1920, 1080), 0x20: (100, 100, 900, 700)}
+    fakes.front = 0x10  # Jarvis стартовал, пока впереди игра
+    a = make_app()
+    assert a.orb.suppressed == [True]
+    assert len(fakes.fg_hooks) == 1
+    fakes.fg_hooks[0](0x20)  # переключились на обычное окно
+    fakes.fg_hooks[0](0x10)  # снова игра
+    assert a.orb.suppressed == [True, False, True]
+
+
+def test_exit_unhooks_and_hides_orb(qapp: QApplication, make_app: Any, fakes: FakeWinApi) -> None:
+    a = make_app()
+    assert wait_for(qapp, ready(a))
+    a.tray.trigger("Выход")
+    assert "fg.unhook" in CALLS and a.orb.closed
+    assert fakes.unhooked == [0x4401]
+    assert wait_for(qapp, a._stopped.is_set)
+    a.shutdown()
+    assert CALLS.count("fg.unhook") == 1
+
+
 # --- контракт с настоящим окном ------------------------------------------------------------------------
 
 
@@ -920,6 +1062,37 @@ def test_real_window_contract(qapp: QApplication, fakes: FakeWinApi, monkeypatch
         asked[0].resolve(True)
         assert wait_for(qapp, lambda: not a.window.is_busy())
         assert FakeCore.last.handled[0][0] == "закрой процесс хром"
+    finally:
+        dispose(qapp, a)
+
+
+@pytest.mark.skipif(real_orb is None, reason="jarvis.ui.orb ещё нет")
+def test_real_orb_contract(qapp: QApplication, fakes: FakeWinApi, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Настоящие окно и сфера: события окна ведут общую модель, сфера на рабочем столе её показывает."""
+    monkeypatch.setitem(sys.modules, "jarvis.ui.window", real_window)
+    monkeypatch.setitem(sys.modules, "jarvis.ui.logic", real_logic)
+    monkeypatch.setitem(sys.modules, "jarvis.ui.orb", real_orb)
+    monkeypatch.setattr(pc_windows, "foreground", lambda: None)
+    monkeypatch.setattr(real_orb, "load_state", lambda: {})
+    saved: list[Any] = []
+    monkeypatch.setattr(real_orb, "save_state_async", saved.append)
+    a = app_mod.JarvisApp(qapp)
+    try:
+        a.start()
+        orb = a.orb
+        assert isinstance(orb, real_orb.OrbWindow) and orb.isVisible()  # always: видна с самого старта
+        assert orb.model is a.orb_model is a.window.orb_model
+        assert wait_for(qapp, lambda: a.core is not None)
+        a.on_hotkey()
+        assert a.orb_model.state == "wake" and orb.is_animating()
+        a.window.submitted.emit("громкость 20")
+        assert a.orb_model.busy or a.orb_model.state in ("success", "error")
+        assert wait_for(qapp, lambda: not a.window.is_busy())
+        assert a.orb_model.state == "success"  # Done(ok) — вспышка и на рабочем столе
+        a.tray.trigger("Локальный режим")
+        assert a.orb_model.local  # бирюзовый оттенок
+        orb.clicked.emit()  # окно активно не стало (офскрин) — клик снова показывает
+        assert a.window.isVisible()
     finally:
         dispose(qapp, a)
 

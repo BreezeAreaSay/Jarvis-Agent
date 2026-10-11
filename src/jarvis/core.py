@@ -7,6 +7,10 @@ Level("brain" | "local", "hands→…"). Тайминги (мс) — в Done.tim
 (в аргументах бывают пути и тексты).
 Соседние модули (router, execute) импортируются лениво — в Core(), не на первом запросе;
 в handle() это уже поиск в sys.modules.
+Зрение (Route.vision): после Level мозга — снимок окна или экрана в этом же рабочем потоке (pc.screen, caller
+"user"), строка «⚙ снимок … → GPT» (kind="tool", key "vision"), JPEG (jarvis.vision) и brain.ask(images=[…]).
+Отказ или ошибка снимка — Done(False) без вопроса мозгу; Esc до отправки — Done cancelled; --dry — без снимка.
+В журнал — vision, jpeg_bytes, shot_px и тайминги shot/encode; картинки и заголовка окна там нет.
 """
 
 import dataclasses
@@ -14,7 +18,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,8 +29,19 @@ log = logging.getLogger("jarvis")
 NEEDS_GPT = "Это нужно GPT, а включён локальный режим"
 CANCELLED = "Отменено"
 HANDS_TIMINGS = ("cache_n", "prompt_n", "prompt_ms", "predicted_ms", "predicted_per_second", "total_ms")
-JOURNAL_TIMINGS = ("hotkey_to_window", "route", "grammar", "hands", "exec", "brain", "total")
+JOURNAL_TIMINGS = (
+    "hotkey_to_window",
+    "route",
+    "grammar",
+    "hands",
+    "exec",
+    "shot",
+    "encode",
+    "brain",
+    "total",
+)
 TOOLS_MAX = 50  # имён инструментов мозга в одной записи журнала
+VISION_KEY = "vision"  # key строки «⚙ снимок … → GPT»
 # строка «⚙ имя: аргументы» (brain.tool_label); «⚙ буфер: …» — clipboard_set
 _TOOL_LABEL = re.compile(r"⚙\s*([^\s:]+)")
 _TOOL_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
@@ -52,6 +67,7 @@ class _Run:
     cancel: threading.Event = field(default_factory=threading.Event)
     tools: list[str] = field(default_factory=list)  # инструменты мозга по порядку вызова
     tool_keys: set[str] = field(default_factory=set)
+    vision: dict[str, Any] = field(default_factory=dict)  # снимок для журнала: vision, jpeg_bytes, shot_px
 
     def note_tool(self, ev: Status) -> None:
         """Вызов инструмента мозга: начало и конец одного вызова (один key) считаются один раз."""
@@ -132,7 +148,7 @@ class Core:
         elif route.level in ("grammar", "hands"):
             yield from self._hands(run, route, ctx, dry)
         else:  # brain | local
-            yield from self._brain(run, route, ctx, route.reason)
+            yield from self._brain(run, route, ctx, route.reason, dry=dry)
 
     def _grammar(self, run: _Run, route: Any, ctx: Any, dry: bool) -> Iterator[Event]:
         hit = route.hit
@@ -190,7 +206,9 @@ class Core:
             yield Items(list(out.items))
         yield Done(ok=out.ok, text=out.text, autohide=bool(out.autohide) and out.kind == "done")
 
-    def _brain(self, run: _Run, route: Any, ctx: Any, reason: str, warn: str = "") -> Iterator[Event]:
+    def _brain(
+        self, run: _Run, route: Any, ctx: Any, reason: str, warn: str = "", dry: bool = False
+    ) -> Iterator[Event]:
         if self.cfg.mode == "local" or route.local_only or self.brain is None or route.level == "local":
             # пришли от рук — причина остаётся «hands→…» (stats считает долю ask_gpt)
             yield Level("local", reason if "→" in reason else "local:needs_gpt")
@@ -204,7 +222,15 @@ class Core:
         if run.cancel.is_set():
             yield _cancelled()
             return
-        for ev in self.brain.ask(route.text, ctx, deep=deep):
+        images: list[str] = []
+        target = getattr(route, "vision", "")
+        if target:
+            url = yield from self._look(run, route, ctx, target, dry)
+            if url is None:
+                return
+            images.append(url)
+        extra: dict[str, Any] = {"images": images} if images else {}  # без снимка — вызов как раньше
+        for ev in self.brain.ask(route.text, ctx, deep=deep, **extra):
             if isinstance(ev, Level):
                 continue  # уровень уже объявлен
             if isinstance(ev, Done):
@@ -215,6 +241,57 @@ class Core:
                 run.note_tool(ev)
             yield ev
         yield Done(ok=False, text="GPT не ответил")
+
+    def _look(
+        self, run: _Run, route: Any, ctx: Any, target: str, dry: bool
+    ) -> Generator[Event, None, str | None]:
+        """Снимок окна или экрана для мозга → data URL JPEG. Отказ, ошибка или отмена — Done и None."""
+        from jarvis import vision
+        from jarvis.config import VisionConfig
+        from pc.result import Result
+
+        cfg = getattr(self.cfg, "vision", None) or VisionConfig()
+        run.vision["vision"] = target
+        if not cfg.enabled:
+            yield Done(ok=False, text=vision.DISABLED_TEXT)
+            return None
+        window = getattr(ctx, "active_window", None)
+        if target == "window" and window is None:
+            yield Done(ok=False, text=vision.NO_WINDOW_TEXT)
+            return None
+        label = vision.status_label(target, window)
+        if dry:  # решение без действия: снимок не делается и в облако не уходит
+            yield Done(ok=True, text=f"(dry) {label.removeprefix('⚙ ')}: {route.text}", autohide=False)
+            return None
+        yield Status(label, kind="tool", key=VISION_KEY)
+        t = time.perf_counter()
+        try:
+            shot = _shoot(target, window, cfg.deny_apps)
+        except Exception as e:
+            log.exception("core: снимок не удался")
+            shot = Result(False, f"Снимок не получился: {_detail(e)}")
+        run.timings["shot"] = _ms(t)
+        if isinstance(shot, Result) or run.cancel.is_set():
+            yield Status(label, kind="tool", done=True, ok=False, key=VISION_KEY)
+            yield _shot_done(shot) if isinstance(shot, Result) else _cancelled()
+            return None
+        t = time.perf_counter()
+        try:
+            jpeg = vision.encode_jpeg(shot, cfg.max_side, cfg.jpeg_quality)
+        except Exception as e:
+            log.exception("core: снимок не сжат")
+            yield Status(label, kind="tool", done=True, ok=False, key=VISION_KEY)
+            yield Done(ok=False, text=f"Снимок не сжался в JPEG: {_detail(e)}")
+            return None
+        run.timings["encode"] = _ms(t)
+        run.vision.update(jpeg_bytes=len(jpeg), shot_px=[int(shot.width), int(shot.height)])
+        del shot  # точки снимка (десятки МБ) больше не нужны
+        if run.cancel.is_set():  # Esc до отправки — снимок не уходит
+            yield Status(label, kind="tool", done=True, ok=False, key=VISION_KEY)
+            yield _cancelled()
+            return None
+        yield Status(label, kind="tool", done=True, ok=True, key=VISION_KEY)
+        return vision.data_url(jpeg)
 
     # --- итог ---------------------------------------------------------------------------------
 
@@ -256,6 +333,7 @@ class Core:
         record.update({k: done.timings[k] for k in JOURNAL_TIMINGS if k in done.timings})
         if run.tools:
             record["tools"] = list(run.tools)
+        record.update(run.vision)  # без картинки и без заголовка окна
         try:
             self.journal.write(record)
         except Exception:
@@ -290,6 +368,20 @@ def brain_timings(raw: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _shoot(target: str, window: Any, deny_apps: list[str]) -> Any:
+    """pc.screen: окно на момент хоткея или монитор, на котором оно (нет окна — основной)."""
+    from pc import screen
+
+    if target == "window":
+        return screen.capture_window(int(window.hwnd), "user", deny_apps)
+    return screen.capture_screen(int(window.hwnd) if window is not None else None, "user", deny_apps)
+
+
+def _shot_done(result: Any) -> Done:
+    """Отказ или ошибка снимка — итог запроса: мозг не спрашивается."""
+    return Done(ok=False, text=str(getattr(result, "text", "") or "Снимок не получился"))
+
+
 def _hands_starting(hands: Any) -> str:
     """Строка «⚙ …», если сервер рук ещё не готов (Hands.status["server"]); готов или неизвестно — ""."""
     status = getattr(hands, "status", None)
@@ -303,11 +395,14 @@ def _cancelled() -> Done:
     return Done(ok=False, text=CANCELLED, cancelled=True)
 
 
+def _detail(e: BaseException) -> str:
+    return str(e).strip().splitlines()[0][:160] if str(e).strip() else type(e).__name__
+
+
 def _human_error(e: Exception) -> str:
     """Понятный текст ошибки для окна; подробности — в логе."""
     if isinstance(e, TimeoutError):
         return "Не дождался ответа (таймаут)"
     if isinstance(e, NotImplementedError):
         return "Эта часть Jarvis ещё не готова"
-    detail = str(e).strip().splitlines()[0][:160] if str(e).strip() else type(e).__name__
-    return f"Не получилось: {detail}"
+    return f"Не получилось: {_detail(e)}"

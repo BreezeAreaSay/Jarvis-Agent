@@ -8,7 +8,8 @@
 - Python 3.12, типы везде, ruff (line-length 110). Идентификаторы по-английски; комментарии, докстринги и тексты
   для человека — по-русски. Короткие функции, без портов/адаптеров/фабрик.
 - `pc` не импортирует `jarvis`. Уровни 0–2 и CLI работают без Qt: PySide6 импортируют только `jarvis/app.py`
-  и `jarvis/ui/`. `openai_codex` импортирует только `jarvis/brain.py` (лениво, в `start()`).
+  и `jarvis/ui/`; исключение — `jarvis.vision.encode_jpeg` (QtGui.QImage внутри функции, только на пути зрения).
+  `openai_codex` импортирует только `jarvis/brain.py` (лениво, в `start()`).
 - Каждый модуль с Win32/COM/реестром держит вызовы ОС за приватным тонким слоем `_api` (объект с методами).
   Его создаёт функция `api()` при первом вызове. Тесты подменяют `module._api` фейком: `monkeypatch.setattr(mod,
   "_api", Fake())`. Импорт `win32*`, `pycaw`, `comtypes`, `ctypes.windll`, `winreg` — только внутри реализации
@@ -38,8 +39,8 @@ private_paths, aliases)` (ключи aliases — casefold), `es_path()`.
 ### pc.policy
 Имена действий = строки таблицы AGENTS.md: find_files, list_windows, list_apps, list_processes, volume_get,
 open_app, open_folder, focus, window, volume, media, open_file, open_executable, open_url, close_window,
-clipboard_get, clipboard_set, lock, read_text, type_text, kill_process, trash, power, shell, write_file,
-delete_permanent, jarvis_self.
+clipboard_get, clipboard_set, lock, screenshot, read_text, type_text, kill_process, trash, power, shell,
+write_file, delete_permanent, jarvis_self. screenshot — user «сразу», brain «нет» (у мозга инструмента снимка нет).
 - `check(action, caller) -> "allow"|"confirm"|"deny"` — чистая таблица; неизвестное — `UnknownAction`.
 - `decide(action, caller, now=None)` — плюс бюджет мозга: 5 изменяющих действий за 60 с (чтение не считается).
 - `require(action, caller, summary, details="") -> Result | None` — None = можно; иначе отказ. «Спросить» —
@@ -122,12 +123,33 @@ delete_permanent, jarvis_self.
 - `system.lock(caller)`, `system.power(action: "sleep"|"shutdown"|"restart", caller)`, `system.clipboard_get(caller)`,
   `system.clipboard_set(text, caller)`, `system.type_text(text, target: str|int, caller)` — все `-> Result`.
 
+### pc.screen
+Снимок окна или экрана для GPT — только по команде человека (вызывает jarvis.core с caller="user").
+- `Shot(width, height, bgra: bytes)` — frozen, в памяти: строки сверху вниз, 4 байта на точку B, G, R, A (альфа не
+  используется). Размер — не больше `MAX_SIDE` = 8192 по стороне (лишнее обрезается).
+- `capture_window(hwnd, caller, deny_apps=()) -> Shot | Result` — PrintWindow(PW_RENDERFULLCONTENT): окно целиком,
+  даже перекрытое окном Jarvis. `capture_screen(hwnd | None, caller, deny_apps=()) -> Shot | Result` — BitBlt
+  (SRCCOPY | CAPTUREBLT) монитора, на котором окно hwnd (нет окна — основного). Result — отказ или ошибка с фразой.
+- Первым — `policy.require("screenshot", caller, …)` (мозгу — отказ). Отказ всегда: окно Jarvis (policy jarvis_self),
+  менеджеры паролей (`PASSWORD_MANAGERS` по exe, `PASSWORD_TITLES` по заголовку), exe из `deny_apps` (jarvis передаёт
+  `[vision] deny_apps`), имя из private_paths в заголовке, нечитаемый конфиг; окно неизвестной программы, свёрнутое
+  или зависшее; чёрный снимок (`blank(shot)`). Экран — отказ, если такое окно активно или видно на этом мониторе
+  (`windows.list_windows()`, не свёрнуто, пересекает монитор).
+- `app_key(exe)` («KeePass.exe» → «keepass»), `denied_apps(extra) -> frozenset[str]`, `clamp(rect)`.
+- `_api` (`_Api(fns)`; fns — таблица функций user32/gdi32 с argtypes, тесты подставляют фейк): `is_window`,
+  `is_iconic`, `is_hung`, `pid_of`, `exe_of`, `title_of` (через pc.windows), `window_rect`, `monitor_rect`,
+  `grab_window`, `grab_rect`. DC, DIB-секция (biHeight < 0) и выбор объекта освобождаются в finally. DPI: на время
+  снимка поток — в DPI-режиме самого окна (GetWindowDpiAwarenessContext), для экрана — per-monitor v2
+  (SetThreadDpiAwarenessContext), потом — как было: координаты в физических точках и в `jarvis run` (Qt 6 ставит
+  процессу per-monitor v2), и в `jarvis ask` (процесс без DPI-осведомлённости).
+
 ### pc.mcp
 FastMCP stdio, `python -m pc.mcp` (в exe — `jarvis-cli.exe mcp`), caller="brain". 18 инструментов: list_windows,
 list_apps, find_files, open, focus, close, window, volume, media, processes, kill_process, clipboard_get,
 clipboard_set, read_text_file, move_to_trash, type_text, lock, power. `TOOL_ACTIONS: dict[str, list[str]]` —
 инструмент → строки policy; `TOOLS: dict[str, Callable]` — имя → функция инструмента; `build_server() -> FastMCP`
-(mcp импортируется только здесь); `main()` — запуск сервера по stdio.
+(mcp импортируется только здесь); `main()` — запуск сервера по stdio. Инструмента снимка окна или экрана нет
+(тест test_s8_policy_mapping).
 
 ## jarvis — приложение
 
@@ -137,7 +159,11 @@ clipboard_set, read_text_file, move_to_trash, type_text, lock, power. `TOOL_ACTI
 TextChunk | Items)* → ровно один Done.
 
 ### jarvis.config
-`load() -> Config(mode, ui: UiConfig, hands: HandsConfig, brain: BrainConfig, journal: JournalConfig)`.
+`load() -> Config(mode, ui: UiConfig, hands: HandsConfig, brain: BrainConfig, journal: JournalConfig,
+vision: VisionConfig)`. `VisionConfig(enabled=True, max_side=1600, jpeg_quality=80, hide_jarvis=True,
+deny_apps=[])`: max_side вне 640..2560 и jpeg_quality вне 50..95 — умолчания.
+`UiConfig(hotkey, autohide_s, width, backdrop, animations, orb="always", orb_size=64)`: orb — `"always" | "auto" |
+"off"` (иное — "always"), orb_size ограничен `ORB_SIZE_MIN..ORB_SIZE_MAX` (40..160); backdrop вне solid|acrylic — solid.
 
 ### jarvis.context
 `Context(active_window: WindowInfo | None, last_object: str | None, last_kind: str | None, last_hwnd: int | None,
@@ -164,15 +190,19 @@ action: str)`; `run(tool, args, text, ctx, source: "grammar"|"hands", dry=False)
 
 ### jarvis.grammar / jarvis.router
 `GrammarHit(action, args, confidence)`; `match(text, ctx) -> GrammarHit | None`.
-`Route(level: "grammar"|"hands"|"brain"|"local", reason, text, deep=False, hit=None, local_only=False)`;
-`route(text, ctx, mode) -> Route` (снимает префиксы «локально:», «gpt:», «думай:»).
+`Route(level: "grammar"|"hands"|"brain"|"local", reason, text, deep=False, hit=None, local_only=False,
+vision="")`; `route(text, ctx, mode) -> Route` (снимает префиксы «локально:», «gpt:», «думай:»). Сразу после
+префиксов — `vision.match`: зрение → level "brain", reason "vision:window" | "vision:screen", text — вопрос,
+`vision` — что снимать (с «думай:» — deep); без облака — "local:needs_gpt" (снимка нет).
 Цели грамматики: приложение — `App.name` из инвентаря (kind="app"), папка — имя для `files.known_folder`
 (kind="folder"), «его/это/окно» — "@cur" (только если `ctx.cur_target()` не None); open_found{index} — с 1, -1 =
 последний. `local_only=True` — и при mode == "local". После рук (ask_gpt/ошибка) → мозг решает core.
 
 ### jarvis.brain
 `Brain(cfg: BrainConfig, confirm_address: str, process_hook=None)`: `start()` (в фоне), `close()`,
-`ask(text, ctx, deep=False) -> Iterator[Event]`, `cancel()`, `new_conversation()`, `.ready`, `.status`.
+`ask(text, ctx, deep=False, images=()) -> Iterator[Event]`, `cancel()`, `new_conversation()`, `.ready`, `.status`.
+images — снимки (только «data:image/…», иначе ValueError): ход начинается с `turn_input(prompt, images)` =
+`[TextInput(prompt), ImageInput(url), …]`; без снимков вход хода — строка, как раньше.
 Прокладка `subprocess` в `openai_codex.client` ставится до первого `Codex()`. Для doctor: `codex_bin() -> Path`
 (бинарь из SDK; в exe — из бандла), `codex_env(cfg) -> dict` (CODEX_HOME мозга и прокси), `codex_home() -> Path`,
 `build_overrides(cfg, confirm_address) -> tuple[str, ...]`, `install_subprocess_shim(hook)`. `Done.reason` мозга:
@@ -182,6 +212,20 @@ region | quota | auth | config | start | transport | network | cancelled | close
 ### jarvis.core
 `Core(cfg, hands, brain, journal=None)`: `handle(text, ctx, dry=False, hotkey_ms=None) -> Iterator[Event]`, `cancel()`.
 Ответ рук ask_gpt/ошибка → второй `Level("brain"|"local", "hands→ask_gpt"|"hands→error")`.
+Route.vision: после `Level("brain", "vision:…")` — снимок в рабочем потоке (`pc.screen`, caller "user"; окно —
+`ctx.active_window`, без него «окно» — отказ), `Status("⚙ снимок окна «…» → GPT" | "⚙ снимок экрана → GPT",
+kind="tool", key="vision")` → ✓/✗, JPEG (`vision.encode_jpeg`), `brain.ask(…, images=[data_url])`. Отказ или ошибка
+снимка — Done(False) без вопроса мозгу; Esc до отправки — Done cancelled; dry — без снимка. Журнал: vision,
+jpeg_bytes, shot_px, тайминги shot и encode (мс); ни картинки, ни заголовка окна.
+
+### jarvis.vision
+`VisionAsk(target: "window"|"screen", question)`; `match(text) -> VisionAsk | None` — строгое распознавание без
+модели (префиксы «экран:»/«окно:», «посмотри на экран …», «что в этом окне», «прочитай ошибку в окне», «сделай
+скриншот и …»); дешёвая предпроверка подстрок «экран», «окн», «скрин», «монитор». Вопрос без служебных слов;
+пусто — `DEFAULT_QUESTION`. `status_label(target, window)` — строка «⚙ снимок …» (заголовок — одной строкой, без
+управляющих символов, ≤50). `encode_jpeg(shot, max_side=1600, quality=80) -> bytes` — QImage Format_RGB32 (альфа
+GDI не учитывается), SmoothTransformation, меньший снимок не увеличивается; QtGui импортируется внутри функции,
+работает без QApplication и вне GUI-потока. `data_url(jpeg) -> str`. Тексты: `NO_WINDOW_TEXT`, `DISABLED_TEXT`.
 
 ### jarvis.journal
 `Journal()`: `write(record: dict)` (фоновый поток), `close()`; модульные `read(days) -> list[dict]`,
@@ -199,20 +243,54 @@ mutex одного экземпляра (`acquire_instance() -> int|None`, `rele
 приёмник `RECEIVER_TITLE` + сообщение `show_message_id()`), автозапуск HKCU\…\Run (`set_autostart(on) -> str`,
 `autostart_enabled() -> bool`, `autostart_command() -> str`), хоткей (`parse_hotkey(s) -> (mods|MOD_NOREPEAT, vk)`,
 `format_hotkey(s)`, `register_with_fallback(hwnd, id, s) -> HotkeyResult(combo, message)`, `FALLBACK_HOTKEYS`),
-`allow_set_foreground_any()`, `set_foreground(hwnd)`, `available()`. DWM — в jarvis/ui/dwm.py.
+`allow_set_foreground_any()`, `set_foreground(hwnd)`, `available()`, `exclude_from_capture(hwnd) -> bool`
+(SetWindowDisplayAffinity WDA_EXCLUDEFROMCAPTURE, Windows 10 2004+: окно не попадает в снимки экрана; ошибка —
+False и лог; app.py вызывает для окна-лаунчера и сферы при `[vision] hide_jarvis`). DWM — в jarvis/ui/dwm.py.
+Полноэкранные окна (сфера на рабочем столе прячется): `watch_foreground(callback) -> ForegroundWatch | None` —
+SetWinEventHook(EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS), `callback(hwnd)` приходит
+в цикле сообщений UI-потока, без опроса; `ForegroundWatch(handle, proc)` держит ссылку на колбэк ctypes;
+`unwatch_foreground(watch)` — UnhookWinEvent; `is_fullscreen(hwnd) -> bool` — GetWindowRect закрывает весь монитор
+(MonitorFromWindow + GetMonitorInfoW), классы `SHELL_CLASSES` (Progman, WorkerW, Shell_TrayWnd) — нет;
+`foreground_fullscreen()` — для старта. Окно, ставшее полноэкранным без смены переднего (F11 в браузере), хук не видит.
 
 ### jarvis.app и jarvis.ui
-`app.main(argv=None) -> int` — `jarvis run`.
+`app.main(argv=None) -> int` — `jarvis run`. Сфера: app создаёт одну `OrbModel(animations=ui.animations)`, отдаёт её
+окну (`LauncherWindow(ui, orb=model)`) и, если `[ui] orb != "off"`, сфере на рабочем столе (`OrbWindow`, создаётся
+при старте после трея, дальше только show/hide; меню — пункты трея без «Открыть»; `winapp.exclude_from_capture` при
+`[vision] hide_jarvis`). Клик по сфере — как хоткей (окно активно и запроса нет — спрятать, иначе показать, без
+«окна до Jarvis»). Хук `winapp.watch_foreground` → `OrbWindow.set_suppressed(is_fullscreen(hwnd))`; выход — снять
+хук, `close_orb()`.
 - ui/logic.py — логика окна без Qt: `History`, `ConfirmRequest(summary, details, caller)` с `resolve(approved)` и
   `wait(timeout=60) -> bool`, `ConfirmQueue` (одна очередь для обработчика процесса и pipe; правило 700 мс;
   Enter/Esc = «нет», Ctrl+Enter = «да»), разбор «цифра+Enter», автоскрытие.
-- ui/window.py — `LauncherWindow(ui_cfg)`: сигналы `submitted(str)`, `cancel_requested()`, `open_item(int)`
-  (индекс в Items: клик или цифра+Enter), `hidden()`; методы `show_launcher()`, `hide_launcher()`,
-  `begin_request(text)`, `on_event(ev)` (события из jarvis.events, вызывается в UI-потоке), `ask_confirm(req)`,
-  `set_local_mode(on)`, `show_toast(text, kind="error")`.
+  `OrbModel(animations=True)` — модель сферы без Qt: состояния idle | wake | listen | work | speak | confirm |
+  success | error; входы `wake()` (показ окна), `key()`, `voice(rms)` (уровень голоса 0..1 — импульс), `begin()`,
+  `set_level(level)` (оттенок grammar | hands | brain | local), `status()`, `chunk()`, `confirm(on)`,
+  `done(ok, cancelled=False)`, `hide()` (идёт запрос — работа продолжается, вспышка догорает), `set_local(on)`;
+  `tick(dt) -> bool` (False — успокоилась, кадр застыл), `advance(now)` (общие часы для нескольких виджетов),
+  `frame(t=None) -> OrbFrame` (детерминированно, без random: доли внутри сферы, аура и искры — в 1 + `ORB_EXTENT`),
+  `subscribe(fn)`/`unsubscribe(fn)` (зовёт после входов и смены состояния в tick), `.animating`, `.resting` (окно
+  спрятано, запроса и вспышки нет), `.shown`.
+- ui/orb.py — `paint_orb(painter, rect, model, t=None)` (QPainter, кэш картинок тела, ободка и ореола; аура — один
+  контур в маленьком буфере), `orb_radius(side)`, `orb_side(orb_size)`; `OrbWidget(model=None, parent=None, *, size)`
+  — таймер ~60 к/с только пока `model.animating` и виджет виден, затем последний кадр и стоп; `OrbWindow(model,
+  ui_cfg, *, state=None, writer=None)` (наследует OrbWidget): Frameless | Tool | StaysOnTop |
+  WindowDoesNotAcceptFocus, WA_ShowWithoutActivating, прозрачный фон; сигнал `clicked`; `start()`,
+  `set_menu_actions(actions)`, `menu()`, `set_suppressed(on)`, `hide_by_user()` (до перезапуска), `close_orb()`,
+  `place(state)`, `default_center()` (правый нижний угол доступной области основного экрана, отступ
+  `ORB_MARGIN_PX`), `center()`. Режимы: always — видна всегда; auto — видна, пока окно показано или идёт запрос,
+  гаснет через `ORB_LINGER_MS` (2 с). Перетаскивание — `writer({"orb": {"x", "y"}})` (по умолчанию
+  `save_state_async`: `<data>\ui_state.json`, tmp + os.replace в рабочем потоке); `load_state()`, `save_state(update)`,
+  `saved_center(state)`, `state_path()`. Позиция вне всех экранов — угол по умолчанию.
+- ui/window.py — `LauncherWindow(ui_cfg, parent=None, *, orb: OrbModel | None = None)`: сигналы `submitted(str)`,
+  `cancel_requested()`, `open_item(int)` (индекс в Items: клик или цифра+Enter), `hidden()`; методы
+  `show_launcher()`, `hide_launcher()`, `begin_request(text)`, `on_event(ev)` (события из jarvis.events, вызывается
+  в UI-потоке), `ask_confirm(req)`, `set_local_mode(on)`, `show_toast(text, kind="error")`; `.orb_model` — модель
+  сферы слева от строки ввода (`theme.ORB_PX` поверх места `theme.ORB_SLOT`), окно ведёт её своими событиями.
 - ui/icon.py — `render_icon(state: "ready"|"busy"|"local"|"warn", size) -> QImage` (рисунок QPainter; тот же
   рисунок — в трее и в .ico при сборке); ui/tray.py — `Tray`: сигналы `open_requested`, `local_toggled(bool)`,
-  `new_conversation`, `restart_hands`, `unload_hands`, `open_logs`, `autostart_toggled(bool)`, `quit_requested`.
+  `new_conversation`, `restart_hands`, `unload_hands`, `open_logs`, `autostart_toggled(bool)`, `quit_requested`;
+  `menu() -> QMenu` (его пункты показывает и сфера).
 
 ### jarvis.selftest
 `main() -> int` — проверка собранного бандла без сети и GPU (раздел 5 NIGHT-PROMPT).

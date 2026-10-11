@@ -1,6 +1,8 @@
-"""core.handle: порядок событий во всех ветках, исключения, отмена, тайминги, журнал, шпион мозга."""
+"""core.handle: порядок событий во всех ветках, исключения, отмена, тайминги, журнал, шпион мозга, зрение."""
 
+import base64
 import importlib
+import json
 import sys
 import types
 from dataclasses import dataclass, field
@@ -8,10 +10,15 @@ from typing import Any
 
 import pytest
 
-from jarvis.config import Config
+from jarvis import vision
+from jarvis.config import Config, VisionConfig
 from jarvis.context import Context
 from jarvis.core import NEEDS_GPT, Core, brain_timings
 from jarvis.events import Done, Items, Level, Status, TextChunk
+from pc import screen
+from pc.result import Result
+from pc.screen import Shot
+from pc.windows import WindowInfo
 
 
 def install(monkeypatch: pytest.MonkeyPatch, name: str, **attrs: Any) -> types.ModuleType:
@@ -40,6 +47,7 @@ class Route:
     deep: bool = False
     hit: Hit | None = None
     local_only: bool = False
+    vision: str = ""
 
 
 @dataclass
@@ -462,3 +470,216 @@ def test_journal_failure_does_not_break(mods: types.SimpleNamespace) -> None:
 
     done = check_order(collect(Core(Config(), FakeHands(), SpyBrain(), Broken())))
     assert done.ok
+
+
+# --- зрение ------------------------------------------------------------------------------------------
+
+CHROME = WindowInfo(77, "Новости — Google Chrome", 5, "chrome.exe")
+SCREEN_LABEL = "⚙ снимок экрана → GPT"
+
+
+class VisionBrain(SpyBrain):
+    """Шпион мозга, который принимает снимки (как настоящий Brain.ask)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.images: list[list[str]] = []
+
+    def ask(self, text: str, ctx: Any, deep: bool = False, images: Any = ()):  # type: ignore[override]
+        self.images.append(list(images))
+        return super().ask(text, ctx, deep)
+
+
+@pytest.fixture
+def cam(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespace:
+    """Фейковые pc.screen.capture_* и vision.encode_jpeg: calls — вызовы снимка, result — Shot, Result
+    или исключение."""
+    state = types.SimpleNamespace(
+        calls=[],
+        result=Shot(4, 2, b"\x01\x02\x03\x00" * 8),
+        jpeg=b"\xff\xd8JPEG\xff\xd9",
+        encode_args=None,
+        encode_error=None,
+        on_capture=None,
+    )
+
+    def capture(kind: str):
+        def fn(hwnd: Any, caller: str, deny_apps: Any = ()) -> Any:
+            state.calls.append((kind, hwnd, caller, list(deny_apps)))
+            if state.on_capture is not None:
+                state.on_capture()
+            if isinstance(state.result, Exception):
+                raise state.result
+            return state.result
+
+        return fn
+
+    def encode(shot: Shot, max_side: int = 1600, quality: int = 80) -> bytes:
+        state.encode_args = (max_side, quality)
+        if state.encode_error is not None:
+            raise state.encode_error
+        return state.jpeg
+
+    monkeypatch.setattr(screen, "capture_window", capture("window"))
+    monkeypatch.setattr(screen, "capture_screen", capture("screen"))
+    monkeypatch.setattr(vision, "encode_jpeg", encode)
+    return state
+
+
+def vision_run(
+    core: Core, text: str = "экран: что тут не так?", window: Any = CHROME, **kw: Any
+) -> list[Any]:
+    return list(core.handle(text, Context(active_window=window), **kw))
+
+
+def test_vision_screen_shot_goes_to_brain_with_image(mods: types.SimpleNamespace, cam: Any) -> None:
+    mods.route = Route("brain", "vision:screen", "что тут не так?", vision="screen")
+    brain, journal = VisionBrain(), FakeJournal()
+    cfg = Config(vision=VisionConfig(max_side=1200, jpeg_quality=70, deny_apps=["Telegram.exe"]))
+    events = vision_run(Core(cfg, FakeHands(), brain, journal))
+    done = check_order(events)
+    assert events[0] == Level("brain", "vision:screen", model="gpt-6-luna")
+    assert events[1:3] == [
+        Status(SCREEN_LABEL, kind="tool", key="vision"),
+        Status(SCREEN_LABEL, kind="tool", done=True, ok=True, key="vision"),
+    ]
+    assert cam.calls == [("screen", 77, "user", ["Telegram.exe"])]  # монитор окна на момент хоткея
+    assert cam.encode_args == (1200, 70)
+    assert brain.asks == [("что тут не так?", False)]
+    assert brain.images == [[vision.data_url(cam.jpeg)]]
+    assert done.ok and (done.level, done.reason) == ("brain", "vision:screen")
+    assert isinstance(done.timings["shot"], float) and isinstance(done.timings["encode"], float)
+    rec = journal.records[0]
+    assert (rec["vision"], rec["jpeg_bytes"], rec["shot_px"]) == ("screen", len(cam.jpeg), [4, 2])
+    assert isinstance(rec["shot"], float) and isinstance(rec["encode"], float) and "tools" not in rec
+    dumped = json.dumps(rec, ensure_ascii=False)  # ни картинки, ни заголовка окна
+    assert "data:image" not in dumped and base64.b64encode(cam.jpeg).decode() not in dumped
+    assert "Новости" not in dumped
+
+
+def test_vision_window_shot(mods: types.SimpleNamespace, cam: Any) -> None:
+    mods.route = Route("brain", "vision:window", "что в этом окне?", deep=True, vision="window")
+    brain = VisionBrain()
+    events = vision_run(Core(Config(), FakeHands(), brain), "думай: что в этом окне?")
+    done = check_order(events)
+    label = "⚙ снимок окна «Новости — Google Chrome» → GPT"
+    assert Status(label, kind="tool", key="vision") in events
+    assert cam.calls == [("window", 77, "user", [])]
+    assert brain.asks == [("что в этом окне?", True)] and len(brain.images[0]) == 1 and done.ok
+
+
+def test_vision_screen_without_window_uses_primary(mods: types.SimpleNamespace, cam: Any) -> None:
+    mods.route = Route("brain", "vision:screen", "что на экране", vision="screen")
+    check_order(vision_run(Core(Config(), FakeHands(), VisionBrain()), window=None))
+    assert cam.calls == [("screen", None, "user", [])]
+
+
+def test_vision_window_unknown(mods: types.SimpleNamespace, cam: Any) -> None:
+    """`jarvis ask` из консоли или окно из трея: окна «до Jarvis» нет — не угадываем."""
+    mods.route = Route("brain", "vision:window", "что в этом окне", vision="window")
+    brain, journal = VisionBrain(), FakeJournal()
+    done = check_order(vision_run(Core(Config(), FakeHands(), brain, journal), window=None))
+    assert not done.ok and done.text == vision.NO_WINDOW_TEXT
+    assert cam.calls == [] and brain.asks == [] and journal.records[0]["vision"] == "window"
+
+
+def test_vision_refusal_does_not_ask_brain(mods: types.SimpleNamespace, cam: Any) -> None:
+    mods.route = Route("brain", "vision:window", "что тут", vision="window")
+    cam.result = Result(False, screen.CLOSED_TEXT)
+    brain = VisionBrain()
+    events = vision_run(Core(Config(), FakeHands(), brain))
+    done = check_order(events)
+    assert not done.ok and done.text == screen.CLOSED_TEXT and done.level == "brain"
+    assert [e for e in events if isinstance(e, Status)][-1].ok is False
+    assert brain.asks == [] and cam.encode_args is None
+
+
+def test_vision_capture_and_encode_errors(mods: types.SimpleNamespace, cam: Any) -> None:
+    mods.route = Route("brain", "vision:screen", "что тут", vision="screen")
+    brain = VisionBrain()
+    cam.result = OSError("GetDC упал")
+    done = check_order(vision_run(Core(Config(), FakeHands(), brain)))
+    assert not done.ok and done.text == "Снимок не получился: GetDC упал"
+    cam.result = Shot(1, 1, b"\x01\x01\x01\x00")
+    cam.encode_error = RuntimeError("Qt не сохранил JPEG")
+    done = check_order(vision_run(Core(Config(), FakeHands(), brain)))
+    assert not done.ok and done.text == "Снимок не сжался в JPEG: Qt не сохранил JPEG"
+    assert brain.asks == []
+
+
+def test_vision_disabled(mods: types.SimpleNamespace, cam: Any) -> None:
+    mods.route = Route("brain", "vision:screen", "что тут", vision="screen")
+    brain = VisionBrain()
+    cfg = Config(vision=VisionConfig(enabled=False))
+    done = check_order(vision_run(Core(cfg, FakeHands(), brain)))
+    assert not done.ok and done.text == vision.DISABLED_TEXT
+    assert cam.calls == [] and brain.asks == []
+
+
+@pytest.mark.parametrize(
+    ("mode", "route"),
+    [
+        ("local", Route("brain", "vision:screen", "что тут", vision="screen")),
+        ("normal", Route("local", "local:needs_gpt", "что тут", local_only=True, vision="screen")),
+    ],
+)
+def test_vision_local_mode_no_shot(mods: types.SimpleNamespace, cam: Any, mode: str, route: Route) -> None:
+    mods.route = route
+    brain = VisionBrain()
+    done = check_order(vision_run(Core(Config(mode=mode), FakeHands(), brain)))
+    assert done.text == NEEDS_GPT and done.level == "local"
+    assert cam.calls == [] and brain.asks == []
+
+
+def test_vision_cancel_before_send(mods: types.SimpleNamespace, cam: Any) -> None:
+    """Esc, пока снимается экран: снимок не уходит, мозг не спрашивается."""
+    mods.route = Route("brain", "vision:screen", "что тут", vision="screen")
+    brain = VisionBrain()
+    core = Core(Config(), FakeHands(), brain)
+    cam.on_capture = core.cancel
+    events = vision_run(core)
+    done = check_order(events)
+    assert done.cancelled and not done.ok and brain.asks == []
+    assert Status(SCREEN_LABEL, kind="tool", done=True, ok=False, key="vision") in events
+
+
+def test_vision_dry_takes_no_shot(mods: types.SimpleNamespace, cam: Any) -> None:
+    mods.route = Route("brain", "vision:screen", "что тут", vision="screen")
+    brain = VisionBrain()
+    done = check_order(vision_run(Core(Config(), FakeHands(), brain), dry=True))
+    assert done.ok and done.text == "(dry) снимок экрана → GPT: что тут"
+    assert cam.calls == [] and brain.asks == []
+
+
+def _real_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(sys.modules, "jarvis.router", raising=False)
+    monkeypatch.delattr(importlib.import_module("jarvis"), "router", raising=False)
+
+
+@pytest.mark.parametrize(
+    ("mode", "text"),
+    [
+        ("local", "посмотри на экран"),
+        ("normal", "локально: что в этом окне?"),
+        ("local", "думай: экран: что тут"),
+    ],
+)
+def test_vision_real_router_local_never_shoots(
+    monkeypatch: pytest.MonkeyPatch, cam: Any, mode: str, text: str
+) -> None:
+    _real_router(monkeypatch)
+    brain = VisionBrain()
+    done = check_order(vision_run(Core(Config(mode=mode), FakeHands(), brain), text))
+    assert done.level == "local" and done.text == NEEDS_GPT
+    assert cam.calls == [] and brain.asks == []
+
+
+def test_vision_real_router_end_to_end(monkeypatch: pytest.MonkeyPatch, cam: Any) -> None:
+    _real_router(monkeypatch)
+    brain = VisionBrain()
+    done = check_order(vision_run(Core(Config(), FakeHands(), brain), "посмотри на экран и скажи что не так"))
+    assert done.ok and done.reason == "vision:screen"
+    assert cam.calls == [("screen", 77, "user", [])]
+    assert brain.asks == [("скажи что не так", False)] and brain.images[0][0].startswith(
+        "data:image/jpeg;base64,"
+    )

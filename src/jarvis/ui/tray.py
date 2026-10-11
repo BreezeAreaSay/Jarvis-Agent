@@ -82,6 +82,10 @@ class Tray(QObject):
             self._tooltip = text
             self._tray.setToolTip(text)
 
+    def menu(self) -> QMenu:
+        """Меню трея — его пункты (те же QAction) показывает и сфера на рабочем столе."""
+        return self._menu
+
     def set_local(self, on: bool) -> None:
         self._local.setChecked(on)
 

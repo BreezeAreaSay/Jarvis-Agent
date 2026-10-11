@@ -188,3 +188,27 @@ def test_action_maps_to_policy_rows(spy: list[str], tool: str, args: dict, text:
     out = execute.run(tool, args, text, ctx, source)
     assert spy, f"{tool}: policy не спрошена ({out})"
     assert set(spy) <= set(policy.TABLE)
+
+
+# --- зрение: снимок окна или экрана -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("target", ["window", "screen"])
+def test_screenshot_maps_to_policy_row(spy: list[str], target: str) -> None:
+    """Снимок для GPT (по команде человека) спрашивает строку «screenshot» до любого обращения к ОС."""
+    from pc import screen
+
+    out = (
+        screen.capture_window(WIN.hwnd, "user") if target == "window" else screen.capture_screen(None, "user")
+    )
+    assert not isinstance(out, screen.Shot) and not out.ok
+    assert spy == ["screenshot"] and set(spy) <= set(policy.TABLE)
+    assert policy.check("screenshot", "user") == "allow" and policy.check("screenshot", "brain") == "deny"
+
+
+def test_brain_has_no_screenshot_tool() -> None:
+    """У мозга нет инструмента снимка: ни одна строка pc.mcp не ведёт к «screenshot»."""
+    from pc import mcp
+
+    assert "screenshot" not in {a for actions in mcp.TOOL_ACTIONS.values() for a in actions}
+    assert not [name for name in mcp.TOOLS if any(w in name for w in ("screen", "shot", "capture", "image"))]

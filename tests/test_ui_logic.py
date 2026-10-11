@@ -1,5 +1,7 @@
-"""Логика окна без Qt: история, «цифра+Enter», подтверждения, Esc, автоскрытие, высота."""
+"""Логика окна без Qt: история, «цифра+Enter», подтверждения, Esc, автоскрытие, высота, модель сферы."""
 
+import itertools
+import math
 import subprocess
 import sys
 import threading
@@ -337,3 +339,376 @@ def test_level_labels() -> None:
         "brain": "GPT",
         "local": "локально",
     }
+
+
+# --- сфера (OrbModel) ---------------------------------------------------------------------------------
+
+from jarvis.ui.logic import (  # noqa: E402
+    ORB_EXTENT,
+    ORB_FLAME_MAX,
+    ORB_FLASH_S,
+    ORB_LEVELS,
+    ORB_LOBE_LIMIT,
+    ORB_MAX_DT,
+    ORB_PALETTES,
+    ORB_REST,
+    ORB_WAKE_S,
+    OrbModel,
+)
+
+
+def _run(m: OrbModel, seconds: float, step: float = 1 / 60) -> bool:
+    alive = True
+    for _ in range(round(seconds / step)):
+        alive = m.tick(step)
+    return alive
+
+
+def _calm_s(m: OrbModel, limit: float = 10.0, step: float = 1 / 60) -> float:
+    """Через сколько секунд модель сама перестаёт анимировать."""
+    t = 0.0
+    while m.tick(step):
+        t += step
+        assert t < limit, f"сфера не успокоилась за {limit} с (состояние {m.state})"
+    return t
+
+
+def test_orb_starts_idle_and_still() -> None:
+    m = OrbModel()
+    assert m.state == "idle" and not m.animating and m.resting
+    assert m.tick(1 / 60) is False
+    assert m.energy == ORB_REST
+
+
+def test_orb_wake_then_listen_and_freeze() -> None:
+    m = OrbModel()
+    m.wake()
+    assert m.state == "wake" and m.animating and m.shown and not m.resting
+    _run(m, ORB_WAKE_S + 0.05)
+    assert m.state == "listen"
+    assert _calm_s(m) < 2.5  # «пробуждение ~0,7 с, затем замирает»
+    frozen = (m.t, m.frame())
+    assert m.tick(0.5) is False
+    assert (m.t, m.frame()) == frozen  # покой: кадр застыл, часы стоят
+
+
+def test_orb_key_pulse_decays() -> None:
+    m = OrbModel()
+    m.wake()
+    _calm_s(m)
+    glow = m.glow()
+    m.key()
+    assert m.animating and m.glow() > glow
+    assert _calm_s(m) < 1.5
+    assert m.glow() == pytest.approx(glow)
+
+
+def test_orb_request_flow() -> None:
+    m = OrbModel()
+    m.wake()
+    m.begin()
+    assert m.state == "work" and m.busy
+    m.set_level("hands")
+    assert m.level == "hands"
+    assert _run(m, 12.0) is True  # пока идёт запрос — анимация не кончается
+    rest = m.energy
+    assert rest > 0.5  # работа ярче покоя
+    m.chunk()
+    assert m.state == "speak"
+    m.confirm(True)
+    assert m.state == "confirm"
+    m.confirm(False)
+    assert m.state == "speak"
+    m.done(True)
+    assert m.state == "success" and m.flash_kind == "success" and not m.busy
+    assert m.frame().flash > 0.0 or _run(m, 0.05)
+    _run(m, ORB_FLASH_S + 0.02)
+    assert m.state == "listen"
+    assert _calm_s(m) < 2.5
+    assert m.energy == pytest.approx(ORB_REST)
+
+
+def test_orb_energy_decays_monotonically_after_done() -> None:
+    m = OrbModel()
+    m.wake()
+    m.begin()
+    m.set_level("brain")
+    _run(m, 1.5)
+    m.done(True)
+    values = []
+    for _ in range(120):
+        m.tick(1 / 60)
+        values.append(m.energy)
+    assert all(b <= a + 1e-9 for a, b in itertools.pairwise(values))
+    assert values[-1] < values[0]
+
+
+def test_orb_error_flash_is_crimson() -> None:
+    m = OrbModel()
+    m.wake()
+    m.begin()
+    m.done(False)
+    assert m.state == "error" and m.flash_kind == "error"
+    _run(m, 0.1)
+    f = m.frame()
+    assert f.flash > 0.5
+    r, g, _b = f.flash_rgb
+    assert r > 200 and g < 60  # малиново-красная
+    s = OrbModel()
+    s.wake()
+    s.begin()
+    s.done(True)
+    _run(s, 0.1)
+    assert min(s.frame().flash_rgb) > 230  # лавандово-белая
+
+
+def test_orb_cancel_is_soft_without_flash() -> None:
+    m = OrbModel()
+    m.wake()
+    m.begin()
+    _run(m, 0.5)
+    m.done(False, cancelled=True)
+    assert m.state == "listen" and m.flash_t < 0
+    assert _calm_s(m) < 3.0
+
+
+def test_orb_hide_rules() -> None:
+    m = OrbModel()
+    m.wake()
+    m.hide()
+    assert m.state == "idle" and not m.shown
+    _calm_s(m)
+    assert m.resting
+    m.wake()
+    m.begin()
+    m.hide()  # окно спрятали посреди запроса — работа продолжается на сфере рабочего стола
+    assert m.state == "work" and not m.resting
+    m.done(True)
+    assert m.state == "success"  # итог видно и без окна
+    _run(m, ORB_FLASH_S + 0.05)
+    assert m.state == "idle"
+    _calm_s(m)
+    assert m.resting
+
+
+def test_orb_hide_during_flash_lets_it_finish() -> None:
+    m = OrbModel()
+    m.wake()
+    m.begin()
+    m.done(True)
+    m.hide()
+    assert m.state == "success" and not m.resting
+    _run(m, ORB_FLASH_S + 0.05)
+    assert m.state == "idle"
+
+
+def test_orb_wake_during_request_only_pulses() -> None:
+    m = OrbModel()
+    m.wake()
+    m.begin()
+    m.hide()
+    m.wake()
+    assert m.state == "work" and m.shown
+
+
+def test_orb_late_done_is_ignored() -> None:
+    m = OrbModel()
+    m.wake()
+    _calm_s(m)
+    m.done(True)  # Done прошлого запроса пришёл, когда сфера уже в покое
+    assert m.state == "listen" and m.flash_t < 0
+
+
+def test_orb_without_animations_is_static() -> None:
+    m = OrbModel(animations=False)
+    m.wake()
+    assert m.state == "listen" and not m.animating
+    m.key()
+    assert m.pulse == 0.0
+    m.begin()
+    m.set_level("brain")
+    assert m.state == "work" and not m.animating
+    work = m.frame()
+    assert m.tick(1.0) is False
+    m.done(True)
+    assert m.state == "listen" and not m.animating  # без вспышки
+    assert m.frame().glow < work.glow  # статичные, но разные кадры состояний
+    m.hide()
+    assert m.state == "idle"
+
+
+def test_orb_tick_dt_is_bounded() -> None:
+    m = OrbModel()
+    m.wake()
+    t0 = m.t
+    m.tick(30.0)  # пропуск кадров (сон, нагрузка) — без рывка
+    assert m.t - t0 <= ORB_MAX_DT * 3.0
+    m.tick(-1.0)
+
+
+def test_orb_advance_shared_clock() -> None:
+    m = OrbModel()
+    m.wake()
+    m.advance(10.0)
+    t1 = m.t
+    m.advance(10.1)
+    t2 = m.t
+    m.advance(10.1)  # второй виджет в тот же момент
+    m.advance(10.05)  # время назад — ничего
+    assert t2 > t1 and m.t == t2
+
+
+def test_orb_frame_is_deterministic() -> None:
+    a, b = OrbModel(), OrbModel()
+    for m in (a, b):
+        m.wake()
+        m.begin()
+        m.set_level("grammar")
+        m.chunk()
+        _run(m, 1.3)
+    assert a.frame() == b.frame()
+    assert a.frame(5.0) == a.frame(5.0)
+    assert a.frame(5.0) != a.frame(5.3)  # и при этом живой
+
+
+def test_orb_shapes_stay_in_bounds() -> None:
+    """Доли — внутри стекла; языки, искры и кольца — в пределах 1 + ORB_EXTENT (квадрат виджета)."""
+    m = OrbModel()
+    m.wake()
+    m.begin()
+    m.set_level("brain")
+    for i in range(400):
+        m.tick(1 / 30)
+        if i % 7 == 0:
+            m.chunk()
+        for energy in (ORB_REST, 0.8, 1.2):
+            m.energy = energy
+            f = m.frame()
+            for lobe in f.lobes:
+                assert math.hypot(lobe.x, lobe.y) + lobe.r <= ORB_LOBE_LIMIT + 1e-9
+                for x, y, r, _fade in lobe.trail:
+                    assert math.hypot(x, y) + r <= ORB_LOBE_LIMIT + 1e-9
+            assert ORB_LOBE_LIMIT <= 1.0
+            for flame in f.flames:
+                assert 1.0 <= flame.ring <= 1.0 + ORB_EXTENT
+                for pts in flame.tongues:
+                    for k in range(0, 14, 2):
+                        assert math.hypot(pts[k], pts[k + 1]) <= 1.0 + ORB_FLAME_MAX + 1e-9
+            assert ORB_FLAME_MAX <= ORB_EXTENT
+            for s in f.sparks:
+                assert math.hypot(s.x, s.y) + s.r * s.stretch * 2.2 <= 1.0 + ORB_EXTENT
+            assert f.ring <= 1.0 + ORB_EXTENT
+
+
+def test_orb_flames_rise_and_calm_at_rest() -> None:
+    """Языки выше вверху сферы; в работе — выше, чем в покое."""
+    rest, work = OrbModel(), OrbModel()
+    work.wake()
+    work.begin()
+    work.set_level("brain")
+    _run(work, 1.5)
+
+    def tips(m: OrbModel) -> tuple[float, float]:
+        f = m.frame()
+        ys = [pts[7] for flame in f.flames for pts in flame.tongues]
+        return min(ys), max(ys)
+
+    top_rest, _ = tips(rest)
+    top_work, bottom_work = tips(work)
+    assert top_work < top_rest < -1.0  # ось y вниз: выше — меньше
+    assert top_work < -1.35  # вверху язык выше трети радиуса
+    assert bottom_work < 1.25  # внизу языки короткие
+
+
+def test_orb_level_tints() -> None:
+    """Оттенок уровня тонкий: гамма остаётся тёмно-фиолетовой, но уровни различимы."""
+
+    def lobes(level: str, local: bool = False) -> list[tuple[int, int, int]]:
+        m = OrbModel()
+        m.set_local(local)
+        m.wake()
+        m.begin()
+        m.set_level(level)
+        _run(m, 2.0)
+        return list(m.palette().lobes)
+
+    base = list(ORB_PALETTES[""].lobes)
+    for level in ORB_LEVELS:
+        got = lobes(level, local=level == "local")
+        assert got != base, level
+        assert got == list(ORB_PALETTES[level].lobes), level
+    assert any(b > r for r, _g, b in lobes("grammar"))  # холоднее — сине-фиолетовый
+    assert any(r > 150 and b > 150 and g < 80 for r, g, b in lobes("hands"))  # маджента
+    assert any(g > 150 and b > 120 and r < 60 for r, g, b in lobes("local", local=True))  # бирюза
+    brain = OrbModel()
+    brain.wake()
+    brain.begin()
+    brain.set_level("brain")
+    _run(brain, 2.0)
+    hands = OrbModel()
+    hands.wake()
+    hands.begin()
+    hands.set_level("hands")
+    _run(hands, 2.0)
+    assert brain.frame().core > hands.frame().core  # GPT — ярче ядро
+    core, edge = ORB_PALETTES[""].core, ORB_PALETTES[""].edge
+    assert max(core) < 20 and max(edge) < 50  # почти чёрное тело
+
+
+def test_orb_local_mode_tint_at_rest() -> None:
+    m = OrbModel()
+    m.set_local(True)
+    _calm_s(m)
+    assert m.palette() == ORB_PALETTES["local"]
+    m.set_local(False)
+    assert m.animating
+    _calm_s(m)
+    assert m.palette() == ORB_PALETTES[""]
+
+
+def test_orb_sparks_only_while_working() -> None:
+    m = OrbModel()
+    m.wake()
+    _run(m, 0.3)
+    assert m.frame().sparks == ()
+    m.begin()
+    _run(m, 1.0)
+    assert len(m.frame().sparks) > 0
+    m.done(True)
+    _run(m, 3.0)
+    assert m.frame().sparks == ()
+
+
+def test_orb_voice_level_pulse() -> None:
+    m = OrbModel()
+    m.wake()
+    _calm_s(m)
+    m.voice(0.8)
+    assert m.pulse == pytest.approx(0.4) and m.animating
+    m.voice(0.1)
+    assert m.pulse == pytest.approx(0.4)  # тихий кадр не гасит импульс — он затухает сам
+    m.voice(5.0)
+    assert m.pulse == pytest.approx(0.5)
+    m.voice(-1.0)
+    assert _calm_s(m) < 2.0
+    quiet = OrbModel(animations=False)
+    quiet.voice(1.0)
+    assert quiet.pulse == 0.0
+
+
+def test_orb_listeners_and_state_changes_in_tick() -> None:
+    m = OrbModel()
+    seen: list[str] = []
+    m.subscribe(lambda: seen.append(m.state))
+    m.wake()
+    assert seen == ["wake"]
+    _run(m, ORB_WAKE_S + 0.05)
+    assert seen[-1] == "listen"  # конец пробуждения внутри tick() — подписчики узнали
+
+    def dead() -> None:
+        raise RuntimeError("Internal C++ object already deleted")
+
+    m.subscribe(dead)
+    m.key()
+    m.key()  # удалённый виджет отписан, остальные зовутся
+    assert len(m._listeners) == 1

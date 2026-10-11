@@ -75,6 +75,13 @@
 {"text": "забудь про кофе", "level": "grammar", "tool": "forget", "args": {"which": "кофе"}}
 {"text": "забудь всё", "level": "grammar", "tool": "forget", "args": {"which": "все"}}
 {"text": "что ты умеешь", "level": "grammar", "tool": "help", "args": {}}
+{"text": "сверни это окно", "level": "grammar", "tool": "win", "args": {"action": "minimize", "target": "@cur"}, "ctx": {"window": {"title": "Безымянный - Блокнот", "exe": "Notepad.exe"}}}
+{"text": "закрой это окно", "level": "grammar", "tool": "close", "args": {"target": "@cur"}, "ctx": {"window": {"title": "Безымянный - Блокнот", "exe": "Notepad.exe"}}}
+{"text": "разверни окно на весь экран", "level": "grammar", "tool": "win", "args": {"action": "maximize", "target": "@cur"}, "ctx": {"window": {"title": "смета.xlsx - Excel", "exe": "EXCEL.EXE"}}}
+{"text": "покажи окно хрома", "level": "grammar", "tool": "focus", "args": {"target": "Google Chrome"}}
+{"text": "сверни окно хрома", "level": "grammar", "tool": "win", "args": {"action": "minimize", "target": "Google Chrome"}}
+{"text": "переключись на окно телеграма", "level": "grammar", "tool": "focus", "args": {"target": "Telegram"}}
+{"text": "разверни телегу на весь экран", "level": "grammar", "tool": "win", "args": {"action": "maximize", "target": "Telegram"}}
 {"text": "открой фотошоп", "level": "hands", "tool": "open"}
 {"text": "запусти майнкрафт", "level": "hands", "tool": "open"}
 {"text": "открой ютуб", "level": "hands", "tool": "open"}
@@ -135,6 +142,7 @@
 {"text": "найди и открой последний pdf", "level": "hands", "tool": "ask_gpt"}
 {"text": "открой хром и включи музыку", "level": "hands", "tool": "ask_gpt"}
 {"text": "закрой телегу и выключи звук", "level": "hands", "tool": "ask_gpt"}
+{"text": "найди вчерашний скриншот", "level": "hands", "tool": "find"}
 {"text": "почему комп долго включается", "level": "brain"}
 {"text": "зачем нужен файл подкачки", "level": "brain"}
 {"text": "как сделать скриншот части экрана", "level": "brain"}
@@ -165,3 +173,19 @@
 {"text": "почему не работает микрофон в дискорде", "level": "brain"}
 {"text": "посчитай 15 процентов от 2400", "level": "brain"}
 {"text": "как мне настроить два монитора", "level": "brain"}
+{"text": "почему мерцает экран", "level": "brain"}
+{"text": "напиши письмо про ошибку на экране входа", "level": "brain"}
+{"text": "посмотри на экран", "level": "brain", "vision": "screen"}
+{"text": "глянь на экран и скажи что тут не так", "level": "brain", "vision": "screen"}
+{"text": "взгляни на это окно", "level": "brain", "vision": "window", "ctx": {"window": {"title": "Безымянный - Блокнот", "exe": "Notepad.exe"}}}
+{"text": "экран: что за ошибка?", "level": "brain", "vision": "screen"}
+{"text": "окно: переведи на русский", "level": "brain", "vision": "window", "ctx": {"window": {"title": "Google Chrome", "exe": "chrome.exe"}}}
+{"text": "что у меня на экране", "level": "brain", "vision": "screen"}
+{"text": "что в этом окне?", "level": "brain", "vision": "window", "ctx": {"window": {"title": "смета.xlsx - Excel", "exe": "EXCEL.EXE"}}}
+{"text": "прочитай ошибку в окне", "level": "brain", "vision": "window", "ctx": {"window": {"title": "Безымянный - Блокнот", "exe": "Notepad.exe"}}}
+{"text": "переведи текст на экране", "level": "brain", "vision": "screen"}
+{"text": "опиши что на экране", "level": "brain", "vision": "screen"}
+{"text": "что за ошибка на экране?", "level": "brain", "vision": "screen"}
+{"text": "сделай скриншот и скажи что не так", "level": "brain", "vision": "screen"}
+{"text": "сделай скрин окна и объясни ошибку", "level": "brain", "vision": "window", "ctx": {"window": {"title": "смета.xlsx - Excel", "exe": "EXCEL.EXE"}}}
+{"text": "можешь посмотреть на экран", "level": "brain", "vision": "screen"}

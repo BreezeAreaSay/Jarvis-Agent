@@ -297,6 +297,7 @@ class FakeWinApi:
         self.front = 0
         self.rects: dict[int, tuple[int, int, int, int]] = {}  # окна на мониторе 1920×1080
         self.affinity: list[tuple[int, int]] = []
+        self.startup = ""  # папка «Автозагрузка» (фикстура fakes ставит tmp_path)
 
     def register_hotkey(self, hwnd: int, hotkey_id: int, mods: int, vk: int) -> tuple[bool, int]:
         rec(f"hotkey:{mods:#x}:{vk:#x}")
@@ -342,6 +343,13 @@ class FakeWinApi:
 
     def reg_delete(self, name: str) -> bool:
         return self.registry.pop(name, None) is not None
+
+    def startup_dir(self) -> str:
+        return self.startup
+
+    def create_shortcut(self, path: str, target: str, args: str, cwd: str) -> None:
+        rec("create_shortcut")
+        Path(path).write_text(target, encoding="utf-8")
 
     def create_mutex(self, name: str) -> tuple[int, bool]:
         return 5, self.mutex_exists
@@ -405,7 +413,7 @@ def _module(name: str, **attrs: Any) -> types.ModuleType:
 
 
 @pytest.fixture
-def fakes(monkeypatch: pytest.MonkeyPatch) -> FakeWinApi:
+def fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeWinApi:
     CALLS.clear()
     RecTray.notes = []
     FakeHands.fail = ""
@@ -442,6 +450,7 @@ def fakes(monkeypatch: pytest.MonkeyPatch) -> FakeWinApi:
     monkeypatch.setattr(app_mod, "Tray", RecTray)
     monkeypatch.setattr(winapp, "own_descendants", lambda name: [])
     api = FakeWinApi()
+    api.startup = str(tmp_path / "Startup")
     monkeypatch.setattr(winapp, "_api", api)
     winapp.show_message_id.cache_clear()
     yield api
@@ -897,11 +906,12 @@ def test_autostart_toggle(qapp: QApplication, make_app: Any, fakes: FakeWinApi) 
     a = make_app()
     assert not a.tray.is_autostart_checked()
     a.tray.trigger("Автозапуск")
-    assert wait_for(qapp, lambda: "reg_set" in CALLS)
-    assert fakes.registry["Jarvis"] == winapp.autostart_command()
+    assert wait_for(qapp, lambda: "create_shortcut" in CALLS)
+    link = Path(fakes.startup) / winapp.STARTUP_LNK
+    assert link.is_file() and "Jarvis" not in fakes.registry  # ярлык, а не HKCU\…\Run
     assert wait_for(qapp, lambda: a.tray.is_autostart_checked())
     a.tray.trigger("Автозапуск")
-    assert wait_for(qapp, lambda: "Jarvis" not in fakes.registry and not a.tray.is_autostart_checked())
+    assert wait_for(qapp, lambda: not link.exists() and not a.tray.is_autostart_checked())
 
 
 def test_quit_stops_everything(qapp: QApplication, make_app: Any, fakes: FakeWinApi) -> None:

@@ -254,16 +254,14 @@ def test_brain_branch_deep_and_timings(mods: types.SimpleNamespace) -> None:
         "t_first_token": 1.25,
         "t_total": 2.5,
         "new_thread": True,
-        "model": "gpt-6.1-sol",
+        "model": "gpt-6-luna",
         "usage": {"in": 9},
     }
     brain = SpyBrain([Level("brain", "из мозга"), TextChunk("Тем"), Done(ok=True, text="Тем…", timings=raw)])
     journal = FakeJournal()
     events = collect(Core(Config(), FakeHands(), brain, journal), "думай: чем опасно")
     done = check_order(events)
-    assert [e for e in events if isinstance(e, Level)] == [
-        Level("brain", "prefix:think", model="gpt-6.1-sol")
-    ]
+    assert [e for e in events if isinstance(e, Level)] == [Level("brain", "prefix:think", model="gpt-6-luna")]
     assert brain.asks == [("чем опасно", True)]
     assert done.reason == "prefix:think" and done.level == "brain"
     assert done.timings["t_first_token"] == 1.25  # тайминги мозга дополнены, а не заменены
@@ -271,7 +269,7 @@ def test_brain_branch_deep_and_timings(mods: types.SimpleNamespace) -> None:
         "first_token": 1250.0,
         "total": 2500.0,
         "new_thread": True,
-        "model": "gpt-6.1-sol",
+        "model": "gpt-6-luna",
         "usage": {"in": 9},
     }
     assert "route" in done.timings and "total" in done.timings

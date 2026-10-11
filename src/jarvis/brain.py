@@ -1065,10 +1065,8 @@ class Brain:
         from openai_codex.errors import InvalidRequestError
         from openai_codex.types import ReasoningEffort
 
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "effort": ReasoningEffort.high if deep else ReasoningEffort.low,
-        }
+        effort = self._cfg.effort_deep if deep else self._cfg.effort_quick
+        kwargs: dict[str, Any] = {"model": model, "effort": ReasoningEffort(effort)}
         if self._cfg.service_tier.strip():
             kwargs["service_tier"] = self._cfg.service_tier.strip()
         thread = self._take_thread()

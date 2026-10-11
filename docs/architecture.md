@@ -210,6 +210,8 @@ vision="")`; `route(text, ctx, mode) -> Route` (снимает префиксы 
 `[TextInput(prompt), ImageInput(url), …]`; без снимков вход хода — строка, как раньше. spoken — запрос сказан
 голосом: `build_prompt(text, ctx, spoken=True)` ставит в начало `SPOKEN_HINT` («Ответ будет озвучен: говори коротко
 и разговорно, без списков, таблиц и кода»).
+Модель и уровень размышления хода: deep=False — `cfg.model_quick` + `cfg.effort_quick` (по умолчанию gpt-6-luna,
+low), deep=True («думай:») — `cfg.model_deep` + `cfg.effort_deep` (gpt-6-luna, high).
 Прокладка `subprocess` в `openai_codex.client` ставится до первого `Codex()`. Для doctor: `codex_bin() -> Path`
 (бинарь из SDK; в exe — из бандла), `codex_env(cfg) -> dict` (CODEX_HOME мозга и прокси), `codex_home() -> Path`,
 `build_overrides(cfg, confirm_address) -> tuple[str, ...]`, `install_subprocess_shim(hook)`. `Done.reason` мозга:
@@ -291,8 +293,8 @@ stats (`jarvis.journal`), doctor (`jarvis.doctor`), autostart (`jarvis.winapp`),
 ### jarvis.winapp (без Qt)
 Job Object (`create_job()`, `add_to_job(job, popen|pid)`, `job_hook(job)`, `close_job(job)`, `own_descendants(exe)`),
 mutex одного экземпляра (`acquire_instance() -> int|None`, `release_instance(h)`, `signal_first_instance()` — окно-
-приёмник `RECEIVER_TITLE` + сообщение `show_message_id()`), автозапуск HKCU\…\Run (`set_autostart(on) -> str`,
-`autostart_enabled() -> bool`, `autostart_command() -> str`), хоткей (`parse_hotkey(s) -> (mods|MOD_NOREPEAT, vk)`,
+приёмник `RECEIVER_TITLE` + сообщение `show_message_id()`), автозапуск — ярлык Jarvis.lnk в «Автозагрузке» (`set_autostart(on) -> str`,
+`autostart_enabled() -> bool` — ярлык или старое значение HKCU\…\Run, `autostart_target()`, `autostart_command() -> str`), хоткей (`parse_hotkey(s) -> (mods|MOD_NOREPEAT, vk)`,
 `format_hotkey(s)`, `register_with_fallback(hwnd, id, s) -> HotkeyResult(combo, message)`, `FALLBACK_HOTKEYS`),
 `allow_set_foreground_any()`, `set_foreground(hwnd)`, `available()`, `exclude_from_capture(hwnd) -> bool`
 (SetWindowDisplayAffinity WDA_EXCLUDEFROMCAPTURE, Windows 10 2004+: окно не попадает в снимки экрана; ошибка —

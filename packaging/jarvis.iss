@@ -12,7 +12,9 @@
 ; Файл — UTF-8 с BOM: без BOM старые ISCC читают кириллицу в кодовой странице ANSI.
 ;
 ; Что делает: ставит в {localappdata}\Programs\Jarvis, ярлык в «Пуск» пользователя, флажок «Запускать при входе
-; в Windows» (HKCU\…\Run, значение "Jarvis" — то же, что пишет `jarvis-cli autostart on`), деинсталлятор.
+; в Windows» — ярлык Jarvis.lnk в папке «Автозагрузка» (то же, что делает `jarvis-cli autostart on`), деинсталлятор.
+; Не HKCU\…\Run: антивирусы часто запрещают неподписанному установщику запись туда («RegCreateKeyEx: код 5»);
+; старое значение Run из прошлых сборок убирается без сообщений об ошибке.
 ; Перед установкой и удалением закрывает Jarvis.exe и jarvis-cli.exe (taskkill без /T: дерево не трогаем —
 ; приложения, открытые через Jarvis, должны остаться; llama-server и codex завершит Job Object Jarvis).
 ; Каталог данных (JARVIS_DATA_DIR, по умолчанию %LOCALAPPDATA%\Jarvis) при удалении НЕ трогается.
@@ -76,12 +78,20 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 
 [Icons]
 Name: "{userprograms}\Jarvis"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Jarvis — помощник"
+; автозапуск — ярлык в «Автозагрузке» (как winapp.set_autostart); при удалении убирается вместе с программой
+Name: "{userstartup}\Jarvis"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Jarvis — помощник"; Tasks: autostart
+
+[InstallDelete]
+; флажок автозапуска снят при повторной установке — убрать ярлык прошлой установки или переключателя в трее
+Type: files; Name: "{userstartup}\Jarvis.lnk"; Tasks: not autostart
+
+[UninstallDelete]
+; ярлык мог создать переключатель «Автозапуск» в трее — Inno о нём не знает
+Type: files; Name: "{userstartup}\Jarvis.lnk"
 
 [Registry]
-; флажок выбран — автозапуск: "<папка установки>\Jarvis.exe" (как jarvis.winapp.autostart_command() в exe)
-Root: HKCU; Subkey: "{#RunKey}"; ValueType: string; ValueName: "Jarvis"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: autostart
-; флажок снят — убрать старое значение; при удалении значение убирается в любом случае
-Root: HKCU; Subkey: "{#RunKey}"; ValueType: none; ValueName: "Jarvis"; Flags: deletevalue uninsdeletevalue; Tasks: not autostart
+; старый автозапуск через HKCU\…\Run (прошлые сборки) — убрать; запись туда может быть запрещена — noerror
+Root: HKCU; Subkey: "{#RunKey}"; ValueType: none; ValueName: "Jarvis"; Flags: deletevalue uninsdeletevalue noerror dontcreatekey
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Запустить Jarvis"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent

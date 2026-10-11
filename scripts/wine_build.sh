@@ -435,6 +435,8 @@ check_installer() {
     fi
     mkdir -p "$data"
     printf 'данные пользователя — удаление их не трогает\n' >"$data/wine-check.txt"
+    # старый автозапуск прошлых сборок (HKCU\…\Run) — установщик должен его убрать
+    w reg add "$RUN_KEY" /v Jarvis /t REG_SZ /d 'C:\old\Jarvis.exe' /f >/dev/null
 
     step "Тихая установка с автозапуском ($la_w\\Programs\\Jarvis)"
     w "$(wpath "$setup")" /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER /NORESTART /TASKS=autostart \
@@ -445,10 +447,9 @@ check_installer() {
     ok "файлы: $(find "$app" -type f | wc -l), $(human_size "$app")"
     [[ -f "$start/Jarvis.lnk" ]] || die "нет ярлыка $start/Jarvis.lnk"
     ok "ярлык в «Пуск»: Jarvis.lnk"
-    local val
-    val="$(run_value)"
-    [[ "$val" == "\"$la_w\\Programs\\Jarvis\\Jarvis.exe\"" ]] || die "ключ Run: «$val»"
-    ok "ключ Run: Jarvis = $val"
+    [[ -f "$start/Startup/Jarvis.lnk" ]] || die "нет ярлыка автозапуска $start/Startup/Jarvis.lnk"
+    [[ -z "$(run_value)" ]] || die "старое значение Run не убрано: $(run_value)"
+    ok "автозапуск: ярлык в «Автозагрузке», старое значение Run убрано"
     WINEQT_QPA_PLATFORM=offscreen w "$(wpath "$app/jarvis-cli.exe")" selftest | tee "$OUT/selftest-installed.log" ||
         warn "selftest установленной копии: код ${PIPESTATUS[0]}"
 
@@ -456,8 +457,9 @@ check_installer() {
     w "$(wpath "$setup")" /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER /NORESTART '/MERGETASKS=!autostart' \
         "/LOG=$log\\reinstall.log" || die "повторная установка: код $?"
     wineserver -w
-    [[ -z "$(run_value)" ]] || die "флажок снят, а ключ Run остался: $(run_value)"
-    ok "ключ Run убран"
+    [[ ! -e "$start/Startup/Jarvis.lnk" ]] || die "флажок снят, а ярлык автозапуска остался"
+    ok "ярлык автозапуска убран"
+    cp "$start/Jarvis.lnk" "$start/Startup/Jarvis.lnk" # как будто включили автозапуск в трее
 
     step "Тихое удаление"
     w "$(wpath "$app/unins000.exe")" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/LOG=$log\\uninstall.log" ||
@@ -465,6 +467,7 @@ check_installer() {
     wineserver -w # деинсталлятор перезапускает себя из %TEMP% и сразу выходит
     [[ ! -e "$app" ]] || die "после удаления осталось: $(find "$app" | head -5)"
     [[ ! -e "$start/Jarvis.lnk" ]] || die "после удаления остался ярлык"
+    [[ ! -e "$start/Startup/Jarvis.lnk" ]] || die "после удаления остался ярлык автозапуска"
     [[ -f "$data/wine-check.txt" ]] || die "удаление задело каталог данных $data"
     ok "папка установки и ярлык удалены, каталог данных на месте"
 }

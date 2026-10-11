@@ -59,7 +59,7 @@
 7. Открыть через Jarvis программу на Qt (например, OBS, если есть) → она запускается нормально (Jarvis не передаёт
    ей свои QT_PLUGIN_PATH/PATH).
 8. Переустановить поверх запущенного Jarvis → Jarvis закрылся, установка прошла, Блокнот, открытый через Jarvis, жив.
-9. Удалить через «Параметры → Приложения» → файлов, ярлыка и HKCU Run "Jarvis" нет; `C:\JarvisData` цел.
+9. Удалить через «Параметры → Приложения» → файлов и ярлыков («Пуск», «Автозагрузка») нет; `C:\JarvisData` цел.
 10. Локальная сборка: `pwsh -File C:\Jarvis\scripts\build.ps1` → `build\installer\Jarvis-Setup-1.0.0.exe`.
 
 ### S1 — скелет, settings, paths, policy, apps
@@ -171,8 +171,9 @@
 6. Убить Jarvis в Диспетчере задач (Jarvis.exe или python/pythonw) → llama-server.exe (запущенный Jarvis), codex.exe и
    python `pc.mcp` завершились за несколько секунд (Job Object).
 7. Автозапуск: флажок в трее (или в установщике); из исходников — `uv run jarvis autostart on`.
-   `reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v Jarvis` → `"…\Jarvis.exe"` или
-   `"…\.venv\Scripts\pythonw.exe" -m jarvis run`. Перезагрузка → Jarvis в трее, ни одного окна консоли ни при старте,
+   Win+R → `shell:startup` → там ярлык Jarvis.lnk (у exe — на `…\Jarvis.exe`, из исходников — на
+   `…\.venv\Scripts\pythonw.exe -m jarvis run`); в реестре HKCU\…\Run значения Jarvis нет (антивирус может
+   запрещать запись туда — поэтому ярлык). Перезагрузка → Jarvis в трее, ни одного окна консоли ни при старте,
    ни при первом «gpt: …»; значок есть, даже если Jarvis стартовал раньше панели задач.
 
 ### S6b — окно Jarvis

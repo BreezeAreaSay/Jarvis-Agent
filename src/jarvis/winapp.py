@@ -14,6 +14,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from pc import settings
@@ -33,7 +34,9 @@ ERROR_HOTKEY_ALREADY_REGISTERED = 1409
 ASFW_ANY = 0xFFFFFFFF  # (DWORD)-1
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-RUN_VALUE = "Jarvis"
+RUN_VALUE = "Jarvis"  # старый автозапуск (до ярлыка): только читаем и убираем
+STARTUP_LNK = "Jarvis.lnk"  # автозапуск — ярлык в папке «Автозагрузка» (shell:startup)
+CSIDL_STARTUP = 7
 SHOW_MESSAGE_NAME = "Jarvis.Show"
 RECEIVER_TITLE = "Jarvis.Receiver"  # заголовок скрытого окна-приёмника (хоткей и «покажись»)
 
@@ -229,6 +232,31 @@ class _WinApi:
         except FileNotFoundError:
             return False
         return True
+
+    # --- автозапуск: ярлык в «Автозагрузке»
+
+    def startup_dir(self) -> str:
+        """Папка «Автозагрузка» пользователя (shell:startup, с учётом перенаправления папок)."""
+        from win32com.shell import shell
+
+        return str(shell.SHGetFolderPath(0, CSIDL_STARTUP, None, 0))
+
+    def create_shortcut(self, path: str, target: str, args: str, cwd: str) -> None:
+        """Ярлык .lnk через WScript.Shell; COM — в STA-потоке pc.apps."""
+        from pc import apps
+
+        def make() -> None:
+            import win32com.client
+
+            link = win32com.client.Dispatch("WScript.Shell").CreateShortcut(path)
+            link.TargetPath = target
+            link.Arguments = args
+            link.WorkingDirectory = cwd
+            link.IconLocation = f"{target},0"
+            link.Description = "Jarvis — помощник"
+            link.Save()
+
+        apps.run_sta(make)
 
     # --- снимки экрана
 
@@ -537,41 +565,72 @@ def signal_first_instance(timeout_s: float = 3.0) -> bool:
 # --- автозапуск ----------------------------------------------------------------------------------------
 
 
-def autostart_command() -> str:
-    """Команда для HKCU\\…\\Run.
+def autostart_target() -> tuple[str, str, str]:
+    """Что запускать при входе в Windows: (программа, аргументы, рабочая папка).
 
-    exe — `"<install>\\Jarvis.exe"`; разработка — `"<venv>\\Scripts\\pythonw.exe" -m jarvis run`.
+    exe — `<install>\\Jarvis.exe`; разработка — `<venv>\\Scripts\\pythonw.exe -m jarvis run`.
     """
     if settings.is_frozen():
-        return f'"{ntpath.join(str(settings.install_dir()), "Jarvis.exe")}"'
+        folder = str(settings.install_dir())
+        return ntpath.join(folder, "Jarvis.exe"), "", folder
     pythonw = ntpath.join(ntpath.dirname(sys.executable), "pythonw.exe")
-    return f'"{pythonw}" -m jarvis run'
+    return pythonw, "-m jarvis run", str(settings.REPO_ROOT)
+
+
+def autostart_command() -> str:
+    """Та же команда одной строкой (для сообщений и старого значения HKCU\\…\\Run)."""
+    target, args, _cwd = autostart_target()
+    return f'"{target}" {args}'.rstrip()
+
+
+def _startup_link() -> Path:
+    return Path(api().startup_dir()) / STARTUP_LNK
 
 
 def autostart_enabled() -> bool:
+    """Включён ли автозапуск: ярлык в «Автозагрузке» или старое значение в HKCU\\…\\Run."""
     if not available():
         return False
     try:
-        return bool(api().reg_get(RUN_VALUE))
-    except OSError as e:
+        return _startup_link().is_file() or bool(api().reg_get(RUN_VALUE))
+    except Exception as e:  # OSError или ошибка COM (pywintypes.com_error — не OSError)
         log.warning("автозапуск не прочитан: %s", e)
         return False
 
 
+def _drop_run_value() -> bool:
+    """Убрать старый автозапуск из HKCU\\…\\Run. Антивирус может запрещать запись туда — только в лог."""
+    try:
+        return bool(api().reg_delete(RUN_VALUE))
+    except OSError as e:
+        log.warning("старый автозапуск в реестре не убран: %s", e)
+        return False
+
+
 def set_autostart(on: bool) -> str:
-    """Включить/выключить автозапуск при входе в Windows. Возвращает фразу для человека."""
+    """Включить/выключить автозапуск при входе в Windows — ярлык в папке «Автозагрузка».
+
+    Не HKCU\\…\\Run: антивирусы часто не дают неподписанной программе писать туда (код 5, «Отказано
+    в доступе»). Возвращает фразу для человека.
+    """
     if not available():
         return "Автозапуск есть только в Windows"
     try:
+        link = _startup_link()
         if on:
-            command = autostart_command()
-            api().reg_set(RUN_VALUE, command)
-            log.info("автозапуск включён: %s", command)
-            return f"Автозапуск включён: {command}"
-        removed = api().reg_delete(RUN_VALUE)
+            target, args, cwd = autostart_target()
+            link.parent.mkdir(parents=True, exist_ok=True)
+            api().create_shortcut(str(link), target, args, cwd)
+            _drop_run_value()
+            log.info("автозапуск включён: %s", link)
+            return "Автозапуск включён: ярлык в папке «Автозагрузка»"
+        removed = link.is_file()
+        if removed:
+            link.unlink()
+        removed = _drop_run_value() or removed
         log.info("автозапуск выключен")
         return "Автозапуск выключен" if removed else "Автозапуск и так выключен"
-    except OSError as e:
+    except Exception as e:  # OSError или ошибка COM при создании ярлыка
         log.warning("автозапуск не изменён: %s", e)
         return f"Не удалось изменить автозапуск: {e}"
 

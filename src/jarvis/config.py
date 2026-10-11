@@ -54,12 +54,29 @@ class HandsConfig:
 
 @dataclass(frozen=True)
 class BrainConfig:
-    model_quick: str = "gpt-6-luna"
-    model_deep: str = "gpt-6.1-sol"
+    model_quick: str = "gpt-6-luna"  # вопросы и «gpt: …»
+    model_deep: str = "gpt-6-luna"  # «думай: …» — та же модель, но дольше думает (effort_deep)
     service_tier: str = ""
     proxy: str = ""
     fallback_provider: str = ""
     idle_new_thread_min: float = 20.0
+    effort_quick: str = "low"  # уровень размышления: minimal | low | medium | high | xhigh | max
+    effort_deep: str = "high"
+
+
+EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")  # что поддерживает модель — каталог Codex
+
+
+def _fix_brain(b: BrainConfig) -> BrainConfig:
+    """Неизвестный уровень размышления — умолчание (low / high)."""
+    fixes: dict[str, Any] = {}
+    for name in ("effort_quick", "effort_deep"):
+        value = str(getattr(b, name)).strip().casefold()
+        if value not in EFFORTS:
+            fixes[name] = getattr(BrainConfig, name)
+        elif value != getattr(b, name):
+            fixes[name] = value
+    return dataclasses.replace(b, **fixes) if fixes else b
 
 
 @dataclass(frozen=True)
@@ -206,7 +223,7 @@ def load() -> Config:
             mode=mode if mode in ("normal", "local") else "normal",
             ui=ui,
             hands=_pick(HandsConfig, _section(data, "hands")),
-            brain=_pick(BrainConfig, _section(data, "brain")),
+            brain=_fix_brain(_pick(BrainConfig, _section(data, "brain"))),
             journal=_pick(JournalConfig, _section(data, "journal")),
             vision=_fix_vision(_pick(VisionConfig, _section(data, "vision"))),
             voice=_voice(_section(data, "voice")),

@@ -568,9 +568,18 @@ def test_text_stream_and_timings(world: World, make_brain) -> None:
 def test_deep_model_effort_and_service_tier(world: World, make_brain) -> None:
     b = make_brain(BrainConfig(service_tier="fast"))
     done = run(b, deep=True)[-1]
-    assert done.ok and done.timings["model"] == "gpt-6.1-sol"
+    assert done.ok and done.timings["model"] == "gpt-6-luna"  # «думай:» — та же модель, выше уровень
     turn = world.codex.threads[0].turns[0]
-    assert turn.kwargs == {"model": "gpt-6.1-sol", "effort": ReasoningEffort.high, "service_tier": "fast"}
+    assert turn.kwargs == {"model": "gpt-6-luna", "effort": ReasoningEffort.high, "service_tier": "fast"}
+
+
+def test_effort_levels_from_config(world: World, make_brain) -> None:
+    b = make_brain(BrainConfig(model_deep="gpt-6.1-sol", effort_quick="medium", effort_deep="max"))
+    run(b)
+    run(b, deep=True)
+    kwargs = [t.kwargs for th in world.codex.threads for t in th.turns]
+    assert {"model": "gpt-6-luna", "effort": ReasoningEffort.medium} in kwargs
+    assert {"model": "gpt-6.1-sol", "effort": ReasoningEffort.max} in kwargs
 
 
 def test_mcp_tool_call_status(world: World, make_brain) -> None:

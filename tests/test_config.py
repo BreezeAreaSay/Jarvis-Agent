@@ -41,7 +41,7 @@ def test_example_file(config_file) -> None:
     assert cfg.hands.max_tokens == 128
     assert cfg.hands.timeout_s == 4.0 and isinstance(cfg.hands.timeout_s, float)
     assert cfg.hands.min_tokens_per_s == {"4b": 60.0, "8b": 35.0}
-    assert cfg.brain == config.BrainConfig("gpt-6-luna", "gpt-6.1-sol", "", "", "", 20.0)
+    assert cfg.brain == config.BrainConfig("gpt-6-luna", "gpt-6-luna", "", "", "", 20.0, "low", "high")
     assert cfg.journal.store_text is True
 
 
@@ -384,3 +384,11 @@ def test_vision_example_block_in_agents() -> None:
     assert len(block) == 6
     for line in block:
         assert line in agents, line
+
+
+def test_brain_effort_levels(config_file) -> None:
+    """Одна модель на разных уровнях размышления; неизвестный уровень — умолчание."""
+    config_file('[brain]\neffort_quick = "MEDIUM"\neffort_deep = "max"\n')
+    assert (config.load().brain.effort_quick, config.load().brain.effort_deep) == ("medium", "max")
+    config_file('[brain]\neffort_quick = "turbo"\neffort_deep = ""\n')
+    assert (config.load().brain.effort_quick, config.load().brain.effort_deep) == ("low", "high")

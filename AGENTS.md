@@ -168,8 +168,10 @@ timeout_s = 4
 min_tokens_per_s = { "4b" = 60, "8b" = 35 }   # ниже — VRAM переполнена, предупреждение
 
 [brain]
-model_quick = "gpt-6-luna"           # имена из Codex().models() (отчёт 00, scratch\codex-models.txt)
-model_deep = "gpt-6.1-sol"
+model_quick = "gpt-6-luna"           # вопросы и «gpt: …» (имена — Codex().models())
+model_deep = "gpt-6-luna"            # «думай: …» — та же модель, дольше думает
+effort_quick = "low"                 # уровень размышления: minimal | low | medium | high | xhigh | max
+effort_deep = "high"                 # для «думай: …»; xhigh/max — ещё дольше и дороже по квоте
 service_tier = ""                    # "fast" — быстрее, но больше расход квоты
 proxy = ""                           # "http://127.0.0.1:7890", если GPT только через прокси
 fallback_provider = ""               # пусто; DeepSeek через Responses API не проверен (см. S5)

@@ -272,28 +272,36 @@ def test_iss_files_icons_run_language() -> None:
 
 
 def test_iss_autostart_task() -> None:
+    """Автозапуск — ярлык в «Автозагрузке» (антивирусы запрещают неподписанному установщику HKCU\\…\\Run)."""
     s = _iss_sections()
     assert any('Name: "autostart"' in t and "Запускать при входе в Windows" in t for t in s["Tasks"])
-    assert '#define RunKey "Software\\Microsoft\\Windows\\CurrentVersion\\Run"' in _iss_text()
-    on = [r for r in s["Registry"] if "Tasks: autostart" in r]
-    off = [r for r in s["Registry"] if "Tasks: not autostart" in r]
-    assert len(on) == 1 and len(off) == 1
-    assert 'Root: HKCU; Subkey: "{#RunKey}"; ValueType: string; ValueName: "Jarvis"' in on[0]
-    assert 'ValueData: """{app}\\{#AppExe}"""' in on[0]
-    assert "uninsdeletevalue" in on[0]
-    assert "ValueType: none" in off[0] and "deletevalue uninsdeletevalue" in off[0]
+    startup = [i for i in s["Icons"] if "{userstartup}" in i]
+    assert len(startup) == 1 and "Tasks: autostart" in startup[0]
+    assert 'Name: "{userstartup}\\Jarvis"' in startup[0] and 'Filename: "{app}\\{#AppExe}"' in startup[0]
+    assert 'WorkingDir: "{app}"' in startup[0]
+    assert s["InstallDelete"] == ['Type: files; Name: "{userstartup}\\Jarvis.lnk"; Tasks: not autostart']
+    assert s["UninstallDelete"] == ['Type: files; Name: "{userstartup}\\Jarvis.lnk"']
+    # старое значение Run прошлых сборок только убирается — без ошибок, если запись туда запрещена
+    assert len(s["Registry"]) == 1
+    reg = s["Registry"][0]
+    assert 'Root: HKCU; Subkey: "{#RunKey}"; ValueType: none; ValueName: "Jarvis"' in reg
+    for flag in ("deletevalue", "uninsdeletevalue", "noerror", "dontcreatekey"):
+        assert flag in reg
+    assert "Tasks:" not in reg and "ValueType: string" not in _iss_text()
 
 
-def test_iss_run_value_matches_winapp(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Значение Run от установщика — то же, что пишет `jarvis-cli autostart on` в exe (имя и команда)."""
+def test_iss_startup_shortcut_matches_winapp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ярлык от установщика — тот же, что делает `jarvis-cli autostart on` в exe (имя, программа, папка)."""
     from jarvis import winapp
     from pc import settings
 
     app = r"C:\Users\me\AppData\Local\Programs\Jarvis"
     monkeypatch.setattr(settings, "is_frozen", lambda: True)
     monkeypatch.setattr(settings, "install_dir", lambda: Path(app))
-    assert winapp.RUN_VALUE == "Jarvis"
-    assert ntpath.normcase(winapp.autostart_command()) == ntpath.normcase(f'"{app}\\Jarvis.exe"')
+    assert winapp.STARTUP_LNK == "Jarvis.lnk" and winapp.RUN_VALUE == "Jarvis"
+    target, args, cwd = winapp.autostart_target()
+    assert ntpath.normcase(target) == ntpath.normcase(f"{app}\\Jarvis.exe") and args == ""
+    assert ntpath.normcase(cwd) == ntpath.normcase(app)
 
 
 def test_iss_stops_processes_without_tree_kill() -> None:
@@ -315,9 +323,10 @@ def test_iss_stops_processes_without_tree_kill() -> None:
 def test_iss_keeps_data_dir() -> None:
     text = _iss_text()
     sections = _iss_sections()
-    assert "UninstallDelete" not in sections
-    assert "InstallDelete" not in sections
-    assert "DelTree" not in text
+    # удаляется только ярлык автозапуска — ничего из каталога данных
+    for name in ("UninstallDelete", "InstallDelete"):
+        assert all("{userstartup}\\Jarvis.lnk" in line for line in sections.get(name, [])), name
+    assert "DelTree" not in text and "filesandordirs" not in text
     for marker in ("JarvisData", "JARVIS_DATA_DIR}", r"{localappdata}\Jarvis"):
         assert marker not in "\n".join(line for lines in sections.values() for line in lines), marker
 

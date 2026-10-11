@@ -5,7 +5,7 @@ import subprocess
 import sys
 import time
 import types
-from pathlib import PureWindowsPath
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import pytest
@@ -24,6 +24,8 @@ class FakeApi:
         self.mutex_error: OSError | None = None
         self.windows: list[int] = []  # что вернёт find_window по очереди
         self.registry: dict[str, str] = {}
+        self.startup = ""  # папка «Автозагрузка» (фикстура ставит tmp_path)
+        self.shortcuts: list[tuple[str, str, str, str]] = []
 
     def register_hotkey(self, hwnd: int, hotkey_id: int, mods: int, vk: int) -> tuple[bool, int]:
         self.calls.append(("register", hwnd, hotkey_id, mods, vk))
@@ -74,10 +76,18 @@ class FakeApi:
     def reg_delete(self, name: str) -> bool:
         return self.registry.pop(name, None) is not None
 
+    def startup_dir(self) -> str:
+        return self.startup
+
+    def create_shortcut(self, path: str, target: str, args: str, cwd: str) -> None:
+        self.shortcuts.append((path, target, args, cwd))
+        Path(path).write_bytes(b"L\0\0\0")  # заголовок .lnk — содержимое тесту не важно
+
 
 @pytest.fixture
-def fake(monkeypatch: pytest.MonkeyPatch) -> FakeApi:
+def fake(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeApi:
     api = FakeApi()
+    api.startup = str(tmp_path / "Startup")
     monkeypatch.setattr(winapp, "_api", api)
     winapp.show_message_id.cache_clear()
     yield api
@@ -337,40 +347,87 @@ class FakeWinreg(types.ModuleType):
 
 
 @pytest.fixture
-def registry(monkeypatch: pytest.MonkeyPatch) -> FakeWinreg:
+def registry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeWinreg:
     """Настоящий _WinApi с подменённым модулем winreg — реестр не трогается ни на какой ОС."""
     reg = FakeWinreg()
     monkeypatch.setitem(sys.modules, "winreg", reg)
-    monkeypatch.setattr(winapp, "_api", winapp._WinApi())
+    real = winapp._WinApi()
+    startup = tmp_path / "Startup"
+    monkeypatch.setattr(real, "startup_dir", lambda: str(startup), raising=False)
+
+    def shortcut(path: str, target: str, args: str, cwd: str) -> None:
+        Path(path).write_text(f"{target}|{args}|{cwd}", encoding="utf-8")
+
+    monkeypatch.setattr(real, "create_shortcut", shortcut, raising=False)
+    monkeypatch.setattr(winapp, "_api", real)
     monkeypatch.setattr(settings, "is_frozen", lambda: False)
     monkeypatch.setattr(sys, "executable", r"C:\Jarvis\.venv\Scripts\python.exe")
     return reg
 
 
+def _link() -> Path:
+    return Path(winapp.api().startup_dir()) / winapp.STARTUP_LNK
+
+
 def test_autostart_on_off(registry: FakeWinreg) -> None:
-    assert not winapp.autostart_enabled()  # ключа Run ещё нет
+    """Автозапуск — ярлык в «Автозагрузке»; в реестр HKCU\\…\\Run ничего не пишется."""
+    assert not winapp.autostart_enabled()
     text = winapp.set_autostart(True)
-    assert text.startswith("Автозапуск включён")
-    value, kind = registry.values[(winapp.RUN_KEY, "Jarvis")]
-    assert value == r'"C:\Jarvis\.venv\Scripts\pythonw.exe" -m jarvis run'
-    assert kind == FakeWinreg.REG_SZ
+    assert text == "Автозапуск включён: ярлык в папке «Автозагрузка»"
+    assert _link().read_text(encoding="utf-8") == (
+        r"C:\Jarvis\.venv\Scripts\pythonw.exe|-m jarvis run|" + str(settings.REPO_ROOT)
+    )
+    assert (winapp.RUN_KEY, "Jarvis") not in registry.values
     assert winapp.autostart_enabled()
     assert winapp.set_autostart(False) == "Автозапуск выключен"
-    assert not winapp.autostart_enabled()
+    assert not _link().exists() and not winapp.autostart_enabled()
     assert winapp.set_autostart(False) == "Автозапуск и так выключен"
 
 
-def test_autostart_registry_error(registry: FakeWinreg, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_autostart_removes_old_run_value(registry: FakeWinreg) -> None:
+    """Старый автозапуск через Run (прошлые сборки) считается включённым и убирается при включении ярлыка."""
+    registry.keys.add(winapp.RUN_KEY)
+    registry.values[(winapp.RUN_KEY, "Jarvis")] = (r'"C:\x\Jarvis.exe"', FakeWinreg.REG_SZ)
+    assert winapp.autostart_enabled()
+    winapp.set_autostart(True)
+    assert (winapp.RUN_KEY, "Jarvis") not in registry.values and _link().is_file()
+    registry.values[(winapp.RUN_KEY, "Jarvis")] = (r'"C:\x\Jarvis.exe"', FakeWinreg.REG_SZ)
+    assert winapp.set_autostart(False) == "Автозапуск выключен"
+    assert (winapp.RUN_KEY, "Jarvis") not in registry.values and not winapp.autostart_enabled()
+
+
+def test_autostart_run_key_denied_does_not_block(
+    registry: FakeWinreg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Антивирус запрещает HKCU\\…\\Run (код 5): ярлык всё равно создаётся, ошибки нет."""
+
     def denied(*args: object) -> None:
         raise PermissionError(5, "Отказано в доступе")
 
+    registry.keys.add(winapp.RUN_KEY)
     monkeypatch.setattr(registry, "CreateKeyEx", denied)
-    assert winapp.set_autostart(True).startswith("Не удалось изменить автозапуск")
+    monkeypatch.setattr(registry, "DeleteValue", denied)
+    assert winapp.set_autostart(True) == "Автозапуск включён: ярлык в папке «Автозагрузка»"
+    assert winapp.autostart_enabled()
 
 
-def test_autostart_with_fake_api(fake: FakeApi) -> None:
+def test_autostart_shortcut_error(fake: FakeApi, monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(path: str, target: str, args: str, cwd: str) -> None:
+        raise RuntimeError("COM: отказ")  # pywintypes.com_error — не OSError
+
+    monkeypatch.setattr(fake, "create_shortcut", broken)
+    assert winapp.set_autostart(True) == "Не удалось изменить автозапуск: COM: отказ"
+    assert not winapp.autostart_enabled()
+
+
+def test_autostart_with_fake_api_frozen(fake: FakeApi, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "is_frozen", lambda: True)
+    install = PureWindowsPath(r"C:\Users\me\AppData\Local\Programs\Jarvis")
+    monkeypatch.setattr(settings, "install_dir", lambda: install)
     winapp.set_autostart(True)
-    assert fake.registry["Jarvis"] == winapp.autostart_command()
+    path, target, args, cwd = fake.shortcuts[-1]
+    assert Path(path).name == "Jarvis.lnk"
+    assert (target, args, cwd) == (str(install / "Jarvis.exe"), "", str(install))
     assert winapp.autostart_enabled()
 
 

@@ -60,3 +60,4 @@ tts_voice = "ruslan"                 # голос: ruslan | denis | dmitri | iri
 tts_speed = 1.0                      # скорость речи (0.5..2.0)
 tts_pitch = 1.0                      # тон: меньше 1 — ниже (0.8..1.2)
 tts_effect = 0.35                    # «электроника» в голосе: 0 — без эффекта, 1 — сильно
+tts_dict = true                      # словарь ударений и «ё» Jarvis; false — исходный словарь espeak-ng

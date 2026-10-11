@@ -558,8 +558,12 @@ def test_doctor_voice_tts(monkeypatch: pytest.MonkeyPatch, _isolated_data: Any) 
 
     folder = tts.voice_dir("ruslan")
     (folder / "espeak-ng-data").mkdir(parents=True)
+    (folder / "espeak-ng-data" / "ru_dict").write_bytes(b"espeak")
     (folder / "ru_RU-ruslan-medium.onnx").write_bytes(b"x")
     (folder / "tokens.txt").write_text("a 0")
+    ours = _isolated_data / "ru_dict-jarvis"
+    ours.write_bytes(b"jarvis")
+    monkeypatch.setattr(tts, "jarvis_dict", lambda: ours)
 
     class Engine:
         sample_rate = 22050
@@ -567,7 +571,8 @@ def test_doctor_voice_tts(monkeypatch: pytest.MonkeyPatch, _isolated_data: Any) 
         def __init__(self, cfg: Any) -> None:
             self.cfg = cfg
 
-        def generate(self, text: str, sid: int = 0, speed: float = 1.0) -> Any:
+        def generate(self, text: str, config: Any) -> Any:
+            assert config.silence_scale == tts.SILENCE_SCALE
             return types.SimpleNamespace(samples=[0.0] * 100, sample_rate=22050)
 
     fake = types.ModuleType("sherpa_onnx")
@@ -575,9 +580,18 @@ def test_doctor_voice_tts(monkeypatch: pytest.MonkeyPatch, _isolated_data: Any) 
     fake.OfflineTtsModelConfig = lambda **kw: types.SimpleNamespace(**kw)  # type: ignore[attr-defined]
     fake.OfflineTtsConfig = lambda **kw: types.SimpleNamespace(**kw)  # type: ignore[attr-defined]
     fake.OfflineTts = Engine  # type: ignore[attr-defined]
+    fake.GenerationConfig = types.SimpleNamespace  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "sherpa_onnx", fake)
     res = doctor.check_voice_tts(doc())
-    assert res.status == "ok" and "голос ruslan" in res.text
+    assert res.status == "ok" and "голос ruslan" in res.text and "словарь ударений Jarvis" in res.text
+    assert (folder / "espeak-ng-data" / "ru_dict").read_bytes() == b"jarvis"
+    res = doctor.check_voice_tts(doc(tts_dict=False))
+    assert res.status == "ok" and "словарь espeak-ng" in res.text
+    assert (folder / "espeak-ng-data" / "ru_dict").read_bytes() == b"espeak"
+    monkeypatch.setattr(tts, "jarvis_dict", lambda: None)
+    res = doctor.check_voice_tts(doc())
+    assert res.status == "warn" and "build_ru_dict.py" in res.hint  # словарь не собран — подсказка
+    monkeypatch.setattr(tts, "jarvis_dict", lambda: ours)
     # нужного голоса нет — Jarvis говорит скачанным, doctor предупреждает
     res = doctor.check_voice_tts(doc(tts_voice="irina"))
     assert res.status == "warn" and "голос ruslan" in res.text and "голоса irina" in res.text
@@ -596,6 +610,8 @@ def test_spec_bundles_voice_natives() -> None:
     for name in ('"sherpa_onnx.lib._sherpa_onnx"', '"sounddevice"', '"_sounddevice_data"', '"_cffi_backend"'):
         assert name in spec, name
     assert '(os.path.join(ROOT, "scripts", "get_voice_models.ps1"), "scripts")' in spec
+    assert 'VOICE_DICT = os.path.join(ROOT, "build", "voice", "ru_dict")' in spec  # словарь ударений
+    assert 'datas.append((VOICE_DICT, os.path.join("build", "voice")))' in spec
     assert ".onnx" not in spec.replace("onnxruntime", "")  # модели в бандл не кладём
 
 
@@ -611,7 +627,7 @@ def test_selftest_voice_check_runs(tmp_path: Any) -> None:
     from jarvis import selftest
 
     text = selftest.check_voice(selftest.Ctx(tmp_path, offscreen=True))
-    assert text.startswith("sherpa-onnx 1.13.8")
+    assert text.startswith("sherpa-onnx 1.13.8") and text.endswith("словаря ударений нет")  # в тестах — нет
 
 
 def test_get_voice_models_script() -> None:
@@ -638,7 +654,7 @@ def test_voice_example_block_in_agents() -> None:
     example = (ROOT / "jarvis.example.toml").read_text(encoding="utf-8")
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     block = example[example.index("[voice]") :].split("\n\n")[0].splitlines()
-    assert len(block) == 13
+    assert len(block) == 14
     for line in block:
         assert line in agents, line
     assert config._voice(tomllib.loads(example)["voice"]) == config.VoiceConfig()
@@ -682,6 +698,7 @@ def test_build_prompt_spoken_hint() -> None:
     spoken = brain.build_prompt("почему небо голубое", None, spoken=True)
     assert spoken.startswith(brain.SPOKEN_HINT) and spoken.endswith("почему небо голубое")
     assert "без списков, таблиц и кода" in brain.SPOKEN_HINT
+    assert "«ё»" in brain.SPOKEN_HINT and "за\u0301мок" in brain.SPOKEN_HINT  # для словаря ударений голоса
     assert brain.build_prompt("почему небо голубое", None) == "почему небо голубое"
 
 

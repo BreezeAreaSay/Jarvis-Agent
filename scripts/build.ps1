@@ -71,6 +71,10 @@ try {
     uv run --no-sync python packaging/make_icon.py --out $Icon
     Assert-ExitCode "make_icon.py"
 
+    Write-Step "voice stress dictionary -> build/voice/ru_dict"
+    uv run --no-sync python scripts/build_ru_dict.py
+    Assert-ExitCode "build_ru_dict.py"
+
     Write-Step "PyInstaller -> $Dist"
     uv run --no-sync pyinstaller packaging/jarvis.spec --noconfirm --distpath build/dist --workpath build/work
     Assert-ExitCode "PyInstaller"

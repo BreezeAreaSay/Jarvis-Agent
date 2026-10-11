@@ -593,7 +593,7 @@ def check_voice_tts(d: Doctor) -> Check:
     except tts.TtsError as e:
         have = ", ".join(tts.available_voices()) or "нет"
         return Check("warn", f"озвучка: {e} (скачаны: {have})", VOICE_HINT)
-    speaker = tts.Speaker(name, v.tts_speed, v.threads, v.tts_pitch, v.tts_effect)
+    speaker = tts.Speaker(name, v.tts_speed, v.threads, v.tts_pitch, v.tts_effect, v.tts_dict)
     try:
         speaker.load()
     except tts.TtsError as e:
@@ -601,10 +601,17 @@ def check_voice_tts(d: Doctor) -> Check:
     t = time.perf_counter()
     speaker._synth("Открыл телеграм, громкость тридцать процентов.")
     ms = (time.perf_counter() - t) * 1000
-    text = f"озвучка: голос {name} ({v.tts}), загрузка {speaker.load_ms:.0f} мс, фраза — {ms:.0f} мс"
+    words = {"jarvis": "словарь ударений Jarvis", "espeak": "словарь espeak-ng"}
+    text = (
+        f"озвучка: голос {name} ({v.tts}), {words.get(speaker.dict, speaker.dict)}, "
+        f"загрузка {speaker.load_ms:.0f} мс, фраза — {ms:.0f} мс"
+    )
     if name != v.tts_voice:
         hint = f"pwsh -File scripts\\get_voice_models.ps1 -Voice {v.tts_voice}"
         return Check("warn", f"{text}; голоса {v.tts_voice} из [voice] tts_voice нет", hint)
+    if v.tts_dict and speaker.dict != "jarvis":
+        hint = "словарь ударений Jarvis не собран: uv run python scripts\\build_ru_dict.py"
+        return Check("warn", text, hint)
     if ms > 300:
         return Check("warn", text, "медленно: [voice] threads = 4 (или голос попроще)")
     return Check("ok", text)

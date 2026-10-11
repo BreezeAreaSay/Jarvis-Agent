@@ -211,7 +211,8 @@ vision="")`; `route(text, ctx, mode) -> Route` (снимает префиксы 
 `.status`. images — снимки (только «data:image/…», иначе ValueError): ход начинается с `turn_input(prompt, images)` =
 `[TextInput(prompt), ImageInput(url), …]`; без снимков вход хода — строка, как раньше. spoken — запрос сказан
 голосом: `build_prompt(text, ctx, spoken=True)` ставит в начало `SPOKEN_HINT` («Ответ будет озвучен: говори коротко
-и разговорно, без списков, таблиц и кода»).
+и разговорно, без списков, таблиц и кода; пиши «ё», в словах с двояким ударением ставь знак ударения» — его
+читает словарь ударений голоса, окно знак не показывает: `logic.display_text`).
 Модель и уровень размышления хода: deep=False — `cfg.model_quick` + `cfg.effort_quick` (по умолчанию gpt-6-luna,
 low), deep=True («думай:») — `cfg.model_deep` + `cfg.effort_deep` (gpt-6-luna, high).
 `developer_instructions(cfg) -> str` — инструкции треда: `DEVELOPER_INSTRUCTIONS` (правила, недоверенные данные,
@@ -280,6 +281,11 @@ GDI не учитывается), SmoothTransformation, меньший сним�
   `block_level`, 0 — замолчал; поток вывода); вывод — `mic.api().open_output`, блоки ~46 мс. pitch (0,8..1,2):
   синтез со скоростью speed/pitch, вывод на частоте ×pitch — длительность та же, тон ниже/выше; effect (0..1) —
   `voicefx.electronic` после синтеза. `pick_voice(wanted)` — wanted, если скачан, иначе первый скачанный.
+  Синтез — `generate(text, GenerationConfig)` (`generation_config(so, speed)`: sid 0, `SILENCE_SCALE` = 1.0 —
+  паузы на запятых не сжимаются). Словарь ударений: `jarvis_dict()` — `app_root()/build/voice/ru_dict` (собирает
+  scripts/build_ru_dict.py; в exe — из бандла) или None; `install_dict(espeak_dir, on) -> "jarvis" | "espeak"` —
+  до загрузки модели ставит его в espeak-ng-data голоса (исходный — `ru_dict.orig`, запись через tmp + replace),
+  off или не собран — возвращает исходный; `Speaker(…, use_dict=True)`, `.dict` после load().
   `Narrator(speaker, mode, journal, address="")`: `begin(rid, spoken)`, `close()`, `on_event(rid, ev)` (мозг — весь
   ответ по предложениям через `Splitter`, не больше `SPEAK_LIMIT`, код/таблица — `REST`; пока мозг думает — тишина,
   работу показывает сфера; грамматика и руки — `addressed(short_text(Done.text), ok, address)`; cancelled —
@@ -350,7 +356,8 @@ SetWinEventHook(EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOW
 tts != "off"); выход — `Voice.stop()`, `Narrator.close()`.
 - ui/logic.py — логика окна без Qt: `History`, `ConfirmRequest(summary, details, caller)` с `resolve(approved)` и
   `wait(timeout=60) -> bool`, `ConfirmQueue` (одна очередь для обработчика процесса и pipe; правило 700 мс;
-  Enter/Esc = «нет», Ctrl+Enter = «да»), разбор «цифра+Enter», автоскрытие.
+  Enter/Esc = «нет», Ctrl+Enter = «да»), разбор «цифра+Enter», автоскрытие. `display_text(text)` — недоверенная
+  строка для показа: без управляющих символов, подмены направления и знаков ударения после русских гласных.
   `OrbModel(animations=True)` — модель сферы без Qt: состояния idle | wake | listen | work | speak | confirm |
   success | error; входы `wake()` (показ окна), `key()`, `voice(rms)` (уровень голоса 0..1 — импульс), `begin()`,
   `set_level(level)` (оттенок grammar | hands | brain | local), `status()`, `chunk()`, `confirm(on)`,

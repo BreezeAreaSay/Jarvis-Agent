@@ -322,6 +322,13 @@ def test_target_height_grows_and_caps_at_40_percent() -> None:
     assert logic.target_height(60, -5, 1080) == 60
 
 
+def test_display_text_hides_russian_stress_marks() -> None:
+    """Знак ударения мозг ставит для голоса (brain.SPOKEN_HINT) — в окне его нет; «é» из латиницы остаётся."""
+    assert logic.display_text("Это за\u0301мок, а не замо\u0301к.") == "Это замок, а не замок."
+    assert logic.display_text("\u0301к на двери") == "к на двери"  # гласная была в прошлом куске потока
+    assert logic.display_text("cafe\u0301") == "cafe\u0301"
+
+
 def test_display_text_neutralizes_controls_and_bidi() -> None:
     raw = "отчёт‮xcod.exe\x00\r\n<b>x</b>\t1"
     shown = logic.display_text(raw)

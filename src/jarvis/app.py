@@ -434,7 +434,9 @@ class JarvisApp(QObject):
             if name:
                 if name != vcfg.tts_voice:  # голос по умолчанию сменился, а скачан прежний — говорим им
                     log.info("голос: %s не скачан — озвучка голосом %s", vcfg.tts_voice, name)
-                speaker = tts.Speaker(name, vcfg.tts_speed, vcfg.threads, vcfg.tts_pitch, vcfg.tts_effect)
+                speaker = tts.Speaker(
+                    name, vcfg.tts_speed, vcfg.threads, vcfg.tts_pitch, vcfg.tts_effect, vcfg.tts_dict
+                )
                 bcfg = self.cfg.brain
                 address = bcfg.address if bcfg.persona == "jarvis" else ""
                 speaker.on_level = self.speech_level.emit

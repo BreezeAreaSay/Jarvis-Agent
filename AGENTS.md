@@ -52,7 +52,8 @@
 - scripts/hands_probe.ps1 + hands_probe.json — быстрый замер рук без кода Jarvis (точность, задержка, т/с)
 - scripts/brain_smoke.py — замер мозга без кода Jarvis; scripts/es_check.py — индекс Everything и кириллица в es.exe
 - scripts/get_voice_models.ps1 — модели голоса в <data>\models (только pwsh; запускает владелец);
-  scripts/voice_bench.py — замер распознавания на 20 голосовых командах (синтез или свои записи)
+  scripts/voice_bench.py — замер распознавания на 20 голосовых командах (синтез или свои записи);
+  scripts/build_ru_dict.py + scripts/ru_dict/ — словарь ударений и «ё» для голоса → build/voice/ru_dict (в exe)
 - jarvis.example.toml — пример конфига (jarvis.toml в .gitignore)
 
 ## Стек (не менять без причины)
@@ -210,6 +211,7 @@ tts_voice = "ruslan"                 # голос: ruslan | denis | dmitri | iri
 tts_speed = 1.0                      # скорость речи (0.5..2.0)
 tts_pitch = 1.0                      # тон: меньше 1 — ниже (0.8..1.2)
 tts_effect = 0.35                    # «электроника» в голосе: 0 — без эффекта, 1 — сильно
+tts_dict = true                      # словарь ударений и «ё» Jarvis; false — исходный словарь espeak-ng
 ```
 
 ## Стиль
@@ -292,3 +294,5 @@ uv run pytest -q -m "not live"
   Codex для голоса не годится: realtime-транскрипция только с ключом API, модели Codex не принимают звук.
 - Голос и манера Джарвиса (просьба владельца): ruslan + «электроника» (voicefx, ~10 мс на фразу), persona «сэр»;
   голос без строки ввода (сфера слушает и говорит), без «Секунду…»; клик мимо окна прячет его.
+- Ударения голоса: свой ru_dict для espeak-ng (OpenRussian ∩ Silero Stress, «ё» eyo-kernel, знак U+0301) —
+  согласие с OpenRussian 94,2 → 99,6 % форм; паузы на запятых (silence_scale 1.0). Подробно — docs/notes.md.

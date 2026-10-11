@@ -43,6 +43,10 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: uv run --no-sync python packaging/make_icon.py
 
+      - name: Словарь ударений для голоса
+        timeout-minutes: 5
+        run: uv run --no-sync python scripts/build_ru_dict.py
+
       - name: PyInstaller
         timeout-minutes: 30
         run: uv run --no-sync pyinstaller packaging/jarvis.spec --noconfirm --distpath build/dist --workpath build/work

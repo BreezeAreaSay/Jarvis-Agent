@@ -59,6 +59,12 @@ for src, dest in DATA_FILES:
         datas.append((src, dest))
     else:
         _warn(f"missing data file {src} (selftest will fail)")
+# голос: словарь ударений и «ё» (scripts/build_ru_dict.py; бинарный — в git его нет) → _MEIPASS\build\voice
+VOICE_DICT = os.path.join(ROOT, "build", "voice", "ru_dict")
+if os.path.isfile(VOICE_DICT):
+    datas.append((VOICE_DICT, os.path.join("build", "voice")))
+else:
+    _warn("build/voice/ru_dict not built (scripts/build_ru_dict.py): the voice keeps espeak-ng stress")
 
 # codex.exe и его ресурсы (codex-resources, codex-path\rg.exe) — как в пакете, вместе с метаданными
 cb_datas, cb_binaries, cb_hidden = collect_all("codex_cli_bin")

@@ -19,10 +19,12 @@
 """
 
 import array
+import hashlib
 import logging
 import math
 import queue
 import re
+import shutil
 import threading
 import time
 import unicodedata
@@ -43,6 +45,10 @@ SHORT_LIMIT = 200  # итог грамматики/рук длиннее — т�
 REST = "Остальное — в окне."
 CHUNK_FRAMES = 1024  # блок вывода (~46 мс при 22 кГц): stop() глушит не позже чем через блок
 WARMUP_TEXT = "Готов."
+# паузы на запятых и тире: sherpa-onnx по умолчанию (0,2) сжимает паузы длиннее 0,2 с в 5 раз — речь без
+# дыхания; 1.0 — паузы как у модели (замер: самая длинная пауза фразы — медиана 110 → 240 мс)
+SILENCE_SCALE = 1.0
+JARVIS_DICT = ("build", "voice", "ru_dict")  # от settings.app_root(): scripts/build_ru_dict.py, в exe — бандл
 
 
 def voices_dir() -> Path:
@@ -71,6 +77,60 @@ def pick_voice(wanted: str) -> str:
     if wanted in have:
         return wanted
     return next((name for name in (*VOICE_ORDER, *have) if name in have), "")
+
+
+def jarvis_dict() -> Path | None:
+    """Словарь ударений и «ё» Jarvis (scripts/build_ru_dict.py; в exe — в бандле); не собран — None."""
+    path = settings.app_root().joinpath(*JARVIS_DICT)
+    return path if path.is_file() else None
+
+
+def _same(a: Path, b: Path) -> bool:
+    """Одинаковые ли файлы (размер, затем SHA-256); нет файла или ошибка чтения — False."""
+    try:
+        return a.stat().st_size == b.stat().st_size and _digest(a) == _digest(b)
+    except OSError:
+        return False
+
+
+def _digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _put(src: Path, dst: Path) -> None:
+    """Копия через временный файл и os.replace: прерванная запись не оставит полсловаря."""
+    tmp = dst.with_name(dst.name + ".tmp")
+    try:
+        shutil.copyfile(src, tmp)
+        tmp.replace(dst)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def install_dict(espeak: Path, on: bool = True) -> str:
+    """Какой русский словарь espeak-ng читает голос: on и словарь Jarvis собран — он (исходный ru_dict
+    голоса сохраняется как ru_dict.orig), иначе — исходный. Зовётся до загрузки модели: espeak читает словарь
+    один раз на процесс. Возвращает "jarvis" | "espeak". Ошибка записи — словарь как был (лог)."""
+    target, orig = espeak / "ru_dict", espeak / "ru_dict.orig"
+    ours = jarvis_dict() if on else None
+    try:
+        if ours is not None:
+            if not _same(target, ours):
+                if target.is_file() and not orig.exists():
+                    shutil.copyfile(target, orig)  # для [voice] tts_dict = false
+                _put(ours, target)
+                log.info("голос: словарь ударений Jarvis → %s", target)
+            return "jarvis"
+        if orig.is_file() and not _same(target, orig):
+            _put(orig, target)
+            log.info("голос: исходный словарь espeak-ng → %s", target)
+    except OSError as e:
+        log.warning("голос: словарь ударений не заменён (%s) — остался прежний", e)
+    return "espeak"
 
 
 class TtsError(RuntimeError):
@@ -300,8 +360,11 @@ class Speaker:
         threads: int = 2,
         pitch: float = 1.0,
         effect: float = 0.0,
+        use_dict: bool = True,
     ) -> None:
         self.voice = voice
+        self.use_dict = use_dict  # [voice] tts_dict: словарь ударений и «ё» Jarvis
+        self.dict = ""  # какой словарь у голоса после load(): "jarvis" | "espeak"
         self.speed = speed
         self.pitch = min(1.2, max(0.8, float(pitch)))  # < 1 — ниже: синтез быстрее, вывод на меньшей частоте
         self.effect = min(1.0, max(0.0, float(effect)))  # «электроника» (jarvis.voicefx)
@@ -313,6 +376,7 @@ class Speaker:
         self.on_idle: Callable[[int], None] | None = None
         self.on_level: Callable[[float], None] | None = None
         self._engine: Any = None
+        self._config: Any = None  # sherpa_onnx.GenerationConfig (скорость, паузы)
         self._gen = 0
         self._lock = threading.Lock()
         self._say_q: queue.SimpleQueue[tuple[int, str] | None] = queue.SimpleQueue()
@@ -330,6 +394,7 @@ class Speaker:
         t = time.perf_counter()
         try:
             files = voice_files(self.voice)
+            self.dict = install_dict(files["espeak"], self.use_dict)  # до модели: espeak читает словарь раз
             import sherpa_onnx as so
 
             vits = so.OfflineTtsVitsModelConfig(
@@ -339,6 +404,7 @@ class Speaker:
                 model=so.OfflineTtsModelConfig(vits=vits, num_threads=self.threads), max_num_sentences=1
             )
             self._engine = so.OfflineTts(cfg)
+            self._config = generation_config(so, self.synth_speed)
             self._synth(WARMUP_TEXT)
             self._cache[REST] = self._synth(REST)
             from jarvis import mic
@@ -352,7 +418,7 @@ class Speaker:
             raise TtsError(self.error) from e
         self.load_ms = round((time.perf_counter() - t) * 1000, 1)
         self.ready, self.error = True, ""
-        log.info("голос: озвучка %s загружена за %.0f мс", self.voice, self.load_ms)
+        log.info("голос: озвучка %s (словарь %s) загружена за %.0f мс", self.voice, self.dict, self.load_ms)
 
     def _synth(self, text: str) -> tuple[bytes, int]:
         """Текст → PCM float32 (байты) и частота вывода.
@@ -360,7 +426,7 @@ class Speaker:
         Тон ниже (pitch < 1): синтез быстрее в 1/pitch раза, а вывод на частоте ×pitch — длительность та же,
         голос ниже. «Электроника» — jarvis.voicefx.electronic, десятки миллисекунд на фразу.
         """
-        audio = self._engine.generate(text, sid=0, speed=self.speed / self.pitch)
+        audio = self._engine.generate(text, self._config)
         rate = int(audio.sample_rate)
         samples = audio.samples
         if self.effect > 0:
@@ -370,6 +436,11 @@ class Speaker:
         return array.array("f", samples).tobytes(), max(8000, round(rate * self.pitch))
 
     # --- управление
+
+    @property
+    def synth_speed(self) -> float:
+        """Скорость синтеза: тон ниже (pitch < 1) — синтез быстрее, вывод на частоте ×pitch."""
+        return self.speed / self.pitch
 
     @property
     def gen(self) -> int:
@@ -511,6 +582,16 @@ class Speaker:
                 self.on_level(value)
             except Exception:
                 log.exception("голос: on_level")
+
+
+def generation_config(so: Any, speed: float) -> Any:
+    """GenerationConfig синтеза: голос 0, скорость, паузы SILENCE_SCALE (старый generate(text, sid, speed)
+    берёт паузы 0,2 и сжимает их)."""
+    config = so.GenerationConfig()
+    config.sid = 0
+    config.speed = speed
+    config.silence_scale = SILENCE_SCALE
+    return config
 
 
 def block_level(pcm: bytes) -> float:

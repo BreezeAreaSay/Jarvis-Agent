@@ -146,6 +146,7 @@ class VoiceConfig:
     tts_speed: float = 1.0  # скорость речи (0.5..2.0)
     tts_pitch: float = 1.0  # тон: меньше 1 — ниже (0.8..1.2)
     tts_effect: float = 0.35  # «электроника» в голосе: 0 — без эффекта, 1 — сильно (jarvis.voicefx)
+    tts_dict: bool = True  # словарь ударений и «ё» Jarvis (scripts/build_ru_dict.py); false — espeak-ng
 
 
 def _voice(raw: dict[str, Any]) -> VoiceConfig:

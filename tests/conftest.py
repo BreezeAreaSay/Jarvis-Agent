@@ -16,8 +16,11 @@ def _isolated_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("JARVIS_DATA_DIR", str(data))
     monkeypatch.setenv("JARVIS_CONFIG", str(tmp_path / "jarvis.toml"))
     monkeypatch.delenv("JARVIS_CONFIRM_PIPE", raising=False)
+    from jarvis import tts
     from pc import confirm_client, policy
 
+    # собранный у разработчика build/voice/ru_dict (scripts/build_ru_dict.py) тестам не виден: как в чистом CI
+    monkeypatch.setattr(tts, "JARVIS_DICT", ("build", "voice", "ru_dict-not-in-tests"))
     confirm_client.set_confirm_handler(None)
     policy.reset_budget()
     yield data

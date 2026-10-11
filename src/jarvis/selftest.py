@@ -438,7 +438,11 @@ def check_voice(ctx: Ctx) -> str:
         if sys.platform == "win32":
             raise Fail(f"sounddevice: {e} (PortAudio не попал в бандл)") from e
         sound = f"PortAudio нет ({sys.platform}) — проверка звука пропущена"
-    return f"sherpa-onnx {sherpa_onnx.__version__} ({', '.join(natives)}); {sound}"
+    from jarvis import tts
+
+    built = tts.jarvis_dict()  # не собран — голос с ударениями espeak-ng (сборка предупреждает)
+    stress = f"словарь ударений {built.stat().st_size / 2**20:.1f} МБ" if built else "словаря ударений нет"
+    return f"sherpa-onnx {sherpa_onnx.__version__} ({', '.join(natives)}); {sound}; {stress}"
 
 
 CHECKS: list[tuple[str, Callable[[Ctx], str]]] = [

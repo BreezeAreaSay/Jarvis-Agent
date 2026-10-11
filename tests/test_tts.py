@@ -135,15 +135,70 @@ def test_pick_voice_falls_back_to_downloaded(_isolated_data: Any) -> None:
     assert tts.pick_voice("ruslan") == "ruslan" and tts.pick_voice("irina") == "ruslan"
 
 
+# --- словарь ударений Jarvis ----------------------------------------------------------------------
+
+
+def test_jarvis_dict_path(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tts, "JARVIS_DICT", ("build", "voice", "ru_dict"))  # conftest прячет настоящий
+    monkeypatch.setattr(tts.settings, "app_root", lambda: tmp_path)
+    assert tts.jarvis_dict() is None  # не собран
+    built = tmp_path / "build" / "voice" / "ru_dict"
+    built.parent.mkdir(parents=True)
+    built.write_bytes(b"jarvis")
+    assert tts.jarvis_dict() == built
+
+
+def test_install_dict_swaps_and_restores(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Словарь Jarvis ставится в espeak-ng-data голоса, исходный — в ru_dict.orig; tts_dict = false или
+    словарь не собран — исходный возвращается; ошибка записи — словарь как был."""
+    espeak = tmp_path / "espeak-ng-data"
+    espeak.mkdir()
+    (espeak / "ru_dict").write_bytes(b"espeak")
+    ours = tmp_path / "ours"
+    ours.write_bytes(b"jarvis-dict")
+    monkeypatch.setattr(tts, "jarvis_dict", lambda: ours)
+    assert tts.install_dict(espeak, True) == "jarvis"
+    assert (espeak / "ru_dict").read_bytes() == b"jarvis-dict"
+    assert (espeak / "ru_dict.orig").read_bytes() == b"espeak"
+    assert tts.install_dict(espeak, True) == "jarvis"  # уже стоит — без записи
+    assert (espeak / "ru_dict.orig").read_bytes() == b"espeak"  # исходный не затёрт нашим
+    assert tts.install_dict(espeak, False) == "espeak"
+    assert (espeak / "ru_dict").read_bytes() == b"espeak"
+    monkeypatch.setattr(tts, "jarvis_dict", lambda: None)
+    assert tts.install_dict(espeak, True) == "espeak"  # не собран — исходный
+    assert sorted(p.name for p in espeak.iterdir()) == ["ru_dict", "ru_dict.orig"]  # без .tmp
+
+    monkeypatch.setattr(tts, "jarvis_dict", lambda: ours)
+
+    def broken(src: Any, dst: Any) -> None:
+        raise PermissionError("занят")
+
+    monkeypatch.setattr(tts, "_put", broken)
+    assert tts.install_dict(espeak, True) == "espeak"
+    assert (espeak / "ru_dict").read_bytes() == b"espeak"
+
+
+def test_install_dict_without_voice_dict(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    espeak = tmp_path / "espeak-ng-data"
+    espeak.mkdir()
+    ours = tmp_path / "ours"
+    ours.write_bytes(b"jarvis-dict")
+    monkeypatch.setattr(tts, "jarvis_dict", lambda: ours)
+    assert tts.install_dict(espeak, True) == "jarvis"
+    assert (espeak / "ru_dict").read_bytes() == b"jarvis-dict" and not (espeak / "ru_dict.orig").exists()
+
+
 # --- Speaker -------------------------------------------------------------------------------------
 
 
 class FakeEngine:
     def __init__(self) -> None:
         self.texts: list[str] = []
+        self.configs: list[Any] = []
 
-    def generate(self, text: str, sid: int = 0, speed: float = 1.0) -> Any:
+    def generate(self, text: str, config: Any = None) -> Any:
         self.texts.append(text)
+        self.configs.append(config)
         return types.SimpleNamespace(samples=[0.25] * (len(text) * 400), sample_rate=22050)
 
 
@@ -204,6 +259,7 @@ def ready_speaker(
     monkeypatch.setattr(mic, "_api", sd)
     sp = tts.Speaker("denis")
     sp._engine = FakeEngine()
+    sp._config = types.SimpleNamespace(sid=0, speed=1.0, silence_scale=tts.SILENCE_SCALE)
     sp.ready = True
     SPEAKERS.append(sp)
     return sp, sd
@@ -546,24 +602,27 @@ def test_narrator_close_stops_speaker() -> None:
 # --- голос Джарвиса: тон, «электроника», обращение -------------------------------------------------
 
 
-class RecordingEngine(FakeEngine):
-    def __init__(self) -> None:
-        super().__init__()
-        self.speeds: list[float] = []
-
-    def generate(self, text: str, sid: int = 0, speed: float = 1.0) -> Any:
-        self.speeds.append(speed)
-        return super().generate(text, sid, speed)
-
-
 def test_pitch_lowers_tone_keeping_length() -> None:
     sp = tts.Speaker("ruslan", speed=1.0, pitch=0.88)
-    engine = RecordingEngine()
-    sp._engine = engine
+    sp._engine = FakeEngine()
+    assert sp.synth_speed == pytest.approx(1.0 / 0.88)  # синтез быстрее…
     pcm, rate = sp._synth("привет")
-    assert engine.speeds == [1.0 / 0.88]  # синтез быстрее…
     assert rate == round(22050 * 0.88)  # …а вывод на меньшей частоте: голос ниже, длительность та же
     assert len(pcm) == len("привет") * 400 * 4
+
+
+def test_generation_config_keeps_pauses() -> None:
+    """Паузы на запятых не сжимаются: старый generate(text, sid, speed) брал 0,2 — только GenerationConfig."""
+    import sherpa_onnx
+
+    config = tts.generation_config(sherpa_onnx, 1.25)
+    assert (config.sid, config.speed) == (0, pytest.approx(1.25))
+    assert config.silence_scale == pytest.approx(tts.SILENCE_SCALE) == pytest.approx(1.0)
+    sp = tts.Speaker("ruslan")
+    sp._engine = FakeEngine()
+    sp._config = config
+    sp._synth("тест")
+    assert sp._engine.configs == [config]
 
 
 def test_pitch_and_effect_bounds() -> None:

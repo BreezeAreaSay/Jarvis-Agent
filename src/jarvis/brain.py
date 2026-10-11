@@ -338,7 +338,11 @@ def turn_input(prompt: str, images: Sequence[str] = ()) -> Any:
     return [TextInput(prompt), *(ImageInput(url) for url in images)]
 
 
-SPOKEN_HINT = "[Ответ будет озвучен: говори коротко и разговорно, без списков, таблиц и кода]"
+# «ё» и знак ударения (U+0301) читает словарь ударений голоса (scripts/build_ru_dict.py); в окне знак не виден
+SPOKEN_HINT = (
+    "[Ответ будет озвучен: говори коротко и разговорно, без списков, таблиц и кода; пиши «ё», а в словах "
+    "с двояким ударением (за\u0301мок, замо\u0301к) ставь знак ударения]"
+)
 
 
 def build_prompt(text: str, ctx: "Context | None", spoken: bool = False) -> str:

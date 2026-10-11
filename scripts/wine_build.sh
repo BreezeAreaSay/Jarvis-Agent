@@ -369,6 +369,13 @@ cmd_build() {
         WINEQT_QPA_PLATFORM=offscreen wpy packaging/make_icon.py || die "make_icon.py"
     fi
 
+    step "Словарь ударений для голоса (scripts/build_ru_dict.py, Linux-Python)"
+    if python3 -I scripts/build_ru_dict.py --out build/voice; then
+        ok "build/voice/ru_dict — $(human_size build/voice/ru_dict)"
+    else
+        warn "словарь ударений не собран — в exe останется словарь espeak-ng"
+    fi
+
     step "PyInstaller (onedir) — несколько минут"
     local args=(-m PyInstaller packaging/jarvis.spec --noconfirm --distpath build/win/dist --workpath build/win/work)
     [[ "${CLEAN:-0}" == 1 ]] && args+=(--clean)

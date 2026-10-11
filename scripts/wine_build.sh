@@ -25,12 +25,13 @@ export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}" # без диал
 WINE_LANG="${WINE_LANG:-ru_RU.UTF-8}"
 export LANG="$WINE_LANG" LC_ALL="$WINE_LANG" # UTF-8-локаль Linux: иначе Wine не создаёт файлы с кириллицей
 export USER="${WINE_USER:-me}" LOGNAME="${WINE_USER:-me}" # имя пользователя Windows (C:\users\<имя>)
-export WINEPATH='C:\winbuild\bin'                          # git.exe-шим для tests/test_hygiene.py
+export WINEPATH='C:\winbuild\git\cmd'                     # git для Windows (MinGit) в PATH
 export PYTHONPYCACHEPREFIX='C:\winbuild\pycache'           # .pyc Windows-Python — вне репозитория
 unset PYTHONUTF8 PYTHONIOENCODING PYTHONPATH PYTHONHOME VIRTUAL_ENV
 
 PY_VERSION=3.12.10
 INNO_VERSION=6.7.3
+MINGIT_VERSION=2.56.0
 ICU_VERSION=72.1.0.3 # только для Wine: в Windows 10 1903+ icuuc.dll системная, Qt 6.12 её импортирует
 ICU_MAJOR=72
 NUGET=https://api.nuget.org/v3-flatcontainer
@@ -93,6 +94,7 @@ start_display() {
     die "не удалось запустить Xvfb"
 }
 
+# shellcheck disable=SC2317  # вызывается из trap EXIT
 cleanup() {
     if command -v wineserver >/dev/null && [[ -d "$WINEPREFIX" ]]; then wineserver -k 2>/dev/null || true; fi
     if [[ -n "$XVFB_PID" ]]; then kill "$XVFB_PID" 2>/dev/null || true; fi
@@ -149,7 +151,7 @@ init_prefix() {
         wineserver -w
         ok "$(wine --version) — префикс создан"
     fi
-    mkdir -p "$CROOT"/{bin,runner,logs} "$DL" "$WORK"
+    mkdir -p "$CROOT"/{runner,logs} "$DL" "$WORK"
 }
 
 # fetch <id> <версия> → путь к .nupkg (скачивает один раз; .nupkg — это zip)
@@ -214,42 +216,12 @@ EOF
     ok "$(grep -c '=' "$src/icuuc.def") функций ICU"
 }
 
-# tests/test_hygiene.py зовёт `git ls-files ...`; git для Windows в префиксе нет, а Linux-git из Wine
-# не запустить с захватом вывода. Шим печатает список, снятый Linux-git перед тестами (git_snapshot).
-GIT_LS_ARGS=(ls-files --cached --others --exclude-standard)
-install_git_shim() {
-    local exe="$CROOT/bin/git.exe" src="$WORK/git-shim.c"
-    cat >"$src" <<'EOF'
-/* git.exe для Wine: знает только `git ls-files --cached --others --exclude-standard` (снимок Linux-git). */
-#include <fcntl.h>
-#include <io.h>
-#include <stdio.h>
-#include <string.h>
-int main(int argc, char **argv) {
-    const char *want[] = {"ls-files", "--cached", "--others", "--exclude-standard"};
-    int same = argc == 5;
-    for (int i = 0; same && i < 4; i++) same = strcmp(argv[i + 1], want[i]) == 0;
-    if (argc == 2 && strcmp(argv[1], "--version") == 0) { puts("git version 0.0.0 (wine shim)"); return 0; }
-    if (!same) { fputs("git-shim (wine): only `git ls-files --cached --others --exclude-standard`\n", stderr); return 129; }
-    FILE *f = fopen("C:\\winbuild\\git-ls-files.txt", "rb");
-    if (!f) { fputs("git-shim (wine): no C:\\winbuild\\git-ls-files.txt\n", stderr); return 128; }
-    _setmode(_fileno(stdout), _O_BINARY);
-    char buf[65536];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof buf, f)) > 0) fwrite(buf, 1, n, stdout);
-    fclose(f);
-    return 0;
-}
-EOF
-    if [[ ! -f "$exe" || "$src" -nt "$exe" ]]; then
-        x86_64-w64-mingw32-gcc -O2 -o "$exe" "$src" || die "git-шим не собрался"
-    fi
-}
-
-git_snapshot() {
-    if git -C "$REPO" "${GIT_LS_ARGS[@]}" >"$CROOT/git-ls-files.txt" 2>/dev/null; then return 0; fi
-    : >"$CROOT/git-ls-files.txt"
-    warn "git ls-files не сработал — tests/test_hygiene.py увидит пустой список"
+# Git для Windows (MinGit из NuGet Git-Windows-Minimal): tests/test_hygiene.py и test_s8_* зовут `git`.
+# Linux-git из Wine не запустить с захватом вывода. Мутирующие git-команды из Wine в дереве репозитория не
+# запускать: git для Windows не видит бит исполнения и запишет в индекс режим 100644.
+install_git() {
+    unpack_tools "$(fetch git-windows-minimal "$MINGIT_VERSION")" "$CROOT/git" "$MINGIT_VERSION"
+    [[ -f "$CROOT/git/cmd/git.exe" ]] || die "нет cmd\\git.exe в Git-Windows-Minimal $MINGIT_VERSION"
 }
 
 install_runner() {
@@ -335,13 +307,16 @@ sync_project() {
     ver="$(project_version)"
     printf '%s\\src\n' "$REPO_W" >"$SITE/jarvis-src.pth"
     dist="$SITE/jarvis-$ver.dist-info"
-    if [[ ! -f "$dist/METADATA" ]]; then
+    if [[ ! -f "$dist/METADATA" ]] || ! grep -q '/METADATA,' "$dist/RECORD" 2>/dev/null; then
         rm -rf "$SITE"/jarvis-*.dist-info
         mkdir -p "$dist"
         printf 'Metadata-Version: 2.1\nName: jarvis\nVersion: %s\n' "$ver" >"$dist/METADATA"
         printf '[console_scripts]\njarvis = jarvis.cli:main\n' >"$dist/entry_points.txt"
         printf 'wine_build.sh\n' >"$dist/INSTALLER"
-        : >"$dist/RECORD"
+        # RECORD с файлами: packaging/jarvis.spec ищет METADATA через distribution("jarvis").files
+        local d="jarvis-$ver.dist-info"
+        printf '%s\n' "$d/METADATA,," "$d/entry_points.txt,," "$d/INSTALLER,," "$d/RECORD,," \
+            "jarvis-src.pth,," >"$dist/RECORD"
     fi
 }
 
@@ -349,6 +324,7 @@ require_setup() {
     if ! command -v wine >/dev/null || [[ ! -f "$WPY_DIR/python.exe" || ! -f "$SITE/.jarvis-requirements.sha256" ]]; then
         die "окружение Wine не готово — запусти: scripts/wine_build.sh setup"
     fi
+    [[ -f "$CROOT/git/.version" && "$(cat "$CROOT/git/.version")" == "$MINGIT_VERSION" ]] || install_git
     install_wheels # uv.lock поменялся — доставить колёса (иначе ничего не делает)
     sync_project
 }
@@ -360,7 +336,7 @@ cmd_setup() {
     install_python
     install_inno
     install_icu_shim
-    install_git_shim
+    install_git
     install_runner
     install_wheels
     sync_project
@@ -373,7 +349,6 @@ cmd_setup() {
 # --- test --------------------------------------------------------------------------------------------------
 cmd_test() {
     require_setup
-    git_snapshot
     mkdir -p "$OUT"
     step "pytest под Windows-Python ($PY_VERSION, локаль $WINE_LANG, пользователь $USER)"
     local rc=0
@@ -405,7 +380,7 @@ cmd_build() {
     grep -E ' (WARNING|ERROR): ' "$OUT/pyinstaller.log" | sed 's/^[0-9]* /    /' | sort -u || true
     [[ -f "$dist/Jarvis.exe" && -f "$dist/jarvis-cli.exe" ]] || die "в $dist нет Jarvis.exe или jarvis-cli.exe"
     local leak
-    leak="$(find "$dist" \( -iname 'icuuc*.dll' -o -iname 'icudt*.dll' -o -iname 'git.exe' \) -print)"
+    leak="$(find "$dist" \( -iname 'icuuc*.dll' -o -iname 'icudt*.dll' \) -print)"
     [[ -z "$leak" ]] || die "в бандл попали шимы Wine: $leak"
     ok "onedir: build/win/dist/Jarvis — $(human_size "$dist"), файлов $(find "$dist" -type f | wc -l)"
 
@@ -562,4 +537,5 @@ main() {
     esac
 }
 
-main "$@"
+# одна строка: bash читает скрипт по ходу выполнения — правка файла во время запуска его не сломает
+main "$@"; exit $?

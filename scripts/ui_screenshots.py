@@ -130,27 +130,27 @@ def main(argv: list[str] | None = None) -> int:
 
     def hands_busy(w: LauncherWindow) -> None:
         w.show_launcher()
-        w.begin_request("закрой окно хрома")
-        w.on_event(Level("hands", "router:default", "4b"))
-        w.on_event(Status("⚙ close: Google Chrome", kind="tool", key="t1"))
+        # как в core: фраза не для грамматики, руки ещё грузят модель (первая команда после старта)
+        w.begin_request("сверни телегу и открой дискорд")
+        w.on_event(Level("hands", "hands", "4b"))
+        w.on_event(Status("Запускаю руки…", key="hands-start"))
 
     def hands_done(w: LauncherWindow) -> None:
         w.show_launcher()
         w.begin_request("открой телегу")
+        # как в core: грамматика без строк «⚙» — сразу итог действия (окно спрячется через ui.autohide_s)
         w.on_event(Level("grammar", "grammar:open"))
-        w.on_event(Status("⚙ open: Telegram", kind="tool", key="t1"))
-        w.on_event(Status("⚙ open: Telegram", kind="tool", key="t1", done=True, ok=True))
-        w.on_event(Done(True, "Открыл Telegram", level="grammar", autohide=True))
+        w.on_event(Done(True, "Открыл Telegram", level="grammar", reason="grammar:open", autohide=True))
 
     def brain_stream(w: LauncherWindow) -> None:
         w.show_launcher()
         w.begin_request("gpt: расскажи про Vulkan")
         w.on_event(Level("brain", "prefix:gpt", "gpt-6-luna"))
         w.on_event(Status("⚙ find_files: vulkan", kind="tool", key="f1"))
-        w.on_event(Status("⚙ find_files: 3 файла", kind="tool", key="f1", done=True, ok=True))
+        w.on_event(Status("⚙ find_files: vulkan", kind="tool", key="f1", done=True, ok=True))
         for chunk in BRAIN_TEXT:
             w.on_event(TextChunk(chunk))
-        w.on_event(Status("⚙ буфер: «vkCreateInstance»", kind="tool", key="c1"))
+        w.on_event(Status("⚙ буфер: vkCreateInstance", kind="tool", key="c1"))
 
     def find_list(w: LauncherWindow) -> None:
         w.show_launcher()
@@ -181,16 +181,10 @@ def main(argv: list[str] | None = None) -> int:
 
     def error(w: LauncherWindow) -> None:
         w.show_launcher()
+        # как в жизни: грамматика разобрала команду, а pc.audio не нашёл устройство вывода
         w.begin_request("громкость 20")
-        w.on_event(Level("hands", "router:default", "4b"))
-        w.on_event(Status("⚙ vol: 20", kind="tool", key="v1"))
-        w.on_event(
-            Done(
-                False,
-                "Руки не ответили за 4 с: сервер llama не запущен. Трей → «Перезапустить руки».",
-                "hands",
-            )
-        )
+        w.on_event(Level("grammar", "grammar:vol"))
+        w.on_event(Done(False, "Нет устройства вывода звука", "grammar", reason="grammar:vol"))
 
     def local(w: LauncherWindow) -> None:
         w.set_local_mode(True)

@@ -15,6 +15,7 @@ openai_codex импортируется только здесь и только 
 
 import importlib.util
 import itertools
+import json
 import logging
 import os
 import subprocess
@@ -483,11 +484,30 @@ class _Req:
         )
 
 
+# главные аргументы инструмента — в строке «⚙ …»: человек видит, что именно делает GPT
+_LABEL_ARGS = ("action", "query", "target", "name", "path")
+
+
 def tool_label(tool: str, arguments: Any) -> str:
-    """Строка «⚙ …» вызова инструмента; запись в буфер видна целиком (политика: «⚙ буфер: …»)."""
-    if tool == "clipboard_set" and isinstance(arguments, dict):
-        return f"⚙ буфер: {_one_line(str(arguments.get('text', '')), 120)}"
-    return f"⚙ {_one_line(str(tool), 60)} …"
+    """Строка «⚙ …» вызова инструмента: имя и главные аргументы; запись в буфер — целиком («⚙ буфер: …»)."""
+    args = arguments
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            args = None
+    args = args if isinstance(args, dict) else {}
+    if tool == "clipboard_set":
+        return f"⚙ буфер: {_one_line(str(args.get('text', '')), 120)}"
+    head = f"⚙ {_one_line(str(tool), 60)}"
+    if tool == "volume":
+        parts = [f"{k} {args[k]}" for k in ("set", "delta", "mute") if args.get(k) is not None]
+    else:
+        parts = [
+            str(args[k]) for k in _LABEL_ARGS if isinstance(args.get(k), str | int) and str(args[k]).strip()
+        ]
+    tail = _one_line(" ".join(parts), 80)
+    return f"{head}: {tail}" if tail else head
 
 
 def _usage(token_usage: Any) -> dict[str, Any] | None:

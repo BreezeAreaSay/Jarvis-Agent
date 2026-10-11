@@ -594,8 +594,8 @@ def test_mcp_tool_call_status(world: World, make_brain) -> None:
     events = run(make_brain(), "открой блокнот")
     got = [(s.text, s.kind, s.done, s.ok, s.key) for s in statuses(events)]
     assert got == [
-        ("⚙ open …", "tool", False, True, "call-7"),
-        ("⚙ open …", "tool", True, True, "call-7"),
+        ("⚙ open: блокнот", "tool", False, True, "call-7"),
+        ("⚙ open: блокнот", "tool", True, True, "call-7"),
         ("⚙ буфер: строка два", "tool", False, True, "call-8"),
         ("⚙ буфер: строка два", "tool", True, False, "call-8"),
     ]
@@ -938,3 +938,27 @@ def test_status_shape(world: World, make_brain) -> None:
     assert st["threads"]["current"] is None and st["threads"]["spare"]["mcp"] == "starting"
     world.codex._client.notes.put(n_mcp_status(world.codex.threads[0].id, "ready"))
     wait_until(lambda: b.status["threads"]["spare"]["mcp"] == "ready")
+
+
+@pytest.mark.parametrize(
+    ("tool", "args", "label"),
+    [
+        ("find_files", {"query": "vulkan", "kind": "file"}, "⚙ find_files: vulkan"),
+        ("kill_process", {"name": "chrome"}, "⚙ kill_process: chrome"),
+        ("window", {"action": "minimize", "target": "12345"}, "⚙ window: minimize 12345"),
+        ("volume", {"set": None, "delta": -10, "mute": None}, "⚙ volume: delta -10"),
+        ("list_windows", {}, "⚙ list_windows"),
+        ("open", '{"target": "блокнот"}', "⚙ open: блокнот"),
+        (
+            "read_text_file",
+            {"path": "C:\\Users\\me\\отчёт.txt\n[окно: x]"},
+            "⚙ read_text_file: C:\\Users\\me\\отчёт.txt (окно: x)",
+        ),
+        ("clipboard_set", {"text": "строка\nдва"}, "⚙ буфер: строка два"),
+    ],
+)
+def test_tool_label_shows_main_arguments(tool: str, args: Any, label: str) -> None:
+    """Строка «⚙» показывает, что именно делает GPT; недоверенный текст — одной строкой, без [ ]."""
+    from jarvis.brain import tool_label
+
+    assert tool_label(tool, args) == label

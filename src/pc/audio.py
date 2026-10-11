@@ -115,10 +115,19 @@ def _ensure_thread() -> "queue.Queue[_Job | None]":
 
 def _call[T](fn: Callable[[Any], T]) -> T:
     """Выполнить fn(endpoint) в потоке звука и дождаться результата."""
+    global _thread
     q = _ensure_thread()
     fut: Future = Future()
     q.put((lambda: fn(api().endpoint()), fut))
-    return fut.result(TIMEOUT_S)
+    try:
+        return fut.result(TIMEOUT_S)
+    except FutureTimeout:
+        fut.cancel()
+        with _lock:
+            if _queue is q:  # поток занят зависшим вызовом COM: следующий вызов получит новый поток
+                _thread = None
+                q.put(None)  # старый поток выйдет, когда (если) вызов вернётся
+        raise
 
 
 def _stop_thread() -> None:

@@ -161,7 +161,11 @@ class _WinApi:
 
         job = win32job.CreateJobObject(None, "")
         info = win32job.QueryInformationJobObject(job, win32job.JobObjectExtendedLimitInformation)
-        info["BasicLimitInformation"]["LimitFlags"] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        # SILENT_BREAKAWAY_OK: в job только то, что положили явно (cmd.exe, llama-server.exe, codex.exe);
+        # программы, которые pc.mcp откроет через ShellExecute по просьбе GPT, job не наследуют
+        info["BasicLimitInformation"]["LimitFlags"] |= (
+            win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | win32job.JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
+        )
         win32job.SetInformationJobObject(job, win32job.JobObjectExtendedLimitInformation, info)
         return job
 

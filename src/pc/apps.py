@@ -830,7 +830,8 @@ def _run_own_sta(fn: Callable[[], Any]) -> Any:
         try:
             fut.set_result(fn())
         except BaseException as e:
-            fut.set_exception(e)
+            # без traceback: он держал бы COM-объекты этого потока после CoUninitialize
+            fut.set_exception(e.with_traceback(None))
         finally:
             if com is not None:
                 com.CoUninitialize()

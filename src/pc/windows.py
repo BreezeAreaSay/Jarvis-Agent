@@ -210,6 +210,10 @@ def _elevated(a: Any, win: WindowInfo) -> bool:
     return bool(a.is_elevated(win.pid)) and not a.is_elevated(os.getpid())
 
 
+def _hung_text(label: str) -> str:
+    return f"Окно «{label}» не отвечает — Jarvis не может им управлять."
+
+
 def _elevated_text(label: str) -> str:
     return f"Окно «{label}» запущено с правами администратора — Jarvis не может им управлять."
 
@@ -223,6 +227,8 @@ def _focus(win: WindowInfo, label: str) -> Result:
         return fail(f"Окна «{label}» уже нет.")
     if _elevated(a, win):
         return fail(_elevated_text(label))
+    if a.is_hung(hwnd):  # BringWindowToTop (SetWindowPos) к зависшему окну ждал бы его вечно
+        return fail(_hung_text(label))
     done = ok(f"Переключился на «{label}»")
     if a.foreground() == hwnd and not a.is_iconic(hwnd):
         return done
@@ -348,6 +354,8 @@ def window_action(action: str, target: str | int | None, caller: Caller) -> Resu
     label = _label(win, caller)
     if _elevated(a, win):
         return fail(_elevated_text(label))
+    if a.is_hung(win.hwnd):
+        return fail(_hung_text(label))
     verbs = {"minimize": "Свернуть", "maximize": "Развернуть", "restore": "Восстановить"}
     denied = policy.require("window", caller, f"{verbs[action]} окно «{_label(win)}» ({win.exe})?")
     if denied is not None:
@@ -449,6 +457,8 @@ class _Api:
         self._SetForegroundWindow = sig(u.SetForegroundWindow, [w.HWND], w.BOOL)
         self._BringWindowToTop = sig(u.BringWindowToTop, [w.HWND], w.BOOL)
         self._ShowWindow = sig(u.ShowWindow, [w.HWND, ctypes.c_int], w.BOOL)
+        # ShowWindow/BringWindowToTop для окна чужого потока синхронны: зависшее окно проверяем заранее
+        self._IsHungAppWindow = sig(u.IsHungAppWindow, [w.HWND], w.BOOL)
         self._PostMessageW = sig(u.PostMessageW, [w.HWND, w.UINT, w.WPARAM, w.LPARAM], w.BOOL)
         self._AttachThreadInput = sig(u.AttachThreadInput, [w.DWORD, w.DWORD, w.BOOL], w.BOOL)
         self._FlashWindowEx = sig(u.FlashWindowEx, [ctypes.POINTER(FLASHWINFO)], w.BOOL)
@@ -582,6 +592,9 @@ class _Api:
 
     def show(self, hwnd: int, cmd: int) -> None:
         self._ShowWindow(hwnd, cmd)
+
+    def is_hung(self, hwnd: int) -> bool:
+        return bool(self._IsHungAppWindow(hwnd))
 
     def post_close(self, hwnd: int) -> bool:
         return bool(self._PostMessageW(hwnd, WM_CLOSE, 0, 0))

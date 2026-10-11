@@ -658,6 +658,10 @@ class JarvisApp(QObject):
         hotkey_ms, self._hotkey_ms = self._hotkey_ms, None
         if self._next_active is not None:
             self.ctx.active_window, self._next_active = self._next_active[0], None
+        if winapp.available():
+            # Jarvis сейчас на переднем плане (Enter в его окне): pc.mcp мозга и открытые им программы
+            # смогут вывести окно наверх; из самого pc.mcp AllowSetForegroundWindow не сработает
+            winapp.allow_set_foreground_any()
         self.window.begin_request(text)
         self._worker = self._bg(self._run_request, rid, text, hotkey_ms, prev, name=f"jarvis-request-{rid}")
 
@@ -744,7 +748,10 @@ class JarvisApp(QObject):
 
         req = ConfirmRequest(summary, details, caller)
         self.confirm_ready.emit(req)
-        return bool(req.wait(CONFIRM_TIMEOUT_S))
+        approved = bool(req.wait(CONFIRM_TIMEOUT_S))
+        if approved and winapp.available():
+            winapp.allow_set_foreground_any()  # Ctrl+Enter — новый ввод: прежнее разрешение снято
+        return approved
 
     @Slot(object)
     def _on_confirm(self, req: Any) -> None:

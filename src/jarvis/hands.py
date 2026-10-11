@@ -388,7 +388,7 @@ class Hands:
     def __init__(
         self,
         cfg: HandsConfig,
-        job_hook: Callable[[subprocess.Popen[bytes]], None] | None = None,
+        job_hook: Callable[[subprocess.Popen[bytes] | int], None] | None = None,
         *,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
@@ -451,6 +451,11 @@ class Hands:
                 self._spawn()
                 self._wait_ready(self._proc)
                 self._owner_pid = self._own_listener() or self._owner_pid
+                if self.job_hook is not None and self._owner_pid:
+                    try:  # job с SILENT_BREAKAWAY_OK: потомок cmd.exe сам в него не попадает
+                        self.job_hook(self._owner_pid)
+                    except Exception:
+                        log.exception("руки: job_hook упал")
             else:
                 if pid is None:
                     raise self._fail(f"Порт {self._port} занят чужим процессом (владелец неизвестен)")

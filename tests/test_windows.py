@@ -81,6 +81,9 @@ class FakeApi:
     def is_iconic(self, hwnd: int) -> bool:
         return self.wins[hwnd].iconic
 
+    def is_hung(self, hwnd: int) -> bool:
+        return False
+
     # действия
     def foreground(self) -> int:
         return self.fg

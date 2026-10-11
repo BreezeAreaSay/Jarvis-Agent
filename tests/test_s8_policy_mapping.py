@@ -52,6 +52,9 @@ class FakeWinApi:
     def is_elevated(self, pid: int) -> bool:
         return False
 
+    def is_hung(self, hwnd: int) -> bool:
+        return False
+
     def is_window(self, hwnd: int) -> bool:
         return hwnd == WIN.hwnd
 

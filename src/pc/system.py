@@ -113,6 +113,8 @@ class _Api:
                 return None
             data = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
             return data if isinstance(data, str) else None
+        except pywintypes.error as e:  # база pywintypes.error — Exception, не OSError
+            raise OSError(str(e)) from e
         finally:
             win32clipboard.CloseClipboard()
 
@@ -127,6 +129,8 @@ class _Api:
         try:
             win32clipboard.EmptyClipboard()
             win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+        except pywintypes.error as e:  # база pywintypes.error — Exception, не OSError
+            raise OSError(str(e)) from e
         finally:
             win32clipboard.CloseClipboard()
 

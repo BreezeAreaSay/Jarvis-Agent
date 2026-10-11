@@ -29,6 +29,12 @@ KILL_WAIT_S = 1.0
 ROOT_ENV = "JARVIS_ROOT_PID"
 SELF_TEXT = "Это сам Jarvis — выйти можно из трея"
 ATTRS = ["pid", "name", "exe"]
+# процессы-части Jarvis: приложение, CLI/MCP (python в разработке), codex, сервер рук с его cmd/conhost.
+# То, что Jarvis открыл через ShellExecute (Word, браузер), — тоже его потомки, но не он сам.
+OWN_EXES = frozenset(
+    {"jarvis.exe", "jarvis-cli.exe", "python.exe", "pythonw.exe", "codex.exe", "cmd.exe", "conhost.exe"}
+    | {"llama-server.exe"}
+)
 
 
 @dataclass(frozen=True)
@@ -135,6 +141,27 @@ def own_pids() -> set[int]:
     return pids
 
 
+def _own_descendants(root: int) -> set[int]:
+    """Потомки корня, которые сами — части Jarvis (OWN_EXES, codex*); в чужие ветки не спускаемся."""
+    out: set[int] = set()
+    stack = [root]
+    while stack:
+        try:
+            kids = psutil.Process(stack.pop()).children()
+        except psutil.Error as e:
+            log.debug("потомки Jarvis не получены: %s", e)
+            continue
+        for c in kids:
+            try:
+                name = str(c.name()).casefold()
+            except psutil.Error:
+                continue
+            if name in OWN_EXES or name.startswith("codex"):
+                out.add(int(c.pid))
+                stack.append(int(c.pid))
+    return out
+
+
 def _collect_own(env: str) -> set[int]:
     me = os.getpid()
     root = me
@@ -146,10 +173,7 @@ def _collect_own(env: str) -> set[int]:
         except ValueError:
             log.warning("%s не число: %r", ROOT_ENV, env)
     pids = {root, me}
-    try:
-        pids.update(int(c.pid) for c in psutil.Process(root).children(recursive=True))
-    except psutil.Error as e:
-        log.debug("потомки Jarvis не получены: %s", e)
+    pids.update(_own_descendants(root))
     if root != me:
         chain: list[int] = []
         try:

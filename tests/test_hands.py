@@ -627,7 +627,8 @@ def test_ensure_server_spawns_and_waits(ps: FakePsutil, monkeypatch: pytest.Monk
     h = raw_hands(handler, job_hook=hooked.append)
     h.ensure_server()
     assert spawned == [["cmd.exe", "/d", "/c", r"C:\Jarvis\scripts\start_hands.cmd", "4b"]]
-    assert len(hooked) == 1 and hooked[0].pid == 50
+    # cmd.exe (Popen) и сам llama-server (pid владельца порта): с SILENT_BREAKAWAY_OK job не наследуется
+    assert hooked[0].pid == 50 and hooked[1:] == ([h._owner_pid] if h._owner_pid else [])
     assert h.status["server"] == "ready"
     assert "loading" in states
 

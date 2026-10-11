@@ -387,6 +387,7 @@ def pywin(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     state: dict[str, Any] = {"assigned": [], "opened": [], "closed": [], "in_job": set(), "set_info": None}
     job = types.ModuleType("win32job")
     job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+    job.JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x1000
     job.JobObjectExtendedLimitInformation = 9
 
     def create(attrs: object, name: str) -> str:
@@ -437,7 +438,8 @@ def test_create_job_kill_on_close(pywin: dict[str, Any]) -> None:
     assert winapp.create_job() == "JOB"
     handle, cls, info = pywin["set_info"]
     assert (handle, cls) == ("JOB", 9)
-    assert info["BasicLimitInformation"]["LimitFlags"] == 0x4 | 0x2000  # прежние флаги сохранены
+    # прежние флаги сохранены; SILENT_BREAKAWAY_OK — программы, открытые мозгом, не наследуют job
+    assert info["BasicLimitInformation"]["LimitFlags"] == 0x4 | 0x2000 | 0x1000
 
 
 def test_create_job_failure_is_none(monkeypatch: pytest.MonkeyPatch) -> None:

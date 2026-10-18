@@ -803,7 +803,7 @@ class CliBackend:
         model = self.resolve_model(turn.model or None)
         everything = ai.tools.available("all", source=turn.source)
         allowed = ai.tools.available(turn.mode, source=turn.source)
-        env = ToolEnv(self.ctx, ai.web, turn.source, turn.chat_id)
+        env = ToolEnv(self.ctx, ai.web, turn.source, turn.chat_id, user_text=turn.text)
         specs = [
             {"name": t.name, "description": t.description, "inputSchema": t.parameters}
             for t in sorted(everything.values(), key=lambda t: t.name)

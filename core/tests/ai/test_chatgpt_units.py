@@ -287,7 +287,7 @@ def test_context_sections_are_sent_once_and_on_change() -> None:
         settings, source="voice", mode="all", memory="Любит кофе.", has_agent_tool=True
     )
     assert "Обращайся к пользователю «сэр»." in sections["persona"]
-    assert sections["mode"].endswith("запусти агента инструментом run_agent.")
+    assert "run_agent" in sections["mode"] and sections["mode"].endswith("Итог агент сам напишет в этот чат.")
     assert sections["source"] == prompt.SOURCE_VOICE and sections["custom"] == ""
     assert sections["profile"] == "Пользователь: имя — Тони, город — Москва."
     sent: dict[str, str] = {}

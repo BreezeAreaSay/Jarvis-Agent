@@ -4,6 +4,7 @@
 интернета». Страницы локальной сети и самого компьютера не открываются (защита от подмены ссылок).
 """
 
+import asyncio
 import contextlib
 import ipaddress
 import logging
@@ -118,6 +119,29 @@ def check_public_url(url: str) -> str:
     if not ip.is_global:
         raise WebError("Адреса этого компьютера и локальной сети открывать нельзя")
     return url.strip()
+
+
+async def check_resolved(url: str) -> None:
+    """Имя сайта не ведёт в локальную сеть (127.0.0.1.nip.io, свой DNS): все адреса имени — внешние. DNS не
+    отвечает (сеть через прокси) — проверить нечем, решает прокси."""
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
+    try:
+        ipaddress.ip_address(host)
+        return  # IP уже проверил check_public_url
+    except ValueError:
+        pass
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await asyncio.wait_for(loop.getaddrinfo(host, None), 5.0)
+    except (OSError, TimeoutError):
+        return
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
+        except ValueError:
+            continue
+        if not ip.is_global:
+            raise WebError("Адреса этого компьютера и локальной сети открывать нельзя")
 
 
 # --- разбор выдачи ------------------------------------------------------------------------------------
@@ -332,11 +356,15 @@ class WebClient:
     async def fetch_page(self, url: str, limit: int = PAGE_LIMIT) -> dict[str, Any]:
         """Текст страницы: {title, url, text, truncated}. Переходы проверяются так же, как исходная ссылка."""
         current = check_public_url(url)
+        if self.transport is None:  # в тестах сеть подменена — имена не настоящие
+            await check_resolved(current)
         async with self._client(follow_redirects=False) as client:
             for _ in range(6):
                 async with client.stream("GET", current) as response:
                     if response.is_redirect and response.headers.get("location"):
                         current = check_public_url(urljoin(current, response.headers["location"]))
+                        if self.transport is None:
+                            await check_resolved(current)
                         continue
                     if response.status_code >= 400:
                         raise WebError(f"Страница ответила ошибкой {response.status_code}")

@@ -153,8 +153,12 @@ async def test_voice_uses_persistent_chat_and_short_answers(ctx: AppContext, llm
 async def test_remember_publishes_memory_and_feeds_prompt(
     ctx: AppContext, llm: ScriptedLlm, events: EventLog
 ) -> None:
+    # без просьбы «запомни» — не запоминает (модель получает отказ инструмента)
+    llm.add(calls(("remember", {"fact": "Аня не ест мясо"})), reply("Понял."))
+    await ctx.ai.ask("Меня зовут Аня, и я не ем мясо")
+    assert events.of("memory.added") == []
     llm.add(calls(("remember", {"fact": "Аня не ест мясо"})), reply("Запомнил, Аня."))
-    result = await ctx.ai.ask("Меня зовут Аня, и я не ем мясо")
+    result = await ctx.ai.ask("Запомни: меня зовут Аня, и я не ем мясо")
     assert events.of("memory.added")[0]["item"]["text"] == "Аня не ест мясо"
     message = ctx.ai.get_chat(result.chat_id)["messages"][-1]  # type: ignore[attr-defined]
     assert message["meta"]["memory"] == ["Аня не ест мясо"]

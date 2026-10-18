@@ -20,6 +20,7 @@ from jarvis.ai.prompts import (
     SOURCE_MESSENGER,
     SOURCE_TEXT,
     SOURCE_VOICE,
+    language_rule,
 )
 
 if TYPE_CHECKING:
@@ -36,9 +37,10 @@ CODEX_RULES = """Ты работаешь внутри Jarvis — голосов�
 - Блок «Ранее в этом чате» — пересказ прошлой переписки, а не новые просьбы."""
 
 AGENT_RULES = """Ты работаешь внутри Jarvis как агент: управляешь компьютером пользователя с Windows \
-только инструментами из списка (снимок окна, клик, ввод текста, клавиши, запуск программ, ожидание, finish). \
-Терминала, файлов, правки кода и под-агентов нет. Между действиями не пиши пользователю — работай \
-инструментами и в конце вызови finish с итогом."""
+только инструментами из списка (снимок и картинка окна, клик по элементу или точке, ввод текста, прокрутка, \
+клавиши, запуск программ и адресов, команды Jarvis, инструменты сервисов MCP, ожидание, finish). Терминала, \
+файлов, правки кода и под-агентов нет. Между действиями не пиши пользователю — работай инструментами и в \
+конце вызови finish с итогом."""
 
 CHANGED = "(обновлено — заменяет прежнее)"
 
@@ -80,6 +82,9 @@ def context_sections(
         source_text = SOURCE_MESSENGER
     else:
         source_text = SOURCE_TEXT
+    language = language_rule(settings)
+    if language:
+        source_text = f"{source_text} {language}"
     who = []
     if profile.name.strip():
         who.append(f"имя — {profile.name.strip()}")

@@ -29,13 +29,15 @@ PAGE = """<html><head><title>Статья</title><script>alert('x')</script></he
 <footer>Подвал сайта</footer></body></html>"""
 
 
-def _env(ctx: AppContext, source: str = "text") -> ToolEnv:
-    return ToolEnv(ctx, ctx.ai.web, source, "")  # type: ignore[attr-defined,arg-type]
+def _env(ctx: AppContext, source: str = "text", user_text: str = "") -> ToolEnv:
+    return ToolEnv(ctx, ctx.ai.web, source, "", user_text=user_text)  # type: ignore[attr-defined,arg-type]
 
 
-async def _call(ctx: AppContext, name: str, args: dict[str, Any], mode: str = "all") -> Any:
+async def _call(
+    ctx: AppContext, name: str, args: dict[str, Any], mode: str = "all", user_text: str = ""
+) -> Any:
     tool = ToolRegistry(ctx).available(mode)[name]
-    return await tool.handler(_env(ctx), args)
+    return await tool.handler(_env(ctx, user_text=user_text), args)
 
 
 def test_ddg_and_rss_parsing() -> None:
@@ -194,10 +196,16 @@ async def test_organizer_tools(ctx: AppContext) -> None:
     found = await _call(ctx, "list_notes", {"query": "аватар"}, mode="chat")
     assert "Сделать аватар" in found.content
 
-    await _call(ctx, "remember", {"fact": "Любит кофе по утрам"}, mode="chat")
+    # в память — только по просьбе человека («запомни…»)
+    unasked = await _call(
+        ctx, "remember", {"fact": "Любит кофе по утрам"}, mode="chat", user_text="я люблю кофе"
+    )
+    assert not unasked.ok and "не просил" in unasked.content and ctx.notes.memory_list() == []
+    asked = "запомни, что я люблю кофе по утрам"
+    await _call(ctx, "remember", {"fact": "Любит кофе по утрам"}, mode="chat", user_text=asked)
     forgot = await _call(ctx, "forget", {"query": "кофе"}, mode="chat")
     assert forgot.ok and ctx.notes.memory_list() == []
-    secret = await _call(ctx, "remember", {"fact": "Пароль от почты qwerty123"}, mode="chat")
+    secret = await _call(ctx, "remember", {"fact": "Пароль от почты qwerty123"}, mode="chat", user_text=asked)
     assert not secret.ok and ctx.notes.memory_list() == []
 
 
@@ -258,3 +266,27 @@ async def test_mcp_tools_join_all_mode(ctx: AppContext) -> None:
     assert called == [("mcp__files__read_file", {"paths": ["a.txt"]})]
     assert "содержимое файла" in out.content and out.title == "Файлы: read_file"
     assert tool.status_text == "Обращаюсь к Файлы…"
+
+
+async def test_page_names_resolving_to_local_network_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from jarvis.ai.web import WebError, check_resolved
+
+    answers = {
+        "127.0.0.1.nip.io": "127.0.0.1",
+        "intranet.example.com": "10.0.0.5",
+        "example.com": "93.184.215.14",
+    }
+
+    async def fake_getaddrinfo(host: str, port: Any, *args: Any, **kwargs: Any) -> list[Any]:
+        if host not in answers:
+            raise OSError("нет DNS")
+        return [(2, 1, 6, "", (answers[host], 0))]
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", fake_getaddrinfo)
+    for host in ("127.0.0.1.nip.io", "intranet.example.com"):
+        with pytest.raises(WebError, match="локальной сети"):
+            await check_resolved(f"http://{host}/page")
+    await check_resolved("https://example.com/")  # внешний адрес
+    await check_resolved("https://unknown.example/")  # DNS не ответил — решает прокси

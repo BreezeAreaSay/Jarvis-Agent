@@ -1116,7 +1116,7 @@ class ChatGpt:
             allowed = ai.tools.available(turn.mode, source=turn.source)
             if native:
                 allowed.pop("web_search", None)
-            env = ToolEnv(self.ctx, ai.web, turn.source, turn.chat_id)
+            env = ToolEnv(self.ctx, ai.web, turn.source, turn.chat_id, user_text=turn.text)
 
             async def handler(params: dict[str, Any]) -> dict[str, Any]:
                 return await self._chat_tool(turn, env, allowed, everything, params)

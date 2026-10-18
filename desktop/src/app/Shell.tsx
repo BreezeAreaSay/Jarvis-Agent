@@ -5,6 +5,7 @@ import { LogoMark, Orb } from "@/components/Orb";
 import { bridge, isElectron } from "@/lib/bridge";
 import { navigate, useRoute } from "@/lib/router";
 import { useApp } from "@/store/app";
+import { ConfirmBar } from "@/components/ConfirmBar";
 import { CoreDown } from "@/components/CoreDown";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useUpdates } from "@/lib/updates";
@@ -147,6 +148,7 @@ export function Shell() {
       </main>
       {!ready && <Splash />}
       <CoreDown />
+      {ready && <ConfirmBar />}
       <Notices />
     </div>
   );

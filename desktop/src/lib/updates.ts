@@ -16,6 +16,8 @@ export interface UpdateState {
   speed?: number;
   error?: string;
   checkedAt?: number;
+  /** false — на GitHub ещё нет ни одного выпуска. */
+  published?: boolean;
 }
 
 export const useUpdates = create<UpdateState>(() => ({ status: "disabled", current: bridge.version }));
@@ -29,6 +31,8 @@ export function bindUpdates() {
   void bridge.updateState?.().then((state) => state && useUpdates.setState(state, true));
   bridge.on("update:state", (state) => useUpdates.setState(state as UpdateState, true));
 }
+
+export const RELEASES_URL = "https://github.com/BreezeAreaSay/Jarvis-Agent/releases";
 
 export const updates = {
   check: () => bridge.send("update:check"),

@@ -1,9 +1,10 @@
 // Подтверждения поверх всего: команда или плагин спрашивают разрешения («Очистить корзину? Файлов: 12»).
 // Клавиатуры у оверлея нет (окно не берёт фокус) — только мышь. Полоска внизу — сколько осталось до отказа
-// по тайм-ауту.
+// по тайм-ауту. Пока главное окно Jarvis в фокусе, такие запросы показывает оно (components/ConfirmBar.tsx).
 import { ShieldAlert } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Confirmation } from "@/api/types";
+import { bridge } from "@/lib/bridge";
 import { useApp } from "@/store/app";
 import { cx } from "@/ui";
 import { Slot } from "./common";
@@ -90,10 +91,18 @@ function ConfirmCard({ c }: { c: Confirmation }) {
   );
 }
 
+/** Главное окно Jarvis в фокусе (сообщает главный процесс). */
+function useMainFocus(): boolean {
+  const [focused, setFocused] = useState(false);
+  useEffect(() => bridge.on("overlay:main-focus", (value) => setFocused(!!value)), []);
+  return focused;
+}
+
 /** Подтверждения команд и плагинов (агентские — в панели агента). */
 export function Confirmations() {
   const all = useApp((s) => s.confirmations);
-  const items = useMemo(() => all.filter((c) => c.kind !== "agent"), [all]);
+  const mainFocused = useMainFocus();
+  const items = useMemo(() => (mainFocused ? [] : all.filter((c) => c.kind !== "agent")), [all, mainFocused]);
   // ушедшие карточки доигрывают анимацию: помним их ещё немного
   const [shown, setShown] = useState<Confirmation[]>(items);
   useEffect(() => {

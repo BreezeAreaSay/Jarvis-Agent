@@ -1,8 +1,10 @@
-// Сквозной для мыши оверлей. Окно по умолчанию игнорирует мышь (клики уходят программам под ним), а Electron
-// всё равно пересылает движения (forward: true). По ним решаем: указатель над интерактивным элементом
-// ([data-interactive]) или над непрозрачным пикселем питомца — окно ловит мышь, иначе снова пропускает.
-// Пересчёт — на каждое движение, при изменении DOM (карточка исчезла под неподвижным указателем) и раз в
-// 0,6 с, пока окно ловит мышь: зависнуть в состоянии «перехват» и заблокировать клики по программам нельзя.
+// Сквозной для мыши оверлей. Окно по умолчанию игнорирует мышь (клики уходят программам под ним). Где указатель,
+// окно узнаёт двумя путями: Electron пересылает движения (forward: true), а главный процесс ещё и сам опрашивает
+// курсор (overlay:pointer) — пересылка держится на хуке мыши, который Windows может молча снять. По положению
+// решаем: указатель над интерактивным элементом ([data-interactive]) или над непрозрачным пикселем питомца — окно
+// ловит мышь, иначе снова пропускает. Пересчёт — на каждое движение, при изменении DOM (карточка исчезла под
+// неподвижным указателем) и раз в 0,6 с, пока окно ловит мышь: зависнуть в «перехвате» и заблокировать клики по
+// программам нельзя.
 import { useEffect } from "react";
 import { bridge } from "@/lib/bridge";
 
@@ -78,6 +80,13 @@ export function useClickThrough() {
     };
     window.addEventListener("mousemove", move, { capture: true, passive: true });
     window.addEventListener("pointermove", move, { capture: true, passive: true });
+    // опрос главного процесса: точка в CSS-пикселях окна, (-1, -1) — указатель вне оверлея
+    const offPointer = bridge.on("overlay:pointer", (x, y) => {
+      px = Number(x);
+      py = Number(y);
+      if (!Number.isFinite(px) || !Number.isFinite(py)) px = py = -1;
+      apply();
+    });
     document.addEventListener("mouseout", out);
     window.addEventListener("blur", refreshMouse);
     const observer = new MutationObserver(refreshMouse);
@@ -91,6 +100,7 @@ export function useClickThrough() {
       if (!ignoring || holds) apply();
     }, 600);
     return () => {
+      offPointer();
       window.removeEventListener("mousemove", move, { capture: true });
       window.removeEventListener("pointermove", move, { capture: true });
       document.removeEventListener("mouseout", out);

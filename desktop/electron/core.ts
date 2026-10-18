@@ -266,7 +266,19 @@ export class CoreClient {
       ws.send(
         JSON.stringify({
           type: "subscribe",
-          patterns: ["hello", "settings.changed", "fullscreen.changed", "ui.*", "desk.open", "confirm.request", "plugins.changed"],
+          patterns: [
+            "hello",
+            "settings.changed",
+            "fullscreen.changed",
+            "ui.*",
+            "desk.open",
+            "confirm.request",
+            "plugins.changed",
+            // значок в трее: что делает голос, идёт ли запись конспекта, включены ли субтитры
+            "voice.state",
+            "plugin.summary.state",
+            "plugin.subtitles.state",
+          ],
         }),
       );
     };

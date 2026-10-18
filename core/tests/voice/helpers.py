@@ -176,12 +176,26 @@ class FakeMic:
         self.closed = True
 
 
+class FakeWhisper:
+    """Whisper по сценарию: запоминает, с каким языком его звали."""
+
+    def __init__(self, script: Script) -> None:
+        self.script = script
+        self.languages: list[str] = []
+
+    def recognize(self, audio: np.ndarray, language: str = "") -> str:
+        self.languages.append(language)
+        return self.script.text_for(audio)
+
+
 class FakeRecognizers:
-    """Recognizers для сервиса: итог и потоковая — по сценарию."""
+    """Recognizers для сервиса: итог и потоковая — по сценарию; Whisper — если задан (whisper_model)."""
 
     def __init__(self, script: Script) -> None:
         self.script = script
         self.unloaded: list[str | None] = []
+        self.whisper_model: FakeWhisper | None = None
+        self.sessions = 0  # сколько фраз начала потоковая модель
 
     def pick_offline(self, preferred: str, *, punct: bool = False) -> Any:
         script = self.script
@@ -194,9 +208,11 @@ class FakeRecognizers:
 
     def streaming(self) -> Any:
         script = self.script
+        owner = self
 
         class _Stream:
             def session(self) -> FakeSession:
+                owner.sessions += 1
                 return script.session()
 
             def recognize(self, audio: np.ndarray) -> str:
@@ -205,12 +221,12 @@ class FakeRecognizers:
         return _Stream()
 
     def whisper(self) -> Any:
-        return None
+        return self.whisper_model
 
     def vad_model(self) -> None:
         return None
 
-    def make_vad(self, sensitivity: float) -> FakeVad:
+    def make_vad(self, sensitivity: float, end_silence: float = 0.45) -> FakeVad:
         return FakeVad()
 
     def loaded(self) -> list[str]:

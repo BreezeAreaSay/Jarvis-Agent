@@ -1410,9 +1410,10 @@ class ChatGpt:
             call = self._call_of(params)
             if call.name == "finish":
                 try:
-                    finish["summary"] = str(call.parse_arguments().get("summary") or "").strip() or "Готово."
+                    finish_args = call.parse_arguments()
                 except ValueError:
-                    finish["summary"] = "Готово."
+                    finish_args = {}
+                finish["summary"] = agent.finish_summary(run, finish_args)
                 return {"contentItems": [{"type": "inputText", "text": "ok"}], "success": True}
             if finish["summary"] is not None:
                 return tool_failure("Пропущено: работа уже завершена")
@@ -1423,14 +1424,6 @@ class ChatGpt:
                     _background(current.interrupt, "interrupt")
                 return tool_failure(f"Лимит шагов ({limit}) исчерпан")
             content, extras = await agent._act(run, call)
-            images = [
-                (part.get("image_url") or {}).get("url")
-                for extra in extras
-                for part in (extra.get("content") if isinstance(extra.get("content"), list) else [])
-                if isinstance(part, dict) and part.get("type") == "image_url"
-            ]
-            if call.name == "screenshot" and images and isinstance(images[-1], str):
-                return {"contentItems": [{"type": "inputImage", "imageUrl": images[-1]}], "success": True}
             items: list[dict[str, Any]] = [{"type": "inputText", "text": content}]
             for extra in extras:
                 parts = extra.get("content") if isinstance(extra.get("content"), list) else []
@@ -1475,7 +1468,7 @@ class ChatGpt:
         if finish["summary"] is not None:
             return str(finish["summary"])
         if out.status == "completed":
-            return out.final or "Готово."
+            return out.final or "Агент закончил без итога — проверьте результат на экране."
         if out.status == "interrupted" and not out.abort_reason and out.error is None:
             raise asyncio.CancelledError
         raise UserFacingError(self._failure(out, model))

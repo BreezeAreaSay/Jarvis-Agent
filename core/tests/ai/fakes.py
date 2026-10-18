@@ -161,10 +161,22 @@ class FakeUi:
         self.clicks: list[str] = []
         self.typed: list[tuple[str, str]] = []
         self.snapshots = 0
+        self.hwnds: list[int | None] = []  # для какого окна просили снимок
+        self.owner: tuple[int, str] = (0, "")  # чьё окно под точкой (0 — не узнать)
 
-    def snapshot(self, limit: int = 150) -> UiSnapshot:
+    def snapshot(self, limit: int = 150, hwnd: int | None = None) -> UiSnapshot:
         self.snapshots += 1
+        self.hwnds.append(hwnd)
         return UiSnapshot(self.window, "HxOutlook.exe", [UiElement(**vars(e)) for e in self.elements[:limit]])
+
+    def element_at(self, x: int, y: int) -> tuple[str, str]:
+        found = next(
+            (e for e in self.elements if e.rect[0] <= x < e.rect[2] and e.rect[1] <= y < e.rect[3]), None
+        )
+        return (found.name, found.kind) if found is not None else ("", "")
+
+    def owner_at(self, x: int, y: int) -> tuple[int, str]:
+        return self.owner
 
     def _find(self, element_id: str) -> UiElement:
         element = next((e for e in self.elements if e.id == element_id), None)

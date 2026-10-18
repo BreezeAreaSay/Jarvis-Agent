@@ -31,6 +31,7 @@ import httpx
 
 from jarvis import __version__
 from jarvis.ai.providers import PRESETS, ProviderPreset, estimate_cost, get_preset, price_for
+from jarvis.ai.vision import sees_images
 from jarvis.services import UserFacingError
 
 if TYPE_CHECKING:
@@ -169,7 +170,7 @@ def resolve_config(settings: "AiSettings", secrets: "Secrets", model: str | None
         model=chosen,
         temperature=settings.temperature,
         proxy="" if local else settings.proxy.strip(),
-        vision=settings.vision,
+        vision=sees_images(preset.id, chosen, settings.vision),
         enabled=settings.enabled,
         local=local,
         folder_id=settings.folder_id.strip() if preset.folder else "",

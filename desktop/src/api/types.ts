@@ -89,7 +89,8 @@ export interface Settings {
     web_search: boolean;
     memory: boolean;
     mode: "chat" | "all" | "agent";
-    vision: boolean;
+    /** Модель понимает картинки: auto — по провайдеру и модели. */
+    vision: "auto" | "on" | "off";
     agent_confirm: "risky" | "always";
     max_agent_steps: number;
     monthly_budget: number;

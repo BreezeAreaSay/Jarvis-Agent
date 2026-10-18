@@ -171,8 +171,19 @@ export default function AiSection() {
         <Setting name="Память" desc="Запоминать факты о вас: «Аня не ест мясо», «я живу в Казани»">
           <Toggle checked={ai.memory} onChange={(v) => patch({ ai: { memory: v } })} label="Память" />
         </Setting>
-        <Setting name="Понимает картинки" desc="Модель видит изображения и снимки экрана (нужна модель с vision)">
-          <Toggle checked={ai.vision} onChange={(v) => patch({ ai: { vision: v } })} label="Понимает картинки" />
+        <Setting
+          name="Зрение"
+          desc="Картинки в чате и снимки окон, когда агент работает в программах. «Авто» — по выбранной модели"
+        >
+          <Tabs
+            value={ai.vision}
+            items={[
+              { value: "auto", label: "Авто" },
+              { value: "on", label: "Вкл" },
+              { value: "off", label: "Выкл" },
+            ]}
+            onChange={(v) => patch({ ai: { vision: v } })}
+          />
         </Setting>
       </Card>
 

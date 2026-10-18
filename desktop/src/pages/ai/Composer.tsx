@@ -35,7 +35,8 @@ export const Composer = forwardRef<
     onModel: (model: string) => void;
   }
 >(function Composer({ chatKey, mode, model, busy, disabled, onSend, onStop, onMode, onModel }, ref) {
-  const vision = useApp((s) => s.settings?.ai.vision ?? false);
+  // «Авто» — картинки можно прикреплять; модель без зрения получит вместо них пометку (ядро решает по модели)
+  const vision = useApp((s) => (s.settings?.ai.vision ?? "auto") !== "off");
   const defaultMode = useApp((s) => s.settings?.ai.mode ?? "all");
   const partial = useApp((s) => s.partial);
   const models = useAi((s) => s.models);

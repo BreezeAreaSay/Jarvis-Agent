@@ -7,14 +7,18 @@ from typing import Any
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from jarvis.context import AppContext
 from jarvis.platform.base import MediaInfo
 from jarvis.services import UserFacingError
+from jarvis.settings import Settings
 from jarvis.voice import service as service_mod
+from jarvis.voice.asr import vad_params
+from jarvis.voice.models import ModelManager
 from jarvis.voice.service import Voice
 from tests.conftest import EventLog
-from tests.voice.helpers import FakeMic, FakeRecognizers, FakeVad, InstalledModels, Script
+from tests.voice.helpers import FakeMic, FakeRecognizers, FakeVad, FakeWhisper, InstalledModels, Script
 
 
 class FakeTts:
@@ -40,12 +44,14 @@ class Rig:
         self.result: dict[str, Any] = {"kind": "command", "result": {"ok": True, "say": "", "data": {}}}
         self.tts = FakeTts()
         ctx.tts = self.tts  # type: ignore[assignment]
+        self.recognizers = FakeRecognizers(self.script)
+        self.vads: list[tuple[float, float]] = []  # (чувствительность, пауза в конце фразы) каждого VAD
         self.voice = Voice(
             ctx,
             models=models or InstalledModels(),  # type: ignore[arg-type]
-            recognizers=FakeRecognizers(self.script),
+            recognizers=self.recognizers,
             mic_factory=self._mic,
-            vad_factory=lambda sensitivity: FakeVad(),
+            vad_factory=self._vad,
             auto_download=False,
         )
         ctx.voice = self.voice
@@ -60,6 +66,10 @@ class Rig:
         mic = FakeMic(device)
         self.mics.append(mic)
         return mic
+
+    def _vad(self, sensitivity: float, end_silence: float) -> FakeVad:
+        self.vads.append((sensitivity, end_silence))
+        return FakeVad()
 
     @property
     def mic(self) -> FakeMic:
@@ -278,7 +288,7 @@ async def test_transcribe(rig: Rig) -> None:
 async def test_no_follow_up_while_media_plays(rig: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
     """Музыка или видео в колонках — их речь Jarvis принял бы за продолжение разговора: окна нет."""
     calls: list[float] = []
-    monkeypatch.setattr(rig.voice.listener, "follow_up", lambda seconds: calls.append(seconds))
+    monkeypatch.setattr(rig.voice.listener, "follow_up", lambda seconds, **_: calls.append(seconds))
     await rig.voice.start()
     try:
         watcher = SimpleNamespace(media=MediaInfo(title="Трек", status="playing"))
@@ -308,3 +318,72 @@ async def test_mic_error_state(rig: Rig) -> None:
     assert rig.voice.status()["error"].startswith("Микрофон отключился")
     rig.mic.error = ""
     await until(lambda: rig.voice.state == "idle")
+
+
+async def test_command_language_uses_whisper(rig: Rig, ctx: AppContext, events: EventLog) -> None:
+    """Команды не по-русски: итог фразы — Whisper с кодом языка, потоковая (русская) модель не участвует;
+    «Jarvis» латиницей — тот же активатор «джарвис»."""
+    whisper = FakeWhisper(rig.script)
+    rig.recognizers.whisper_model = whisper
+    ctx.settings.patch({"voice": {"language": "en"}})
+    await rig.voice.start()
+    await until(lambda: rig.mics and rig.voice.state == "idle")
+    rig.say("Jarvis, open YouTube.")
+    await until(lambda: rig.dispatched)
+    assert rig.dispatched == [("open YouTube", "voice")]
+    assert whisper.languages and set(whisper.languages) == {"en"}
+    assert rig.recognizers.sessions == 0 and rig.script.finals == []  # ни потоковой, ни GigaAM
+    assert events.of("voice.partial") == []
+    ctx.settings.patch({"voice": {"language": "auto"}})
+    rig.say("Jarvis, what time is it")
+    await until(lambda: len(rig.dispatched) == 2)
+    assert whisper.languages[-1] == ""  # язык Whisper определит сам
+
+
+async def test_command_language_without_whisper_falls_back_to_russian(rig: Rig, ctx: AppContext) -> None:
+    ctx.settings.patch({"voice": {"language": "en"}})
+    await rig.voice.start()
+    await until(lambda: rig.mics and rig.voice.state == "idle")
+    rig.say("джарвис включи музыку")
+    await until(lambda: rig.dispatched)
+    assert rig.dispatched == [("включи музыку", "voice")]
+    assert rig.recognizers.sessions >= 1 and rig.script.finals
+
+
+async def test_end_of_phrase_pause_reconfigures_vad(rig: Rig, ctx: AppContext) -> None:
+    await rig.voice.start()
+    await until(lambda: rig.mics and rig.voice.state == "idle")
+    assert rig.vads[-1] == (0.5, 0.45)
+    ctx.settings.patch({"voice": {"end_silence_ms": 900}})
+    rig.say("джарвис включи свет")  # перенастройка — в потоке распознавания, перед следующим блоком
+    await until(lambda: rig.vads[-1] == (0.5, 0.9))
+    with pytest.raises(ValidationError):
+        ctx.settings.patch({"voice": {"end_silence_ms": 100}})
+
+
+def test_vad_end_of_phrase_pause() -> None:
+    assert vad_params(0.5)["min_silence"] == 0.45
+    assert vad_params(0.5, 0.9)["min_silence"] == 0.9
+    assert vad_params(0.5, 5.0)["min_silence"] == 2.0 and vad_params(0.5, 0.1)["min_silence"] == 0.3
+
+
+def test_required_models_follow_command_language() -> None:
+    settings = Settings.model_validate({"voice": {"language": "en"}})
+    assert ModelManager.required_ids(settings)[-2] == "whisper-base"
+    assert ModelManager.required_ids(settings, lambda i: i == "whisper-tiny")[-2] == "whisper-tiny"
+    assert "whisper-base" not in ModelManager.required_ids(Settings())
+
+
+async def test_follow_up_after_question(rig: Rig, ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[float, bool]] = []
+    monkeypatch.setattr(
+        rig.voice.listener, "follow_up", lambda seconds, question=False: calls.append((seconds, question))
+    )
+    await rig.voice.start()
+    rig.voice.follow_up(question=True)
+    assert calls[-1] == (service_mod.QUESTION_FOLLOW_S, True)  # 6 с из настроек — мало, чтобы подумать
+    rig.voice.follow_up()
+    assert calls[-1] == (6.0, False)
+    ctx.settings.patch({"voice": {"follow_up_s": 0}})
+    rig.voice.follow_up(question=True)
+    assert calls[-1] == (0.0, True)  # продолжение выключено — и для вопросов

@@ -199,6 +199,20 @@ label, placeholder?, options?, required}], description}`.
 замена папки). При первом запуске недостающие обязательные модели качаются сами (на платформе `fake` — нет;
 `JARVIS_VOICE_AUTODOWNLOAD=1|0` переопределяет).
 
+Настройки голоса, которые меняют конвейер на ходу:
+- `voice.language` — язык команд: `ru` (GigaAM), иначе `auto|en|uk|de|fr|es|it|pt|pl|tr|ja|ko|zh` — итог фразы
+  распознаёт Whisper (обязательная модель: уже скачанный Whisper или `whisper-base`), потоковой модели нет (она
+  русская — частичного текста и раннего «Джарвис» тоже нет). Пока Whisper не скачан — распознаётся по-русски.
+  Встроенные команды — русские: фраза на другом языке уходит Jarvis AI.
+- `voice.end_silence_ms` (300–2000, по умолчанию 450) — тишина после речи, по которой фраза закончилась;
+  стихла на «открой…» или предлоге — ещё 0,5 с ждём продолжения.
+- Слово-активатор: своё слово узнаётся и с окончаниями («пятницу»), фраза из нескольких слов — целиком
+  («эй, Джарвис»), латиница — на слух («Jarvis» = «джарвис»).
+
+Окно продолжения (`Voice.follow_up(seconds=None, *, question=False)`): после ответа Jarvis следующая фраза — без
+активатора; подряд — не больше 2 таких команд, ответы на уточняющие вопросы (`question=True`, окно не короче 8 с)
+в этот счёт не входят, но всего окон подряд — не больше 4.
+
 | Маршрут | Тело | Ответ |
 |---|---|---|
 | `GET /api/voice` | — | `{state, reason, enabled, error, ptt_error, wake_words, models_ready, input_device}` |
@@ -389,7 +403,7 @@ fields?: [поля элемента списка] (kind list), secret?: имя, 
 |---|---|---|
 | `smart_home` | `states`, `toggle`, `turn_on`, `turn_off`, `set`, `refresh` | `devices {items}` |
 | `dictation` | `toggle`, `start`, `stop` | `state {state: listening\|processing\|idle, text}` |
-| `subtitles` | `start`, `stop` | `text {id, text, translation, lang, pending}`, `state` |
+| `subtitles` | `start`, `stop` | `text {id, text, translation, lang, pending}`, `state {active}` (значок «Субтитры» в оверлее и в трее) |
 | `summary` | `start`, `stop`, `retry` | `state {state: recording\|transcribing\|summarizing\|done\|error, seconds}` |
 | `reader` | `read {text?\|url?}`, `pause`, `resume`, `stop`, `speed {speed}`, `seek {index}` | `progress {state, index, total, sentence, sentences?}` |
 | `autolock` | `pause`, `resume`, `check` | `state {present, last_seen, armed}` |

@@ -1,7 +1,8 @@
 // Строка голоса (вверху по центру): кружок микрофона пульсирует от громкости, «Джарвис» — подсвеченный
 // чип, дальше живой текст фразы (voice.partial → voice.final), справа точки-волна. После выполнения команды
-// строка сворачивается в кружок и исчезает (~1,5 с); без текста в покое — через 4 с.
-import { Mic, Square } from "lucide-react";
+// строка сворачивается в кружок и исчезает (~1,5 с); без текста в покое — через 4 с. Пока Jarvis отвечает
+// голосом дольше мгновения — «Говорю…» с кнопкой «Стоп» (волна — от его голоса).
+import { Mic, Square, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/api/client";
 import type { VoiceState } from "@/api/types";
@@ -11,7 +12,7 @@ import { cx } from "@/ui";
 import { useOverlayEvent } from "./bus";
 import { Slot, useRaf } from "./common";
 
-type Phase = "listening" | "processing" | "done" | "miss";
+type Phase = "listening" | "processing" | "speaking" | "done" | "miss";
 
 interface Pill {
   show: boolean;
@@ -24,6 +25,8 @@ const EMPTY: Pill = { show: false, wake: false, text: "", phase: "listening" };
 const DONE_HIDE_MS = 1500;
 const IDLE_HIDE_MS = 4000;
 const STALE_HIDE_MS = 15000;
+const SPEAK_SHOW_MS = 700; // «Готово, сэр» — мгновение: строку «Говорю…» показываем, только если речь дольше
+const SPEAK_END_HIDE_MS = 500;
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -44,6 +47,7 @@ export function stripWake(text: string, words: string[]): { text: string; found:
 const PLACEHOLDER: Record<Phase, string> = {
   listening: "Слушаю…",
   processing: "Распознаю…",
+  speaking: "Говорю…",
   done: "Готово",
   miss: "Не расслышал",
 };
@@ -54,7 +58,7 @@ export function VoicePill({ hidden }: { hidden: boolean }) {
   const words = useMemo(() => [...(wakeWords ?? ["джарвис"]), assistant, "jarvis"], [wakeWords, assistant]);
   const [pill, setPill] = useState<Pill>(EMPTY);
   const cur = useRef<Pill>(EMPTY);
-  const timers = useRef({ hide: 0, stale: 0 });
+  const timers = useRef({ hide: 0, stale: 0, speak: 0 });
 
   const hide = () => {
     clearTimeout(timers.current.hide);
@@ -68,20 +72,23 @@ export function VoicePill({ hidden }: { hidden: boolean }) {
     clearTimeout(timers.current.hide);
     clearTimeout(timers.current.stale);
     const c = cur.current;
-    const fresh = opts.fresh || !c.show || c.phase === "done" || c.phase === "miss";
+    const fresh = opts.fresh || !c.show || c.phase === "done" || c.phase === "miss" || c.phase === "speaking";
     cur.current = { ...(fresh ? EMPTY : c), ...patch, show: true };
     setPill(cur.current);
     if (opts.hideIn) timers.current.hide = window.setTimeout(hide, opts.hideIn);
-    timers.current.stale = window.setTimeout(hide, STALE_HIDE_MS);
+    // пока Jarvis говорит, строку держит его речь (длинный ответ дольше 15 с), а убирает tts.state
+    if (cur.current.phase !== "speaking") timers.current.stale = window.setTimeout(hide, STALE_HIDE_MS);
   };
 
-  const sessionOpen = () => cur.current.show && cur.current.phase !== "done" && cur.current.phase !== "miss";
+  const sessionOpen = () =>
+    cur.current.show && cur.current.phase !== "done" && cur.current.phase !== "miss" && cur.current.phase !== "speaking";
 
   useEffect(() => {
     const t = timers.current;
     return () => {
       clearTimeout(t.hide);
       clearTimeout(t.stale);
+      clearTimeout(t.speak);
     };
   }, []);
 
@@ -130,10 +137,37 @@ export function VoicePill({ hidden }: { hidden: boolean }) {
       if (!sessionOpen()) update({ phase: "listening" }, { fresh: true });
     } else if (d.state === "processing") {
       if (!c.show || c.phase === "listening") update({ phase: "processing" });
-    } else if (c.show && !c.text && c.phase !== "done" && c.phase !== "miss") {
+    } else if (d.state !== "speaking" && c.show && !c.text && c.phase !== "done" && c.phase !== "miss" && c.phase !== "speaking") {
       update({}, { hideIn: IDLE_HIDE_MS });
     }
   });
+
+  // Jarvis отвечает голосом: «Говорю…» и «Стоп» — сразу, если строка уже на экране, иначе — когда речь
+  // длиннее мгновения; договорил — строка уходит (а если её перебили «Джарвис», её заберёт voice.wake)
+  const startSpeaking = () => {
+    const c = cur.current;
+    if (c.show && (c.phase === "listening" || c.phase === "processing") && !c.text) return; // слушает новую фразу
+    update({ phase: "speaking", wake: false, text: "" });
+  };
+  useOverlayEvent<{ speaking: boolean }>("tts.state", (d) => {
+    clearTimeout(timers.current.speak);
+    if (d.speaking) {
+      if (cur.current.show) startSpeaking();
+      else timers.current.speak = window.setTimeout(() => levels.speaking && startSpeaking(), SPEAK_SHOW_MS);
+    } else if (cur.current.show && cur.current.phase === "speaking") {
+      update({}, { hideIn: SPEAK_END_HIDE_MS });
+    }
+  });
+  // страховка: событие о конце речи потерялось (переподключение) — не висеть с «Говорю…»
+  const speakingShown = pill.show && pill.phase === "speaking";
+  useEffect(() => {
+    if (!speakingShown) return;
+    const t = window.setInterval(() => {
+      if (!levels.speaking && cur.current.phase === "speaking") update({}, { hideIn: SPEAK_END_HIDE_MS });
+    }, 2000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- update читает только ref
+  }, [speakingShown]);
 
   // --- живая часть: кружок микрофона и точки-волна (без перерисовки React) ---------------------------------
   const micRef = useRef<HTMLSpanElement>(null);
@@ -143,7 +177,7 @@ export function VoicePill({ hidden }: { hidden: boolean }) {
 
   useRaf((dt, now) => {
     const phase = cur.current.phase;
-    const target = phase === "listening" ? levels.mic : 0;
+    const target = phase === "listening" ? levels.mic : phase === "speaking" ? levels.tts : 0;
     level.current += (target - level.current) * Math.min(1, dt * (target > level.current ? 16 : 5));
     const l = level.current;
     const mic = micRef.current;
@@ -171,7 +205,7 @@ export function VoicePill({ hidden }: { hidden: boolean }) {
       const x = 4 + i * 7.1;
       let height = 3.2;
       let alpha = 0.55;
-      if (phase === "listening") {
+      if (phase === "listening" || phase === "speaking") {
         const env = Math.pow(Math.sin((Math.PI * (i + 0.5)) / n), 0.7);
         const wave = 0.55 + 0.45 * Math.sin(t * 9 + i * 1.25);
         height = 3.2 + l * 20 * env * wave;
@@ -234,7 +268,7 @@ export function VoicePill({ hidden }: { hidden: boolean }) {
     <Slot show={visible} exitMs={460}>
       <div className={cx("ov-pill", `is-${pill.phase}`)} role="status" aria-live="polite">
         <span className="ov-pill-mic" ref={micRef}>
-          <Mic />
+          {pill.phase === "speaking" ? <Volume2 /> : <Mic />}
         </span>
         {pill.wake && <span className="ov-wake">{assistant}</span>}
         <div className={cx("ov-pill-body", overflow > 0 && "clipped")} ref={bodyRef}>
@@ -247,13 +281,13 @@ export function VoicePill({ hidden }: { hidden: boolean }) {
           </span>
         </div>
         <canvas className="ov-pill-dots" ref={dotsRef} aria-hidden />
-        {(pill.phase === "listening" || pill.phase === "processing") && (
+        {(pill.phase === "listening" || pill.phase === "processing" || pill.phase === "speaking") && (
           // «Стоп»: перестать слушать, замолчать, бросить ответ ИИ — то же, что сказать «Джарвис, стоп»
           <button
             type="button"
             className="ov-pill-stop"
             data-interactive
-            title="Стоп — перестать слушать и отвечать"
+            title={pill.phase === "speaking" ? "Стоп — замолчать" : "Стоп — перестать слушать и отвечать"}
             aria-label="Стоп"
             onClick={() => {
               hide();

@@ -73,13 +73,17 @@ class Vad(Protocol):
     def reset(self) -> None: ...
 
 
-def vad_params(sensitivity: float) -> dict[str, float]:
-    """Чувствительность 0..1 → порог Silero и минимальная длина речи (выше — ловит тише и короче)."""
+END_SILENCE_S = 0.45  # пауза после речи, по которой фраза закончилась (voice.end_silence_ms)
+
+
+def vad_params(sensitivity: float, end_silence: float = END_SILENCE_S) -> dict[str, float]:
+    """Чувствительность 0..1 → порог Silero и минимальная длина речи (выше — ловит тише и короче); пауза в
+    конце фразы — из настроек (0,3–2 с: кто говорит с паузами, увеличивает её)."""
     s = max(0.0, min(1.0, float(sensitivity)))
     return {
         "threshold": round(0.65 - 0.3 * s, 3),  # 0 → 0,65; 0,5 → 0,5; 1 → 0,35
         "min_speech": round(0.35 - 0.2 * s, 3),  # 0 → 0,35 с; 0,5 → 0,25 с; 1 → 0,15 с
-        "min_silence": 0.45,  # пауза, после которой фраза закончилась
+        "min_silence": round(max(0.3, min(2.0, float(end_silence))), 3),
     }
 
 
@@ -353,11 +357,11 @@ class Recognizers:
         spec = self.manager.spec(m.VAD_ID)
         return self.manager.path(m.VAD_ID) / spec.filename
 
-    def make_vad(self, sensitivity: float) -> SileroVad:
+    def make_vad(self, sensitivity: float, end_silence: float = END_SILENCE_S) -> SileroVad:
         path = self.vad_model()
         if path is None:
             raise AsrError("нет модели детектора речи (Silero VAD)")
-        return SileroVad(path, **vad_params(sensitivity))
+        return SileroVad(path, **vad_params(sensitivity, end_silence))
 
     def streaming(self) -> StreamingAsr | None:
         if self._stream is not None:

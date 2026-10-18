@@ -1160,12 +1160,19 @@
   background: rgba(255, 255, 255, 0.12);
 }
 
-/* --- запись конспекта ----------------------------------------------------------------------------------- */
-.ov-summary {
+/* --- запись конспекта и включённые субтитры (стопка справа вверху) ------------------------------------- */
+.ov-rec-stack {
   position: absolute;
   top: 16px;
   right: 18px;
   z-index: 25;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.ov-summary {
   display: inline-flex;
   align-items: center;
   gap: 9px;
@@ -1180,8 +1187,15 @@
   white-space: nowrap;
 }
 
-.ov-summary.is-recording {
+.ov-summary.is-recording,
+.ov-summary.ov-subs-badge {
   padding-right: 5px;
+}
+
+.ov-subs-badge-ico {
+  width: 15px;
+  height: 15px;
+  color: var(--accent-text);
 }
 
 .ov-rec-dot {
@@ -1558,6 +1572,43 @@
 
 .av-root.av-offline .av-orb {
   filter: grayscale(0.75) brightness(0.8);
+}
+
+/* микрофон выключен: сфера приглушена (не так, как без ядра) и красный значок — щелчок включает */
+.av-root.av-muted .av-orb {
+  filter: grayscale(0.55) brightness(0.92);
+}
+
+.av-mute {
+  position: absolute;
+  left: 63%;
+  top: 63%;
+  width: 19%;
+  height: 19%;
+  min-width: 18px;
+  min-height: 18px;
+  max-width: 34px;
+  max-height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #e5484d;
+  color: #fff;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  animation: av-media-in 0.18s var(--ease) both;
+  transition: transform var(--t-fast) var(--ease);
+}
+
+.av-mute:hover {
+  transform: scale(1.08);
+}
+
+.av-mute svg {
+  width: 58%;
+  height: 58%;
 }
 
 .av-ring {

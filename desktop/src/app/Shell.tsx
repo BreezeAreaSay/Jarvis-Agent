@@ -1,6 +1,8 @@
 // Каркас главного окна: фон, боковая навигация, кнопки окна, страница по маршруту.
-import { CircleUser, House, Minus, Puzzle, Settings, Sparkles, SquareTerminal, X } from "lucide-react";
-import { lazy, Suspense, type ReactNode } from "react";
+import { CircleUser, House, MicOff, Minus, Puzzle, Settings, Sparkles, SquareTerminal, X } from "lucide-react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { api } from "@/api/client";
+import { onEvent } from "@/api/events";
 import { LogoMark, Orb } from "@/components/Orb";
 import { bridge, isElectron } from "@/lib/bridge";
 import { navigate, useRoute } from "@/lib/router";
@@ -62,17 +64,82 @@ function Sidebar({ page, locked }: { page: string; locked: boolean }) {
   );
 }
 
-/** Полоса над заголовком страницы — за неё двигают окно; кнопки окна — отдельным блоком поверх (см. shell.css). */
+interface SummaryRec {
+  seconds: number;
+  at: number;
+}
+
+/** Идёт запись конспекта созвона — секунды записи (тикают сами) или null. */
+function useSummaryRecording(connected: boolean): number | null {
+  const [rec, setRec] = useState<SummaryRec | null>(null);
+  const [, tick] = useState(0);
+  const apply = (state?: string, seconds?: number) =>
+    setRec(state === "recording" ? { seconds: Number(seconds) || 0, at: performance.now() } : null);
+  useEffect(() => onEvent<{ state: string; seconds: number }>("plugin.summary.state", (e) => apply(e.data?.state, e.data?.seconds)), []);
+  // запись могла начаться до открытия окна: состояние плагина — при подключении
+  useEffect(() => {
+    if (!connected) return;
+    api
+      .get<{ items: { id: string; status?: { state?: string; seconds?: number } }[] }>("/api/plugins")
+      .then((r) => {
+        const status = r.items.find((p) => p.id === "summary")?.status;
+        apply(status?.state, status?.seconds);
+      })
+      .catch(() => undefined);
+  }, [connected]);
+  useEffect(() => {
+    if (!rec) return;
+    const t = window.setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [rec]);
+  return rec ? rec.seconds + (performance.now() - rec.at) / 1000 : null;
+}
+
+function fmtClock(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+/** Полоса над заголовком страницы — за неё двигают окно; кнопки окна — отдельным блоком поверх (см. shell.css).
+ * Слева в полосе — состояние: нет связи с ядром, микрофон выключен (щелчок включает), идёт запись конспекта. */
 function TitleBar() {
   const connected = useApp((s) => s.connected);
+  const micOff = useApp((s) => !!s.settings && !s.settings.voice.enabled);
+  const patchSettings = useApp((s) => s.patchSettings);
+  const recording = useSummaryRecording(connected);
   return (
     <>
       <div className="titlebar" />
-      {!connected && (
-        <span className="conn">
-          <span className="status-dot busy" /> Подключаюсь к ядру…
-        </span>
-      )}
+      <div className="title-status">
+        {!connected && (
+          <span className="conn">
+            <span className="status-dot busy" /> Подключаюсь к ядру…
+          </span>
+        )}
+        {connected && micOff && (
+          <button
+            type="button"
+            className="title-chip mic-off"
+            title="Jarvis не слушает — нажмите, чтобы включить микрофон"
+            onClick={() => void patchSettings({ voice: { enabled: true } }).catch(() => undefined)}
+          >
+            <MicOff /> Микрофон выключен
+          </button>
+        )}
+        {connected && recording !== null && (
+          <button
+            type="button"
+            className="title-chip rec"
+            title="Идёт запись конспекта — открыть плагин «Конспект»"
+            onClick={() => navigate("extensions", "plugins", "summary")}
+          >
+            <span className="title-rec-dot" /> Запись {fmtClock(recording)}
+          </button>
+        )}
+      </div>
       {isElectron && (
         <div className="win-controls">
           <button className="win-btn" aria-label="Свернуть" onClick={() => bridge.windowControl("minimize")}>

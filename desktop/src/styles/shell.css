@@ -194,18 +194,96 @@ body.material .app-root {
   color: #fff;
 }
 
-.conn {
+/* Состояние в полосе над страницей: связь с ядром, микрофон выключен, запись. Чипы — кнопки: как и кнопки окна,
+   выше полосы перетаскивания и вне её (no-drag), иначе на Windows щелчок по ним двигал бы окно. */
+.title-status {
   position: absolute;
-  top: 3px;
+  top: 2px;
   left: 24px;
   z-index: 21;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.conn {
   font-size: 11.5px;
   line-height: 14px;
   color: var(--text-3);
   display: flex;
   align-items: center;
   gap: 8px;
-  pointer-events: none;
+}
+
+.title-chip {
+  height: 16px;
+  padding: 0 8px 0 6px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.title-chip svg {
+  width: 11px;
+  height: 11px;
+}
+
+.title-chip.mic-off {
+  background: rgba(229, 72, 77, 0.14);
+  color: #ff8b8f;
+}
+
+.title-chip.mic-off:hover {
+  background: rgba(229, 72, 77, 0.26);
+  color: #ffb3b5;
+}
+
+.title-chip.rec {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.title-chip.rec:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+}
+
+.title-rec-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e5484d;
+  box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.6);
+  animation: title-rec-pulse 1.6s ease-out infinite;
+}
+
+@keyframes title-rec-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 5px rgba(229, 72, 77, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0);
+  }
+}
+
+:root[data-anim="off"] .title-rec-dot {
+  animation: none;
 }
 
 .page {

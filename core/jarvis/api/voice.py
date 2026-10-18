@@ -111,7 +111,7 @@ async def voice_devices(ctx: Ctx) -> dict[str, Any]:
 @router.get("/api/voice/models")
 async def voice_models(ctx: Ctx) -> dict[str, Any]:
     manager = _manager(ctx)
-    return {"items": manager.catalog(manager.required_ids(ctx.settings.value))}
+    return {"items": manager.catalog(manager.required_ids(ctx.settings.value, manager.installed))}
 
 
 @router.post("/api/voice/models/{model_id}/download")

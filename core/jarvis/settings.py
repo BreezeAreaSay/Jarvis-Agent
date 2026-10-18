@@ -49,6 +49,11 @@ class InterfaceSettings(_Model):
     ui_scale: int = Field(100, ge=80, le=140)
 
 
+CommandLanguage = Literal[
+    "ru", "auto", "en", "uk", "de", "fr", "es", "it", "pt", "pl", "tr", "ja", "ko", "zh"
+]
+
+
 class VoiceSettings(_Model):
     enabled: bool = True  # микрофон слушает
     wake_words: list[str] = Field(default_factory=lambda: ["джарвис"])
@@ -57,6 +62,9 @@ class VoiceSettings(_Model):
     input_device: str = ""  # часть имени микрофона; "" — по умолчанию
     sensitivity: float = Field(0.5, ge=0.0, le=1.0)  # чувствительность детектора речи
     asr_model: Literal["gigaam-v3", "gigaam-v3-punct", "vosk-small"] = "gigaam-v3"
+    # язык команд: ru — GigaAM; другой или auto — итоговый текст фразы распознаёт Whisper (скачается сам)
+    language: CommandLanguage = "ru"
+    end_silence_ms: int = Field(450, ge=300, le=2000)  # столько тишины после речи — фраза закончилась
     follow_up_s: int = Field(6, ge=0, le=30)  # слушать продолжение без активатора после ответа
     ptt_key: str = ""  # клавиша «держи и говори», например "right ctrl"; "" — выключено
     earcons: bool = True  # короткие звуки «слушаю», «готово», «ошибка»

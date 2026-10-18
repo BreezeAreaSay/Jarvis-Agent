@@ -114,6 +114,54 @@ def test_follow_up_window_expires(rig: Rig) -> None:
     assert host.commands == []
 
 
+def test_question_answers_do_not_use_up_follow_chain(rig: Rig) -> None:
+    """Ответ на уточняющий вопрос Jarvis («Какой город?») — не фоновая речь: после него обычных окон
+    продолжения — всё ещё MAX_FOLLOW_CHAIN."""
+    listener, host, script, clock = rig
+    listener.follow_up(4.0, question=True)
+    feed(listener, script.silence(0.4), clock)
+    say(rig, "москва")
+    for i in range(lst.MAX_FOLLOW_CHAIN):
+        listener.follow_up(4.0)
+        feed(listener, script.silence(0.4), clock)
+        say(rig, f"фраза {i}")
+    assert host.commands == ["москва"] + [f"фраза {i}" for i in range(lst.MAX_FOLLOW_CHAIN)]
+
+
+def test_question_windows_are_capped(rig: Rig) -> None:
+    """Даже вопросы подряд не держат Jarvis в разговоре без конца: окон — не больше MAX_FOLLOW_TOTAL."""
+    listener, host, script, clock = rig
+    for i in range(lst.MAX_FOLLOW_TOTAL + 1):
+        listener.follow_up(4.0, question=True)
+        feed(listener, script.silence(0.4), clock)
+        say(rig, f"ответ {i}")
+    assert host.commands == [f"ответ {i}" for i in range(lst.MAX_FOLLOW_TOTAL)]
+    say(rig, "джарвис спасибо")  # обратились по имени — счёт с начала
+    listener.follow_up(4.0, question=True)
+    feed(listener, script.silence(0.4), clock)
+    say(rig, "ещё ответ")
+    assert host.commands[-2:] == ["спасибо", "ещё ответ"]
+
+
+def test_unfinished_phrase_waits_for_the_rest(rig: Rig) -> None:
+    """«Джарвис, открой… браузер»: речь стихла на «открой» — Jarvis ждёт продолжения (GRACE_S), а не
+    выполняет обрывок, и вся фраза — одна команда."""
+    listener, host, script, clock = rig
+    first = script.utter("джарвис открой браузер", 0.3)  # потоковая успеет услышать «джарвис открой»
+    rest = [first[0]] * 6  # тот же голос после паузы
+    feed(listener, script.silence(0.3) + first + script.silence(0.25) + rest + script.silence(0.6), clock)
+    assert host.commands == ["открой браузер"]
+
+
+def test_unfinished_phrase_grace_expires(rig: Rig) -> None:
+    listener, host, script, clock = rig
+    feed(listener, script.silence(0.3) + script.utter("джарвис открой браузер", 0.3), clock)
+    feed(listener, script.silence(0.3), clock)
+    assert host.commands == []  # ещё ждёт продолжения
+    feed(listener, script.silence(lst.GRACE_S + 0.1), clock)
+    assert host.commands == ["открой браузер"]
+
+
 def test_ignores_own_voice_while_speaking(rig: Rig) -> None:
     _listener, host, _script, _clock = rig
     host.speaking = True
@@ -330,7 +378,29 @@ def test_custom_wake_word() -> None:
     listener = Listener(host, vad=FakeVad(), stream_factory=script.session, final=script.final, clock=clock)
     feed(listener, script.silence(0.3) + script.utter("пятница включи музыку") + script.silence(0.6), clock)
     feed(listener, script.utter("джарвис включи музыку") + script.silence(0.6), clock)
-    assert host.commands == ["включи музыку"]
+    feed(listener, script.utter("пятницу сверни окна") + script.silence(0.6), clock)  # окончание — не помеха
+    feed(listener, script.utter("эй джарвис открой почту") + script.silence(0.6), clock)
+    assert host.commands == ["включи музыку", "сверни окна"]
+
+
+def test_wake_phrase_of_several_words() -> None:
+    host, script, clock = FakeHost(wake_words=["эй джарвис"]), Script(), Clock()
+    listener = Listener(host, vad=FakeVad(), stream_factory=script.session, final=script.final, clock=clock)
+    feed(listener, script.silence(0.3) + script.utter("эй джарвис включи свет") + script.silence(0.6), clock)
+    assert host.commands == ["включи свет"]
+
+
+@pytest.mark.parametrize(
+    ("text", "early", "found"),
+    [
+        ("пятнадцать минут", False, False),  # искажения своих слов не замерены — без подтверждения нет
+        ("пятнадцать минут", True, True),  # потоковая уже слышала «пятница» — мягкий порог
+        ("пятно на рубашке", False, False),
+        ("компот свари", False, False),
+    ],
+)
+def test_match_wake_custom_word_needs_confirmation(text: str, early: bool, found: bool) -> None:
+    assert match_wake(text, ["пятница", "компьютер"], early=early)[0] is found
 
 
 def test_preroll_is_part_of_utterance(rig: Rig) -> None:

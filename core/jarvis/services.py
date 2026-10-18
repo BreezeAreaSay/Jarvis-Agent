@@ -113,8 +113,9 @@ class VoiceService(Protocol):
 
     async def stop_listening(self) -> None: ...
 
-    def follow_up(self, seconds: float | None = None) -> None:
-        """После ответа слушать продолжение без активатора (настройка voice.follow_up_s)."""
+    def follow_up(self, seconds: float | None = None, *, question: bool = False) -> None:
+        """После ответа слушать продолжение без активатора (настройка voice.follow_up_s). question — Jarvis
+        задал уточняющий вопрос: окно не короче 8 с и не тратит лимит окон подряд (voice/listener.py)."""
         ...
 
     async def ask_yes_no(self, timeout: float = 8.0) -> bool | None:

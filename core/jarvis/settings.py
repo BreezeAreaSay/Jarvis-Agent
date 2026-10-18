@@ -84,7 +84,10 @@ class TtsSettings(_Model):
     output_device: str = ""
 
 
-AiProvider = Literal["openai", "openrouter", "deepseek", "anthropic", "groq", "ollama", "lmstudio", "custom"]
+AiProvider = Literal[
+    "openai", "chatgpt", "openrouter", "deepseek", "anthropic", "groq", "ollama", "lmstudio", "custom"
+]
+# chatgpt — подписка ChatGPT через Codex (вход в аккаунт, без ключа API; компонент скачивается по кнопке)
 
 
 class AiSettings(_Model):

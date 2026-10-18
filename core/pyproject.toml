@@ -38,8 +38,13 @@ dependencies = [
   "winrt-Windows.UI.Notifications>=3.0; sys_platform == 'win32'",
   "winrt-Windows.UI.Notifications.Management>=3.0; sys_platform == 'win32'",
   "winrt-Windows.ApplicationModel>=3.0; sys_platform == 'win32'",
-  "opencv-python-headless>=4.10; sys_platform == 'win32'",
 ]
+
+[project.optional-dependencies]
+# OpenCV (+110 МБ) — только для автоблокировки по камере; в установщик не входит, скачивается по кнопке
+camera = ["opencv-python-headless>=4.10"]
+# ChatGPT по подписке через Codex (+150 МБ) — скачивается по кнопке в настройках Jarvis AI
+chatgpt = ["openai-codex==0.163.0"]
 
 [project.scripts]
 jarvis-core = "jarvis.server:main"

@@ -23,6 +23,7 @@ CONTRACT_TYPES = {
     "clock",
     "timer",
     "stopwatch",
+    "focus",
     "rates",
     "crypto",
     "stocks",

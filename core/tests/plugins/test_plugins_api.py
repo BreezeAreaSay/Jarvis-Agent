@@ -12,6 +12,9 @@ IDS = [
     "second_pc",
     "notify_voice",
     "pet",
+    "focus",
+    "clipboard",
+    "file_search",
 ]
 
 

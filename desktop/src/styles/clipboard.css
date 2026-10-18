@@ -1,0 +1,791 @@
+/* «Умный буфер» (плагин clipboard): живая панель на карточке плагина (.cb-*), палитра у курсора и карточка
+   итога ИИ в оверлее (.ov-cb*). Цвет плагина на странице — --c1/--c2 карточки (pluginKit colorVars), в оверлее —
+   свои --cb1/--cb2 (лайм, как у плитки). */
+
+/* --- карточка плагина ------------------------------------------------------------------------------------ */
+.cb-live {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cb-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cb-bar .input {
+  height: 34px;
+}
+
+.cb-filters {
+  flex: none;
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+}
+
+.cb-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-3);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.cb-filter svg {
+  width: 13px;
+  height: 13px;
+}
+
+.cb-filter b {
+  font-weight: 700;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.cb-filter:hover {
+  color: var(--text-2);
+}
+
+.cb-filter.on {
+  color: var(--text);
+  background: color-mix(in srgb, var(--c2) 32%, transparent);
+}
+
+.cb-filter.on b {
+  color: var(--c1);
+}
+
+.cb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 318px;
+  margin-right: -6px;
+  padding-right: 6px;
+  overflow-y: auto;
+}
+
+.cb-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 8px 9px 13px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  outline: none;
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+.cb-row:hover,
+.cb-row:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.cb-row.on {
+  background: color-mix(in srgb, var(--c2) 15%, rgba(255, 255, 255, 0.04));
+  border-color: color-mix(in srgb, var(--c1) 50%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c1) 12%, transparent);
+}
+
+.cb-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.cb-row-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 13.5px;
+  line-height: 1.42;
+  color: var(--text);
+}
+
+.cb-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.cb-pin-mark {
+  width: 12px;
+  height: 12px;
+  color: var(--c1);
+}
+
+.cb-row-tools {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  opacity: 0.5;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+.cb-row:hover .cb-row-tools,
+.cb-row.on .cb-row-tools,
+.cb-row:focus-within .cb-row-tools {
+  opacity: 1;
+}
+
+.cb-row-tools .icon-btn.active {
+  color: var(--c1);
+  background: color-mix(in srgb, var(--c2) 24%, transparent);
+  border-color: transparent;
+}
+
+.cb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 96px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px dashed var(--line-strong);
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+}
+
+.cb-ai {
+  padding: 12px;
+  border-radius: 14px;
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--c2) 14%, transparent), transparent 62%),
+    rgba(255, 255, 255, 0.03);
+  border: 1px solid color-mix(in srgb, var(--c1) 22%, var(--line));
+}
+
+.cb-ai-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.cb-ai-head > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--c1);
+}
+
+.cb-ai-head b {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cb-ai-note {
+  flex: none;
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--warn);
+}
+
+.cb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+.cb-chip svg {
+  width: 14px;
+  height: 14px;
+  color: var(--c1);
+}
+
+.cb-chip:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--c2) 26%, transparent);
+  border-color: color-mix(in srgb, var(--c1) 45%, transparent);
+}
+
+.cb-chip:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.cb-chip:disabled {
+  opacity: 0.45;
+}
+
+.cb-chip .spinner {
+  width: 13px;
+  height: 13px;
+  border-top-color: var(--c1);
+}
+
+.cb-result {
+  margin-top: 10px;
+  padding: 10px 12px 12px;
+  border-radius: 12px;
+  background: rgba(10, 12, 18, 0.34);
+  border: 1px solid var(--line);
+  animation: cb-in var(--t-med) var(--ease) both;
+}
+
+.cb-result-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.cb-result-text {
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.cb-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.cb-foot > svg {
+  width: 14px;
+  height: 14px;
+  color: var(--ok);
+}
+
+.cb-foot-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+@keyframes cb-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* --- оверлей: общее для палитры и карточки итога ---------------------------------------------------------- */
+.ov-cbp,
+.ov-cbr {
+  --cb1: 190, 242, 100;
+  --cb2: 101, 163, 13;
+  position: absolute;
+  z-index: 40;
+  padding: 12px;
+  background:
+    linear-gradient(160deg, rgba(var(--cb2), 0.16), transparent 52%),
+    var(--ov-card);
+}
+
+.ov-cb-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 0 10px 2px;
+}
+
+.ov-cb-tile {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background:
+    radial-gradient(130% 85% at 28% -8%, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0) 58%),
+    linear-gradient(160deg, rgb(var(--cb1)), rgb(var(--cb2)));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 4px 12px rgba(var(--cb2), 0.4);
+}
+
+.ov-cb-tile svg {
+  width: 17px;
+  height: 17px;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.25));
+}
+
+.ov-cb-tile .spinner {
+  width: 15px;
+  height: 15px;
+  border-color: rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+}
+
+.ov-cb-title {
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.ov-cb-sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.ov-cb-hotkey {
+  height: 20px;
+  font-size: 11px;
+}
+
+.ov-icon-btn.ov-cb-x svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+}
+
+.ov-cb-chips {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+
+.ov-cb-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.ov-cb-chip svg {
+  width: 13px;
+  height: 13px;
+  color: rgb(var(--cb1));
+}
+
+.ov-cb-chip:hover:not(:disabled) {
+  background: rgba(var(--cb2), 0.32);
+  border-color: rgba(var(--cb1), 0.45);
+}
+
+.ov-cb-chip:disabled {
+  opacity: 0.42;
+}
+
+/* --- палитра ------------------------------------------------------------------------------------------------ */
+.ov-cbp {
+  width: 400px;
+  max-height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+}
+
+.ov-cbp-search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 11px;
+  background: rgba(10, 12, 18, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: text;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+.ov-cbp-search:focus-within {
+  border-color: rgba(var(--cb1), 0.5);
+  box-shadow: 0 0 0 3px rgba(var(--cb1), 0.12);
+}
+
+.ov-cbp-search svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--text-3);
+}
+
+.ov-cbp-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  font-size: 13.5px;
+}
+
+.ov-cbp-search input::placeholder {
+  color: var(--text-4);
+}
+
+.ov-cbp-sel {
+  flex: none;
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(var(--cb2), 0.12);
+  border: 1px solid rgba(var(--cb1), 0.2);
+}
+
+.ov-cbp-sel.empty {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.ov-cbp-sel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: rgb(var(--cb1));
+}
+
+.ov-cbp-sel-head svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ov-cbp-read {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  margin-left: auto;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.ov-cbp-read:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ov-cbp-read svg {
+  width: 12px;
+  height: 12px;
+  color: rgb(var(--cb1));
+}
+
+.ov-cbp-sel-text {
+  margin: 3px 0 8px;
+  font-size: 12.5px;
+  line-height: 1.38;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ov-cbp-hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+
+.ov-cbp-sel:not(.empty) .ov-cbp-hint {
+  margin-top: 8px;
+}
+
+.ov-cbp-hint svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: rgba(var(--cb1), 0.8);
+}
+
+.ov-cbp-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 212px;
+  margin: 10px -4px 0;
+  padding: 0 4px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ov-cbp-row {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  text-align: left;
+  border: 1px solid transparent;
+  transition: background var(--t-fast) var(--ease);
+}
+
+.ov-cbp-row.on {
+  background: rgba(var(--cb2), 0.3);
+  border-color: rgba(var(--cb1), 0.32);
+}
+
+.ov-cbp-row-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-cbp-row-meta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-cbp-row-meta svg {
+  width: 11px;
+  height: 11px;
+  color: rgb(var(--cb1));
+}
+
+.ov-cbp-empty {
+  padding: 18px 10px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.ov-cbp-foot {
+  flex: none;
+  display: flex;
+  gap: 14px;
+  margin-top: 8px;
+  padding: 8px 2px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.ov-cbp-foot > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ov-cbp-foot .kbd {
+  height: 19px;
+  min-width: 19px;
+  justify-content: center;
+  padding: 0 5px;
+  font-size: 10.5px;
+}
+
+.ov-cbp-foot .kbd svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* --- карточка итога ИИ -------------------------------------------------------------------------------------- */
+.ov-cbr {
+  width: 380px;
+}
+
+.ov-cbr-text {
+  max-height: 210px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(10, 12, 18, 0.36);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.ov-cbr-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ov-cbr-actions .btn {
+  height: 34px;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.ov-cbr-actions .btn-ghost {
+  padding: 0 10px;
+  color: var(--text-2);
+}
+
+.ov-cbr-error {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--err-soft);
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  font-size: 13px;
+  line-height: 1.45;
+  color: #fecaca;
+}
+
+.ov-cbr.is-error .ov-cb-tile {
+  background: linear-gradient(160deg, #f87171, #dc2626);
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.35);
+}
+
+/* «ИИ думает»: три бегущие строки-заглушки */
+.ov-cbr-wait {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(10, 12, 18, 0.3);
+}
+
+.ov-cbr-wait i {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.06), rgba(var(--cb1), 0.28), rgba(255, 255, 255, 0.06));
+  background-size: 220% 100%;
+  animation: ov-cb-shimmer 1.3s linear infinite;
+}
+
+.ov-cbr-wait i:nth-child(2) {
+  width: 86%;
+  animation-delay: 0.12s;
+}
+
+.ov-cbr-wait i:nth-child(3) {
+  width: 58%;
+  animation-delay: 0.24s;
+}
+
+@keyframes ov-cb-shimmer {
+  from {
+    background-position: 110% 0;
+  }
+  to {
+    background-position: -110% 0;
+  }
+}
+
+:root[data-anim="off"] .ov-cbr-wait i {
+  animation: none;
+}
+
+/* --- демо-сцена: окно «Письмо» с выделенной фразой ------------------------------------------------------------ */
+.ov-cb-demo-doc {
+  left: 4%;
+  top: 9%;
+  width: 360px;
+  height: auto;
+  padding-bottom: 14px;
+}
+
+.ov-cb-demo-doc p {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.ov-cb-demo-doc p.dim {
+  margin: 0;
+  color: var(--text-3);
+}
+
+.ov-cb-demo-doc mark {
+  padding: 1px 0;
+  color: #fff;
+  background: rgba(var(--accent-rgb), 0.5);
+  border-radius: 3px;
+}
+
+.ov-cb-demo-cursor {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  color: #fff;
+  fill: #fff;
+  stroke: #111;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}

@@ -19,6 +19,9 @@ import { AppIcon } from "@/components/AppIcon";
 import { cx, notifyError, Toggle } from "@/ui";
 import { type JellyMood, PetCanvas } from "@/widgets/extra/PixelJelly";
 import { canToggle, deviceState, useSmartDevices } from "@/widgets/extra/smarthome";
+import { ClipboardLive } from "./ClipboardLive";
+import { FileSearchLive } from "./FileSearchLive";
+import { FocusLive } from "./FocusLive";
 import type { Plugin } from "./pluginKit";
 import { usePlugins } from "./pluginStore";
 
@@ -483,6 +486,12 @@ export function PluginLive({ plugin, onAction }: { plugin: Plugin; onAction: (id
       return <NotifyLive plugin={plugin} />;
     case "pet":
       return <PetLive plugin={plugin} />;
+    case "focus":
+      return <FocusLive plugin={plugin} />;
+    case "clipboard":
+      return <ClipboardLive plugin={plugin} />;
+    case "file_search":
+      return <FileSearchLive plugin={plugin} />;
     default:
       return null;
   }

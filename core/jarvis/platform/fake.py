@@ -10,6 +10,8 @@ from typing import Any
 from jarvis.platform.base import (
     AppInfo,
     FileInfo,
+    FileQuery,
+    IndexedFile,
     MediaInfo,
     MediaKey,
     MouseButton,
@@ -40,6 +42,48 @@ DEMO_APPS = [
     AppInfo("Excel", "EXCEL.EXE", ""),
 ]
 
+# «Индекс Windows» заглушки: (путь, размер, когда изменён, папка ли, текст внутри). Когда: ("ago", 0, 3) —
+# три часа назад, ("d", 1, 14) — вчера в 14:00; так «фото за вчера» находится в любой день.
+_HOME = "C:\\Users\\me"
+DEMO_FILES: list[tuple[str, int, tuple[str, float, float], bool, str]] = [
+    (_HOME + r"\Downloads\Счёт №125 от 15.10.pdf", 182_000, ("ago", 0, 0.4), False, "счет на оплату"),
+    (_HOME + r"\Downloads\jarvis-setup-2.0.exe", 96_400_000, ("d", 2, 11), False, ""),
+    (_HOME + r"\Downloads\Договор аренды (скан).pdf", 2_400_000, ("d", 12, 16), False, "договор аренды"),
+    (_HOME + r"\Downloads\Фото с отпуска.zip", 412_000_000, ("d", 9, 20), False, ""),
+    (_HOME + r"\Downloads\Инструкция к роутеру.pdf", 3_100_000, ("d", 20, 10), False, ""),
+    (_HOME + r"\Downloads\Лекция по физике.mp4", 845_000_000, ("d", 5, 19), False, ""),
+    (_HOME + r"\Documents\Договор с Ивановым.docx", 48_200, ("d", 1, 17), False, "договор поставки иванов"),
+    (_HOME + r"\Documents\Бюджет 2026.xlsx", 64_800, ("ago", 0, 3), False, "бюджет расходы доходы"),
+    (_HOME + r"\Documents\Презентация бюджет Q3.pptx", 5_600_000, ("d", 1, 12), False, "бюджет квартал"),
+    (_HOME + r"\Documents\Бюджет семьи — сентябрь.xlsx", 21_500, ("d", 30, 21), False, "бюджет"),
+    (_HOME + r"\Documents\Отчёт за сентябрь.docx", 132_000, ("d", 18, 15), False, "отчет за сентябрь"),
+    (_HOME + r"\Documents\Итоги квартала.docx", 88_000, ("d", 6, 13), False, "отчет о продажах за квартал"),
+    (_HOME + r"\Documents\Резюме Анна Петрова.pdf", 240_000, ("d", 60, 10), False, ""),
+    (_HOME + r"\Documents\Проекты", 0, ("d", 2, 9), True, ""),
+    (_HOME + r"\Documents\Проекты\Jarvis\План запуска.docx", 56_000, ("d", 4, 18), False, "план бюджет"),
+    (_HOME + r"\Documents\Проекты\Сайт кафе", 0, ("d", 12, 12), True, ""),
+    (_HOME + r"\Desktop\Заметки к созвону.txt", 2_100, ("ago", 0, 1), False, "созвон отчет"),
+    (_HOME + r"\Desktop\Список покупок.txt", 640, ("d", 3, 9), False, ""),
+    (_HOME + r"\Pictures\IMG_2041.jpg", 3_900_000, ("d", 1, 13), False, ""),
+    (_HOME + r"\Pictures\IMG_2042.jpg", 4_200_000, ("d", 1, 13.2), False, ""),
+    (_HOME + r"\Pictures\Screenshots\Скриншот 2026-10-17 214502.png", 820_000, ("d", 1, 21.7), False, ""),
+    (_HOME + r"\Pictures\Отпуск\Море 01.jpg", 5_100_000, ("d", 9, 18), False, ""),
+    (_HOME + r"\Music\Плейлист для бега\01 — Run.mp3", 7_300_000, ("d", 50, 8), False, ""),
+    (_HOME + r"\Videos\Запись экрана 2026-10-12.mp4", 120_000_000, ("d", 6, 22), False, ""),
+]
+
+
+def _norm(text: str) -> str:
+    return text.casefold().replace("ё", "е")
+
+
+def _demo_time(when: tuple[str, float, float], now: float) -> float:
+    kind, days, value = when
+    if kind == "ago":  # часов назад
+        return now - value * 3600
+    midnight = time.mktime((*time.localtime(now)[:3], 0, 0, 0, 0, 0, -1))
+    return min(now - 60, midnight - days * 86400 + value * 3600)
+
 
 class FakePlatform:
     name = "fake"
@@ -50,6 +94,8 @@ class FakePlatform:
         self.muted = False
         self.brightness = 70
         self.clipboard = ""
+        self.clipboard_secret = False  # копия из менеджера паролей: clipboard_get_item отдаст её без текста
+        self.clipboard_serial = 1  # номер версии буфера: растёт при каждой записи
         self.cursor = (960, 540)
         self.recycle = 3
         self.media = MediaInfo(
@@ -68,6 +114,7 @@ class FakePlatform:
             WindowInfo(103, "Spotify Premium", "Spotify.exe", 6100, (120, 120, 1300, 900)),
         ]
         self._started = time.time()
+        self.index_available = True  # тесты выключают «службу индексирования»
 
     def _call(self, name: str, *args: Any) -> None:
         self.calls.append((name, args))
@@ -202,6 +249,22 @@ class FakePlatform:
     def clipboard_set(self, text: str) -> None:
         self._call("clipboard_set", text)
         self.clipboard = text
+        self.clipboard_secret = False
+        self.clipboard_serial += 1
+
+    def clipboard_seq(self) -> int:
+        return self.clipboard_serial
+
+    def clipboard_get_item(self) -> tuple[str, bool]:
+        return ("", True) if self.clipboard_secret else (self.clipboard, False)
+
+    def clipboard_snapshot(self) -> Any:
+        return (self.clipboard, self.clipboard_secret)
+
+    def clipboard_restore(self, snapshot: Any) -> None:
+        self._call("clipboard_restore")
+        self.clipboard, self.clipboard_secret = snapshot
+        self.clipboard_serial += 1
 
     def brightness_get(self) -> int | None:
         return self.brightness
@@ -261,3 +324,46 @@ class FakePlatform:
             "videos": r"C:\Users\me\Videos",
         }
         return folders.get(name)
+
+    # --- файлы ------------------------------------------------------------------------------------
+    def search_index(self, query: FileQuery) -> list[IndexedFile]:
+        """Как индекс Windows, только по DEMO_FILES: слова — в имени (any_word — хоть одно, в пути),
+        расширения, папки, даты, слова текста."""
+        self._call("search_index", query)
+        if not self.index_available:
+            raise PlatformError("Индекс Windows недоступен: служба «Windows Search» выключена")
+        now = time.time()
+        scopes = [_norm(s).rstrip("\\") for s in query.scopes]
+        found: list[IndexedFile] = []
+        for path, size, when, is_dir, content in DEMO_FILES:
+            folder, _, name = path.rpartition("\\")
+            name_n, path_n, folder_n = _norm(name), _norm(path), _norm(folder)
+            ext = name_n.rpartition(".")[2] if "." in name_n and not is_dir else ""
+            modified = _demo_time(when, now)
+            if query.words:
+                if query.any_word and not any(w in path_n for w in query.words):
+                    continue
+                if not query.any_word and not all(w in name_n for w in query.words):
+                    continue
+            if query.extensions and ext not in query.extensions:
+                continue
+            if (query.folders_only and not is_dir) or (query.files_only and is_dir):
+                continue
+            if scopes and not any(path_n.startswith(s + "\\") for s in scopes):
+                continue
+            if any(w not in folder_n for w in query.path_words):
+                continue
+            if any(w not in _norm(content) for w in query.content):
+                continue
+            if (query.date_from is not None and modified < query.date_from) or (
+                query.date_to is not None and modified >= query.date_to
+            ):
+                continue
+            found.append(IndexedFile(path, name, 0 if is_dir else size, modified, is_dir))
+        found.sort(key=lambda f: f.modified, reverse=True)
+        return found[: max(1, query.limit)]
+
+    def reveal_path(self, path: str) -> None:
+        self._call("reveal_path", path)
+        if not path.strip():
+            raise PlatformError("Не указан путь")

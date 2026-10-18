@@ -25,6 +25,8 @@ from jarvis import paths
 from jarvis.platform.base import (
     AppInfo,
     FileInfo,
+    FileQuery,
+    IndexedFile,
     MediaInfo,
     MediaKey,
     MouseButton,
@@ -35,7 +37,7 @@ from jarvis.platform.base import (
     WindowInfo,
 )
 from jarvis.platform.windows import apps as appmod
-from jarvis.platform.windows import inputs, keys, screen, system
+from jarvis.platform.windows import files, inputs, keys, screen, system
 from jarvis.platform.windows import winapi as wa
 from jarvis.platform.windows.audio import Audio, NoAudioDevice, volume_key_presses
 from jarvis.platform.windows.media import Media
@@ -692,6 +694,28 @@ class WindowsPlatform:
     def clipboard_set(self, text: str) -> None:
         self._cb().set_text(text or "")
 
+    @_guard("Не удалось прочитать буфер обмена")
+    def clipboard_seq(self) -> int:
+        return self._cb().sequence()
+
+    @_guard("Не удалось прочитать буфер обмена")
+    def clipboard_get_item(self) -> tuple[str, bool]:
+        return self._cb().get_item()
+
+    @_guard("Не удалось сохранить буфер обмена")
+    def clipboard_snapshot(self) -> Any:
+        """Все форматы буфера. Пока прошлая вставка (paste_text) не вернула буфер человека, в нём временный
+        текст — тогда настоящий буфер — снимок этой вставки (её таймер увидит новую версию и не тронет)."""
+        with self._paste_lock:
+            pending = self._paste_pending
+        if pending is not None:
+            return list(pending.snapshot)
+        return self._cb().snapshot()
+
+    @_guard("Не удалось вернуть буфер обмена")
+    def clipboard_restore(self, snapshot: Any) -> None:
+        self._cb().restore([(int(fmt), bytes(data)) for fmt, data in snapshot or []])
+
     @_guard("Не удалось узнать яркость")
     def brightness_get(self) -> int | None:
         return self._brightness.get()
@@ -735,3 +759,21 @@ class WindowsPlatform:
 
     def known_folder(self, name: str) -> str | None:
         return system.known_folder(name or "")
+
+    # --- файлы --------------------------------------------------------------------------------------------
+
+    @_guard(files.UNAVAILABLE)
+    def search_index(self, query: FileQuery) -> list[IndexedFile]:
+        """Поиск по индексу Windows (OLE DB, Search.CollatorDSO); индекса нет — PlatformError."""
+        return files.run_query(files.build_sql(query), max(1, int(query.limit or 50)))
+
+    @_guard("Не удалось показать файл в папке")
+    def reveal_path(self, path: str) -> None:
+        p = _expand(path or "")
+        if not p:
+            raise PlatformError("Не указан путь")
+        if not os.path.exists(p):
+            raise PlatformError(f"Не найдено: «{_short(path)}»")
+        with contextlib.suppress(Exception):
+            wa.api().AllowSetForegroundWindow(wa.ASFW_ANY)
+        files.reveal(p)

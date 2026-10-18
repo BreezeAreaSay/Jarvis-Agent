@@ -279,6 +279,7 @@ class Executor:
             "Jarvis.ShowWindow": self._show_window,
             "Jarvis.Timer": self._timer,
             "Jarvis.Reminder": self._reminder,
+            "Jarvis.Briefing": self._briefing,
         }
 
     # --- вход ---------------------------------------------------------------------------------------
@@ -930,6 +931,13 @@ class Executor:
             f"Напомню в {when}: {text}", f"Напомню через {numbers.duration_text(seconds, accusative=True)}"
         )
         st.data.update({"at": at, "text": text})
+
+    async def _briefing(self, value: str, st: RunState) -> None:
+        # текст собирает jarvis.scenarios.briefing (погода, календарь, задачи…); голосом — через say итога
+        from jarvis.scenarios.briefing import build
+
+        text, spoken = await build(self.ctx, value, st.slots)
+        st.info(text, spoken)
 
 
 def _int(value: str, what: str) -> int:

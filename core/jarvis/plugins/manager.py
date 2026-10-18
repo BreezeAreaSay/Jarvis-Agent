@@ -19,7 +19,10 @@ import httpx
 from jarvis.platform.base import PlatformError
 from jarvis.plugins.autolock import AutoLock
 from jarvis.plugins.base import Plugin, error_text
+from jarvis.plugins.clipboard import SmartClipboard
 from jarvis.plugins.dictation import Dictation
+from jarvis.plugins.file_search import FileSearch
+from jarvis.plugins.focus import Focus
 from jarvis.plugins.notify_voice import NotifyVoice
 from jarvis.plugins.pet import Pet
 from jarvis.plugins.reader import Reader
@@ -45,6 +48,9 @@ PLUGIN_CLASSES: tuple[type[Plugin], ...] = (
     SecondPc,
     NotifyVoice,
     Pet,
+    Focus,
+    SmartClipboard,
+    FileSearch,
 )
 
 START_TIMEOUT = 15.0

@@ -20,6 +20,9 @@ export const PLUGIN_ORDER = [
   "second_pc",
   "notify_voice",
   "pet",
+  "focus",
+  "clipboard",
+  "file_search",
 ];
 
 const FALLBACK: Record<string, { name: string; description: string; icon: string; color: [string, string] }> = {
@@ -32,6 +35,9 @@ const FALLBACK: Record<string, { name: string; description: string; icon: string
   second_pc: { name: "Второй компьютер", description: "Команды и файлы на другом ПК", icon: "monitor-smartphone", color: ["#818CF8", "#4F46E5"] },
   notify_voice: { name: "Озвучка уведомлений", description: "Читает вслух важные уведомления", icon: "bell", color: ["#FCD34D", "#F59E0B"] },
   pet: { name: "Питомец", description: "Пиксельный друг на рабочем столе", icon: "jellyfish", color: ["#E879F9", "#A21CAF"] },
+  focus: { name: "Фокус", description: "Помодоро, тишина и защита от отвлечений", icon: "focus", color: ["#6EE7B7", "#059669"] },
+  clipboard: { name: "Умный буфер", description: "История буфера и ИИ для выделенного текста", icon: "clipboard", color: ["#BEF264", "#65A30D"] },
+  file_search: { name: "Поиск по ПК", description: "Файлы и папки — по имени, типу и дате", icon: "file-search", color: ["#93C5FD", "#2563EB"] },
 };
 
 /** Девять плагинов-заглушек, пока ядро не ответило (плитки видны, переключатели — нет). */
@@ -161,6 +167,33 @@ const GLYPHS: Record<string, () => ReactNode> = {
     </Glyph>
   ),
   bell: () => <BellRing strokeWidth={1.9} />,
+  focus: () => (
+    <Glyph>
+      <circle cx="10.6" cy="13.4" r="8.2" />
+      <circle cx="10.6" cy="13.4" r="4.4" />
+      <circle cx="10.6" cy="13.4" r="1.25" fill="currentColor" stroke="none" />
+      <path d="m10.6 13.4 8.2-8.2" />
+      <path d="M18.8 1.8v3.4h3.4" />
+    </Glyph>
+  ),
+  clipboard: () => (
+    <Glyph>
+      <rect x="3.6" y="4.6" width="12.8" height="16.6" rx="2.4" />
+      <rect x="7.2" y="2.8" width="5.6" height="3.6" rx="1.2" />
+      <path d="M7 11h6M7 14.2h6M7 17.4h3.6" />
+      <path d="M19.4 9.4v9.4a3.4 3.4 0 0 1-3.4 3.4H8.4" />
+      <Spark x={19.6} y={4.4} r={2.2} />
+    </Glyph>
+  ),
+  file_search: () => (
+    <Glyph>
+      <path d="M2.8 17V6.6a1.8 1.8 0 0 1 1.8-1.8h3.9l2 2.2h7.2a1.8 1.8 0 0 1 1.8 1.8v1.6" />
+      <path d="M2.8 17a1.8 1.8 0 0 0 1.8 1.8h5.6" />
+      <circle cx="15.6" cy="15.2" r="3.9" />
+      <path d="m18.5 18.1 2.9 2.9" />
+      <path d="M13.9 13.8a2 2 0 0 1 1.4-.6" />
+    </Glyph>
+  ),
 };
 
 const ICON_ALIASES: Record<string, string> = {
@@ -190,6 +223,11 @@ const ICON_ALIASES: Record<string, string> = {
   pet: "jellyfish",
   fish: "jellyfish",
   paw: "jellyfish",
+  target: "focus",
+  "clipboard-list": "clipboard",
+  "clipboard-paste": "clipboard",
+  "file-search": "file_search",
+  "folder-search": "file_search",
 };
 
 function glyphKey(p: Pick<Plugin, "id" | "icon">): string {

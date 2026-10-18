@@ -17,6 +17,7 @@ const SEND = new Set([
   "main:show",
   "overlay:ignore-mouse",
   "overlay:ready",
+  "overlay:focus",
 ]);
 
 function arg(name: string): string {

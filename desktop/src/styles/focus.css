@@ -1,0 +1,839 @@
+/* «Фокус»: живая панель на странице «Расширения», виджет стола и оверлей (таблетка с таймером и карточки).
+   Цвет фазы — --fx-c / --fx-rgb по классу fxt-*: фокус — изумрудный (цвет плагина), перерыв — голубой,
+   длинный перерыв — сиреневый, пауза — янтарная. Цвета фаз постоянные, как у статусов: тема их не меняет. */
+
+.fxt-focus {
+  --fx-c: #34d399;
+  --fx-rgb: 52, 211, 153;
+}
+
+.fxt-idle {
+  --fx-c: #6ee7b7;
+  --fx-rgb: 110, 231, 183;
+}
+
+.fxt-break {
+  --fx-c: #38bdf8;
+  --fx-rgb: 56, 189, 248;
+}
+
+.fxt-long {
+  --fx-c: #a78bfa;
+  --fx-rgb: 167, 139, 250;
+}
+
+.fxt-paused {
+  --fx-c: #fbbf24;
+  --fx-rgb: 251, 191, 36;
+}
+
+/* --- кольцо таймера ------------------------------------------------------------------------------- */
+.fx-ring {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  width: var(--fx-size);
+  height: var(--fx-size);
+}
+
+.fx-ring svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  transform: rotate(-90deg);
+}
+
+.fx-ring circle {
+  fill: none;
+}
+
+.fx-ring-track {
+  stroke: rgba(var(--fx-rgb), 0.14);
+  transition: stroke var(--t-med) var(--ease);
+}
+
+.fx-ring-bar {
+  stroke: var(--fx-c);
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 5px rgba(var(--fx-rgb), 0.45));
+  transition:
+    stroke-dasharray 0.4s linear,
+    stroke-dashoffset 0.4s linear,
+    stroke var(--t-med) var(--ease);
+}
+
+.fx-ring-in {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.fx-ring-time {
+  font-family: var(--font-display);
+  font-weight: 750;
+  font-size: max(14px, calc(var(--fx-size) * 0.2));
+  line-height: 1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fx-ring-phase {
+  max-width: 76%;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fx-c);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- столбики за неделю ----------------------------------------------------------------------------- */
+.fx-week {
+  --fx-day-h: 14px;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+  height: 96px;
+  /* одна общая линия основания под столбиками (над подписями дней) */
+  background: linear-gradient(rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.1)) left bottom
+    calc(var(--fx-day-h) + 5px) / 100% 1px no-repeat;
+}
+
+.fx-week-col {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  border-radius: 8px;
+  outline: none;
+}
+
+.fx-week-col:focus-visible {
+  box-shadow: 0 0 0 2px var(--line-accent);
+}
+
+.fx-week-plot {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-top: 16px; /* место для подписи над самым высоким столбиком */
+}
+
+.fx-week-bar {
+  position: relative;
+  width: min(22px, 62%);
+  border-radius: 4px 4px 0 0;
+  background: #1d7f60;
+  transition:
+    height var(--t-slow) var(--ease),
+    filter var(--t-fast) var(--ease);
+}
+
+.fx-week-bar.zero {
+  height: 2px !important;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.fx-week-col.today .fx-week-bar:not(.zero) {
+  background: #34d399;
+}
+
+.fx-week-col:hover .fx-week-bar,
+.fx-week-col:focus-visible .fx-week-bar {
+  filter: brightness(1.22);
+}
+
+.fx-week-val {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  margin-bottom: 3px;
+  transform: translateX(-50%);
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.fx-week-day {
+  flex: none;
+  height: var(--fx-day-h);
+  line-height: var(--fx-day-h);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.fx-week-col.today .fx-week-day {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.fx-week-tip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  z-index: 5;
+  display: none;
+  transform: translateX(-50%);
+  padding: 6px 9px;
+  border-radius: 9px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-2);
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.fx-week-tip b {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.fx-week-tip span {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.fx-week-col:hover .fx-week-tip,
+.fx-week-col:focus-visible .fx-week-tip {
+  display: block;
+}
+
+/* --- живая панель на странице «Расширения» ------------------------------------------------------------ */
+.fx-live {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fx-live-top {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 16px 20px 16px 16px;
+  border-radius: 16px;
+  background:
+    radial-gradient(90% 120% at 0% 50%, rgba(var(--fx-rgb), 0.11), transparent 62%),
+    rgba(255, 255, 255, 0.035);
+  border: 1px solid color-mix(in srgb, var(--fx-c) 22%, var(--line));
+  transition: border-color var(--t-med) var(--ease);
+}
+
+.fx-live-side {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fx-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+}
+
+.fx-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fx-c);
+  box-shadow: 0 0 0 3px rgba(var(--fx-rgb), 0.18);
+}
+
+.fx-live.fxt-focus .fx-dot,
+.fx-live.fxt-break .fx-dot,
+.fx-live.fxt-long .fx-dot {
+  animation: fx-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes fx-pulse {
+  50% {
+    box-shadow: 0 0 0 5px rgba(var(--fx-rgb), 0.06);
+  }
+}
+
+.fx-dots {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 2px;
+}
+
+.fx-dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.fx-dots i.done {
+  background: #34d399;
+}
+
+.fx-dots i.now {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px #34d399;
+}
+
+.fx-headline {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
+.fx-sub {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+
+.fx-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.fx-presets {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.fx-preset {
+  min-width: 34px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid transparent;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.fx-preset:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.fx-preset.on {
+  color: #a7f3d0;
+  background: rgba(52, 211, 153, 0.13);
+  border-color: rgba(52, 211, 153, 0.34);
+}
+
+.fx-preset:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.fx-live-stats {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.85fr) minmax(0, 1.35fr);
+  align-items: end;
+  gap: 20px;
+  padding: 14px 16px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line);
+}
+
+.fx-today {
+  align-self: center;
+  min-width: 0;
+}
+
+.fx-today-value {
+  font-size: 28px;
+  font-weight: 650;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+}
+
+.fx-today-label {
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.fx-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.fx-chips .chip svg {
+  width: 12px;
+  height: 12px;
+  color: var(--text-3);
+}
+
+.fx-guard {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line);
+}
+
+.fx-guard-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.fx-guard-head > svg {
+  width: 15px;
+  height: 15px;
+  color: #6ee7b7;
+}
+
+.fx-seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--line);
+}
+
+.fx-seg button {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.fx-seg button:hover {
+  color: var(--text);
+}
+
+.fx-seg button.on {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.fx-apps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.fx-app {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 190px;
+  height: 30px;
+  padding: 0 4px 0 6px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.fx-app-x {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+
+.fx-app-x:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.fx-app-x svg {
+  width: 12px;
+  height: 12px;
+}
+
+.fx-app-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px dashed var(--line-strong);
+  font-size: 12.5px;
+  color: var(--text-2);
+  transition:
+    color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.fx-app-add:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.fx-app-add svg {
+  width: 13px;
+  height: 13px;
+}
+
+.fx-app-input {
+  width: 180px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 9px;
+  background: var(--field);
+  border: 1px solid var(--line-accent);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+@container (max-width: 520px) {
+  .fx-live-top {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .fx-live-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- виджет стола ------------------------------------------------------------------------------------- */
+.fx-w-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fx-widget.tall:not(.wide) .fx-w-body {
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+}
+
+.fx-w-side {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fx-widget.tall:not(.wide) .fx-w-side {
+  flex: none;
+  justify-content: center;
+}
+
+.fx-widget.tall.wide .fx-w-side {
+  align-self: stretch;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 12px;
+}
+
+.fx-w-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fx-w-time {
+  font-family: var(--font-display);
+  font-weight: 750;
+  font-size: 26px;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fx-w-phase {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--fx-c);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fx-w-ctl {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.fx-widget.tall .fx-w-ctl {
+  margin-left: 0;
+  justify-content: center;
+}
+
+.fx-w-today {
+  margin-right: 2px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.fx-week-widget {
+  flex: 1;
+  min-width: 0;
+  height: 76px;
+}
+
+.fx-widget:not(.tall).wide .fx-week-widget {
+  height: 52px;
+  max-width: 230px;
+}
+
+.fx-week-widget .fx-week-plot {
+  padding-top: 14px;
+}
+
+.fx-w-off {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.fx-w-off-ico {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6ee7b7;
+  background: rgba(52, 211, 153, 0.12);
+}
+
+.fx-w-off-ico svg {
+  width: 19px;
+  height: 19px;
+}
+
+/* --- оверлей: таблетка и карточки в левом верхнем углу -------------------------------------------------- */
+.fx-ov {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+  z-index: 26;
+  width: min(352px, calc(100% - 36px));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.fx-ov .ov-slot-pad {
+  justify-content: flex-start;
+}
+
+.fx-pill-wrap {
+  transform-origin: 0 0;
+  margin-bottom: 10px;
+}
+
+.fx-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 40px;
+  padding: 0 8px 0 7px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(46, 50, 63, 0.94), rgba(29, 32, 42, 0.94));
+  border: 1px solid var(--ov-border);
+  box-shadow:
+    var(--ov-shadow),
+    0 0 0 1px rgba(var(--fx-rgb), 0.12);
+  white-space: nowrap;
+}
+
+.fx-pill-time {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.fx-pill-label {
+  padding-right: 4px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--fx-c);
+}
+
+.fx-pill-ctl {
+  display: inline-flex;
+  gap: 4px;
+  width: 0;
+  margin-left: -6px;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    width var(--t-med) var(--ease),
+    margin var(--t-med) var(--ease),
+    opacity var(--t-fast) var(--ease);
+}
+
+.fx-pill:hover .fx-pill-ctl,
+.fx-pill:focus-within .fx-pill-ctl {
+  width: 56px;
+  margin-left: 0;
+  opacity: 1;
+}
+
+.fx-pill-btn {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  transition: background var(--t-fast) var(--ease);
+}
+
+.fx-pill-btn:hover:not(:disabled) {
+  background: rgba(var(--fx-rgb), 0.28);
+}
+
+.fx-pill-btn.stop:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.28);
+}
+
+.fx-pill-btn svg {
+  width: 11px;
+  height: 11px;
+  fill: currentColor;
+}
+
+.fx-card {
+  width: 100%;
+  padding: 14px 14px 13px;
+  overflow: hidden;
+  transform-origin: 0 0;
+}
+
+.fx-card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.fx-card-ico {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fx-c);
+  background: rgba(var(--fx-rgb), 0.14);
+  box-shadow: inset 0 0 0 1px rgba(var(--fx-rgb), 0.24);
+}
+
+.fx-card-ico svg {
+  width: 20px;
+  height: 20px;
+}
+
+.fx-card-text {
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.fx-card-title {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.fx-card-msg {
+  margin-top: 3px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+
+.fx-card .ov-actions {
+  margin-top: 12px;
+}
+
+.fx-card .ov-actions.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.fx-card-countdown i {
+  background: linear-gradient(90deg, rgba(52, 211, 153, 0.3), #34d399);
+}
+
+/* --- «Анимации» выключены ----------------------------------------------------------------------------- */
+:root[data-anim="off"] .fx-ring-bar,
+:root[data-anim="off"] .fx-week-bar,
+:root[data-anim="off"] .fx-pill-ctl {
+  transition: none;
+}
+
+:root[data-anim="off"] .fx-dot {
+  animation: none !important;
+}

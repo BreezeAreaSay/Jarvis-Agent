@@ -916,12 +916,39 @@ def mcp_tool(ctx: "AppContext", spec: dict[str, Any]) -> Tool | None:
     )
 
 
+ToolProvider = Callable[[], list[Tool]]
+
+
 class ToolRegistry:
-    """Набор инструментов для режима чата с учётом настроек (поиск, память) и подключённых серверов MCP."""
+    """Набор инструментов для режима чата с учётом настроек (поиск, память), инструментов плагинов
+    (register_provider) и подключённых серверов MCP."""
 
     def __init__(self, ctx: "AppContext") -> None:
         self.ctx = ctx
         self.builtin: dict[str, Tool] = {t.name: t for t in builtin_tools()}
+        self._providers: dict[str, ToolProvider] = {}
+
+    def register_provider(self, name: str, provider: ToolProvider) -> Callable[[], None]:
+        """Источник дополнительных инструментов (плагин): список перечитывается при каждом ответе ИИ.
+
+        Встроенные инструменты он не перекрывает; в режиме «Чат» берутся только in_chat_mode. Вернёт отписку.
+        """
+        self._providers[name] = provider
+
+        def unregister() -> None:
+            if self._providers.get(name) is provider:
+                del self._providers[name]
+
+        return unregister
+
+    def _provided(self) -> list[Tool]:
+        out: list[Tool] = []
+        for name, provider in list(self._providers.items()):
+            try:
+                out.extend(t for t in provider() or [] if isinstance(t, Tool))
+            except Exception:
+                log.exception("инструменты «%s» недоступны", name)
+        return out
 
     def available(self, mode: str, *, source: str = "text") -> dict[str, Tool]:
         settings = self.ctx.settings.value.ai
@@ -936,6 +963,10 @@ class ToolRegistry:
             if tool.name == "run_agent" and source == "agent":
                 continue
             out[tool.name] = tool
+        for tool in self._provided():
+            taken = tool.name in self.builtin or tool.name in out
+            if not taken and (mode != "chat" or tool.in_chat_mode):
+                out[tool.name] = tool
         if mode != "chat":
             try:
                 specs = self.ctx.mcp.tools()

@@ -34,6 +34,7 @@ CATEGORIES: dict[str, str] = {
     "plugins": "Плагины",
     "desks": "Столы",
     "smarthome": "Умный дом",
+    "scenarios": "Сценарии",
 }
 
 

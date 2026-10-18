@@ -75,6 +75,38 @@ class FileInfo:
 
 
 @dataclass
+class FileQuery:
+    """Запрос к индексу поиска Windows (собирает плагин «Поиск по ПК»). Все слова — уже без регистра,
+    «ё» → «е» и основы («презентац», «иванов»); экранирует их платформа."""
+
+    words: list[str] = field(default_factory=list)  # части имени файла
+    any_word: bool = False  # хватит любого слова (и в пути целиком, не только в имени)
+    extensions: list[str] = field(default_factory=list)  # без точки: pdf, docx; пусто — любые
+    folders_only: bool = False
+    files_only: bool = False
+    scopes: list[str] = field(default_factory=list)  # папки (вместе с вложенными); пусто — весь индекс
+    path_words: list[str] = field(default_factory=list)  # части пути папки: «проект» из «в папке проекты»
+    content: list[str] = field(default_factory=list)  # слова в тексте файлов
+    date_from: float | None = None  # изменён не раньше (unix time)
+    date_to: float | None = None  # и раньше этого
+    limit: int = 50
+
+
+@dataclass
+class IndexedFile:
+    """Найденный файл или папка."""
+
+    path: str
+    name: str
+    size: int = 0
+    modified: float = 0.0  # unix time
+    is_dir: bool = False
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class SystemStats:
     cpu: float = 0.0  # загрузка, %
     ram: float = 0.0
@@ -143,6 +175,11 @@ class Platform(Protocol):
     def screenshot(self, window: int | None = None) -> bytes: ...  # PNG
     def clipboard_get(self) -> str: ...
     def clipboard_set(self, text: str) -> None: ...
+    def clipboard_seq(self) -> int: ...  # номер версии буфера: меняется при каждом копировании
+    # текст буфера и «секрет ли это» (менеджер паролей пометил копию «не запоминать») — секрет без текста
+    def clipboard_get_item(self) -> tuple[str, bool]: ...
+    def clipboard_snapshot(self) -> Any: ...  # всё содержимое буфера (все форматы) — для clipboard_restore
+    def clipboard_restore(self, snapshot: Any) -> None: ...
     def brightness_get(self) -> int | None: ...
     def brightness_set(self, level: int) -> None: ...
     def recycle_bin_count(self) -> int: ...
@@ -154,3 +191,7 @@ class Platform(Protocol):
     def known_folder(
         self, name: str
     ) -> str | None: ...  # downloads, documents, desktop, pictures, music, videos
+
+    # --- файлы ------------------------------------------------------------------------------------
+    def search_index(self, query: FileQuery) -> list[IndexedFile]: ...  # PlatformError — индекса нет
+    def reveal_path(self, path: str) -> None: ...  # показать в Проводнике с выделенным файлом

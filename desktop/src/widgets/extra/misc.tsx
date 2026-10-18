@@ -111,6 +111,9 @@ const SHORT_NAMES: Record<string, string> = {
   second_pc: "Второй ПК",
   notify_voice: "Озвучка",
   pet: "Питомец",
+  focus: "Фокус",
+  clipboard: "Буфер",
+  file_search: "Поиск",
 };
 
 export function PluginsWidget({ w, h, config, setConfig }: WidgetProps) {

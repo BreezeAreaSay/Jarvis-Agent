@@ -487,6 +487,25 @@ EXCLUDE_FROM_HISTORY = (
     ("CanIncludeInClipboardHistory", b"\x00\x00\x00\x00"),
     ("CanUploadToCloudClipboard", b"\x00\x00\x00\x00"),
 )
+# пометки «не запоминать»: так менеджеры паролей (KeePass, 1Password, Bitwarden) и сам Jarvis при вставке
+# прячут копию от журналов буфера; «Clipboard Viewer Ignore» — старый общий обычай (KeePass, Ditto)
+MONITOR_EXCLUDE = "ExcludeClipboardContentFromMonitorProcessing"
+HISTORY_FLAG = "CanIncludeInClipboardHistory"
+VIEWER_IGNORE = "Clipboard Viewer Ignore"
+SENSITIVE_MARKS = (MONITOR_EXCLUDE, HISTORY_FLAG, VIEWER_IGNORE)
+
+
+def is_sensitive(marks: dict[str, bytes | None]) -> bool:
+    """Копию нельзя запоминать: есть MONITOR_EXCLUDE или VIEWER_IGNORE, либо HISTORY_FLAG равен 0.
+
+    marks — найденные в буфере пометки и их байты (None — не прочитались). Нечитаемый HISTORY_FLAG тоже
+    считается запретом: лучше не запомнить лишнее, чем запомнить пароль."""
+    if MONITOR_EXCLUDE in marks or VIEWER_IGNORE in marks:
+        return True
+    if HISTORY_FLAG in marks:
+        value = marks[HISTORY_FLAG]
+        return not value or len(value) < 4 or int.from_bytes(value[:4], "little") == 0
+    return False
 
 
 def restorable_format(fmt: int) -> bool:
@@ -535,6 +554,35 @@ class Clipboard:
             self.cb.CloseClipboard()
         text = data if isinstance(data, str) else ""
         return text.split("\x00", 1)[0].replace("\r\n", "\n")
+
+    def get_item(self) -> tuple[str, bool]:
+        """Текст буфера и «секрет ли это» (is_sensitive); у секрета текст не читается вовсе."""
+        self._open()
+        try:
+            marks: dict[str, bytes | None] = {}
+            for name in SENSITIVE_MARKS:
+                fmt = int(self.cb.RegisterClipboardFormat(name) or 0)
+                if fmt and self.cb.IsClipboardFormatAvailable(fmt):
+                    marks[name] = self._raw(fmt)
+            if is_sensitive(marks):
+                return "", True
+            if not self.cb.IsClipboardFormatAvailable(CF_UNICODETEXT):
+                return "", False
+            data = self.cb.GetClipboardData(CF_UNICODETEXT)
+        except Exception as e:
+            log.warning("буфер обмена не прочитан: %s", e)
+            raise PlatformError("Не удалось прочитать буфер обмена") from e
+        finally:
+            self.cb.CloseClipboard()
+        text = data if isinstance(data, str) else ""
+        return text.split("\x00", 1)[0].replace("\r\n", "\n"), False
+
+    def _raw(self, fmt: int) -> bytes | None:
+        try:
+            data = self.cb.GetGlobalMemory(self.cb.GetClipboardDataHandle(fmt))
+        except Exception:
+            return None
+        return bytes(data) if isinstance(data, bytes | bytearray) else None
 
     def set_text(self, text: str, transient: bool = False) -> int:
         """Записать текст; transient — не сохранять в журнале буфера. Возвращает номер версии буфера."""

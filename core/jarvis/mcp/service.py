@@ -15,7 +15,7 @@ from mcp.shared.exceptions import McpError
 
 from jarvis import paths
 from jarvis.ai.format import one_line
-from jarvis.mcp import aidev, clients
+from jarvis.mcp import clients
 from jarvis.mcp.catalog import McpCatalog
 from jarvis.mcp.client import McpConnection, result_text
 from jarvis.mcp.config import McpServerConfig, load, masked, new_server_id, normalize, save, slug
@@ -132,12 +132,9 @@ class Mcp(BaseService):
     def get(self, server_id: str) -> dict[str, Any]:
         return self.server_json(self._config(server_id))
 
-    async def add(self, data: dict[str, Any], *, server_id: str = "") -> dict[str, Any]:
+    async def add(self, data: dict[str, Any]) -> dict[str, Any]:
         configs = self._configs()
-        server_id = server_id or new_server_id(str(data.get("name") or ""))
-        if any(c.id == server_id for c in configs):
-            raise UserFacingError("Такой сервер MCP уже подключён")
-        config = normalize(data, server_id=server_id)
+        config = normalize(data, server_id=new_server_id(str(data.get("name") or "")))
         configs.append(config)
         save(self.ctx.db, configs)
         self._open(config)
@@ -241,48 +238,6 @@ class Mcp(BaseService):
         if result.isError:
             raise UserFacingError(f"Инструмент «{tool}» вернул ошибку: {one_line(text, 300)}")
         return text
-
-    # --- AI Dev System ----------------------------------------------------------------------------------
-    def _aidev_profiles(self, config: McpServerConfig | None) -> list[str]:
-        if config is None or "AI_DEV_PROFILES" not in config.env:
-            return list(aidev.DEFAULT_PROFILES)
-        return aidev.normalize_profiles(config.env["AI_DEV_PROFILES"])
-
-    async def aidev_state(self) -> dict[str, Any]:
-        """Найдена ли установка, подключена ли она к Jarvis и с какими профилями."""
-        config = next((c for c in self._configs() if c.id == aidev.SERVER_ID), None)
-        install = await self.ctx.run_io(aidev.find)
-        enabled = self._aidev_profiles(config)
-        return {
-            "found": install is not None,
-            "install": install.to_json() if install is not None else None,
-            "server": self.server_json(config) if config is not None else None,
-            "profiles": [
-                {"id": pid, "tools": n, "description": text, "enabled": pid in enabled}
-                for pid, n, text in aidev.PROFILES
-            ],
-            "tools": aidev.tools_count(enabled),
-            "github": aidev.GITHUB,
-        }
-
-    async def aidev_connect(self, profiles: list[str] | None = None, folder: str = "") -> dict[str, Any]:
-        """Подключить AI Dev System (или сменить профили). folder — папка клона, которую указал человек."""
-        config = next((c for c in self._configs() if c.id == aidev.SERVER_ID), None)
-        wanted = aidev.normalize_profiles(profiles) if profiles is not None else self._aidev_profiles(config)
-        if folder:
-            install = await self.ctx.run_io(aidev.from_folder, folder)
-        elif config is not None:  # только профили: команду запуска не трогаем
-            install = aidev.AiDevInstall("jarvis", "", config.command, list(config.args), dict(config.env))
-        else:
-            install = await self.ctx.run_io(aidev.find)
-            if install is None:
-                raise UserFacingError("AI Dev System не найден на этом ПК — укажите папку его клона")
-        data = aidev.server_data(install, wanted)
-        if config is not None:
-            await self.update(aidev.SERVER_ID, data)
-        else:
-            await self.add(data, server_id=aidev.SERVER_ID)
-        return await self.aidev_state()
 
     # --- импорт из других программ -----------------------------------------------------------------------
     @staticmethod

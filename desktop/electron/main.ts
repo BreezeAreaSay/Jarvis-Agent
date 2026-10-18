@@ -28,6 +28,9 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0);
 }
 
+// интерфейс русский — и даты/время в полях ввода тоже по-русски, какой бы ни была система
+app.commandLine.appendSwitch("lang", "ru");
+
 const core = new CoreProcess();
 const client = new CoreClient(core);
 

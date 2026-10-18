@@ -43,7 +43,7 @@ import { listMemory, PAGE, useApps, useCatalog, useCommands, usePackNames, usePa
 
 type StateFilter = "all" | "on" | "off";
 
-const SOURCE_ORDER: Record<CommandInfo["source"], number> = { user: 0, pack: 1, dynamic: 2, builtin: 3 };
+const SOURCE_ORDER: Record<CommandInfo["source"], number> = { user: 0, pack: 1, builtin: 2, dynamic: 3 };
 
 /** Тост по итогу выполнения: «Включить музыку — Выполнено ✓». */
 function notifyResult(res: ExecResult | undefined, fallbackTitle: string) {

@@ -1,0 +1,15 @@
+{
+  "name": "Jarvis — пульт",
+  "short_name": "Jarvis",
+  "description": "Пульт управления компьютером: музыка, громкость, команды Jarvis",
+  "lang": "ru",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14161c",
+  "theme_color": "#14161c",
+  "icons": [
+    {"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}
+  ]
+}

@@ -1,0 +1,187 @@
+"""Синтез речи: очередь фраз, interrupt/silence, wait, события, запасной движок, сигналы, прослушивание."""
+
+import asyncio
+import time
+from collections.abc import AsyncIterator
+from typing import Any
+
+import numpy as np
+import pytest
+
+from jarvis.context import AppContext
+from jarvis.services import UserFacingError
+from jarvis.voice.player import Chunk, Player
+from jarvis.voice.tts import Tts
+from tests.conftest import EventLog
+from tests.voice.helpers import FakeEngine, FakeSink, InstalledModels
+
+Rig = tuple[Tts, FakeSink, dict[str, FakeEngine]]
+
+
+async def wait_for(cond: Any, timeout: float = 3.0) -> None:
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while not cond():
+        if loop.time() > end:
+            raise AssertionError("не дождались")
+        await asyncio.sleep(0.01)
+
+
+@pytest.fixture
+async def rig(ctx: AppContext, events: EventLog) -> AsyncIterator[Rig]:
+    ctx.loop = asyncio.get_running_loop()
+    ctx.bus.bind_loop(ctx.loop)
+    sink = FakeSink(rate=16000, factor=0.05)
+    engines = {"piper": FakeEngine("piper"), "edge": FakeEngine("edge"), "openai": FakeEngine("openai")}
+    tts = Tts(
+        ctx,
+        sink_factory=lambda: sink,
+        engines=engines,  # type: ignore[arg-type]
+        models=InstalledModels(),  # type: ignore[arg-type]
+        auto_download=False,
+    )
+    await tts.start()
+    yield tts, sink, engines
+    await tts.stop()
+
+
+async def test_say_wait_plays_all_sentences(rig: Rig, events: EventLog) -> None:
+    tts, sink, engines = rig
+    await tts.say("Добрый день, сэр. Все системы в норме! Открыл Telegram.", wait=True)
+    texts = [c[0] for c in engines["piper"].calls]
+    assert texts == ["Добрый день, сэр.", "Все системы в норме!", "Открыл телеграм."]  # латиница — по-русски
+    assert sink.samples >= 3 * int(0.3 * 16000) * 0.99
+    await wait_for(lambda: not tts.speaking)
+    await asyncio.sleep(0.05)
+    states = events.of("tts.state")
+    assert states[0]["speaking"] is True and "Добрый день" in states[0]["text"]
+    assert states[-1] == {"speaking": False}
+    levels = [e["level"] for e in events.of("tts.level")]
+    assert levels and max(levels) > 0.3 and levels[-1] == 0.0
+
+
+async def test_speaking_true_from_say_until_end(rig: Rig) -> None:
+    tts, _, engines = rig
+    engines["piper"].delay = 0.05
+    assert not tts.speaking
+    await tts.say("Проверка связи.")
+    assert tts.speaking  # ещё синтезируется — уже «говорит» (голосовой сервис не слушает эхо)
+    await wait_for(lambda: not tts.speaking)
+
+
+async def test_interrupt_and_silence(rig: Rig, events: EventLog) -> None:
+    tts, sink, engines = rig
+    sink.factor = 1.0  # в реальном времени: 0,3 с на фразу
+    long = "Первая фраза. Вторая фраза. Третья фраза. Четвёртая фраза."
+    waiter = asyncio.ensure_future(tts.say(long, wait=True))
+    await wait_for(lambda: sink.samples > 1000)
+    await tts.say("Стоп.", interrupt=True, wait=True)
+    await asyncio.wait_for(waiter, 2.0)  # прерванная фраза тоже «закончилась»
+    played = sink.samples
+    assert played < 3 * int(0.3 * 16000)  # первая не доиграла, остальные не звучали
+    assert ("Стоп.", "v1") in engines["piper"].calls
+    assert sink.aborted >= 1
+    waiter = asyncio.ensure_future(tts.say("Длинная фраза. Ещё одна.", wait=True))
+    await wait_for(lambda: tts.player.busy)
+    tts.silence()
+    await asyncio.wait_for(waiter, 2.0)
+    await wait_for(lambda: not tts.speaking)
+    await asyncio.sleep(0.05)
+    assert events.of("tts.state")[-1] == {"speaking": False}
+
+
+async def test_fallback_to_piper_with_error_event(rig: Rig, ctx: AppContext, events: EventLog) -> None:
+    tts, sink, engines = rig
+    ctx.settings.patch({"tts": {"engine": "openai"}})
+    engines["openai"].fail = "нет ключа OpenAI"
+    engines["openai"].ru = False
+    await tts.say("Привет, рад вас слышать. Как у вас дела сегодня?", wait=True)
+    await asyncio.sleep(0.05)
+    errors = events.of("tts.error")
+    assert len(errors) == 1 and "нет ключа OpenAI" in errors[0]["error"] and errors[0]["engine"] == "openai"
+    assert [c[0] for c in engines["piper"].calls] == ["Привет, рад вас слышать.", "Как у вас дела сегодня?"]
+    assert len(engines["openai"].calls) == 1  # упавший движок минуту не трогаем — сразу запасной
+    assert sink.samples > 0
+
+
+async def test_all_engines_fail(rig: Rig, ctx: AppContext, events: EventLog) -> None:
+    tts, sink, engines = rig
+    engines["piper"].fail = "голос не скачан"
+    await tts.say("Привет.", wait=True)
+    await asyncio.sleep(0.05)
+    assert sink.samples == 0 and not tts.speaking
+    assert any("Не удалось озвучить" in e["error"] for e in events.of("tts.error"))
+    with pytest.raises(UserFacingError):
+        await tts.synthesize("Привет.")
+
+
+async def test_synthesize_returns_audio_without_playing(rig: Rig) -> None:
+    tts, sink, _ = rig
+    samples, rate = await tts.synthesize("Первое предложение. Второе предложение.")
+    assert rate == 16000 and samples.dtype == np.float32
+    assert len(samples) > 2 * int(0.3 * 16000)  # две фразы и пауза между ними
+    assert sink.samples == 0
+    empty, _ = await tts.synthesize("")
+    assert len(empty) == 0
+
+
+async def test_play_and_volume(rig: Rig, ctx: AppContext) -> None:
+    tts, sink, _ = rig
+    ctx.settings.patch({"tts": {"volume": 50}})
+    await tts.play(np.full(8000, 0.8, dtype=np.float32), 8000, wait=True)
+    assert sink.samples == 16000  # 8 кГц → частота устройства
+    loud = max(float(np.max(np.abs(b))) for b in sink.blocks)
+    assert abs(loud - 0.4) < 0.01
+
+
+async def test_earcon_is_not_speech(rig: Rig, events: EventLog) -> None:
+    tts, sink, _ = rig
+    tts.play_earcon("wake")
+    assert not tts.speaking
+    await wait_for(lambda: sink.samples > 0)
+    await asyncio.sleep(0.05)
+    assert events.of("tts.state") == []
+    tts.play_earcon("unknown")  # неизвестный — тихо ничего
+
+
+async def test_voices_and_test(rig: Rig) -> None:
+    tts, sink, engines = rig
+    assert (await tts.voices("edge"))[0]["id"] == "v1"
+    with pytest.raises(UserFacingError):
+        await tts.voices("nope")
+    await tts.test(None, "edge", "ru-RU-SvetlanaNeural")
+    assert engines["edge"].calls[0][1] == "ru-RU-SvetlanaNeural"
+    assert "Добрый день" in engines["edge"].calls[0][0]
+    await wait_for(lambda: sink.samples > 0)
+    engines["edge"].fail = "Edge TTS недоступен"
+    with pytest.raises(UserFacingError, match="Edge TTS недоступен"):
+        await tts.test("Проверка", "edge")  # прослушивание — без запасных: ошибку видно сразу
+
+
+async def test_say_empty_and_status(rig: Rig) -> None:
+    tts, sink, _ = rig
+    await tts.say("   ", wait=True)
+    await tts.say("👍", wait=True)
+    assert sink.samples == 0 and not tts.speaking
+    status = tts.status()
+    assert status["engine"] == "piper" and status["speaking"] is False
+
+
+def test_player_stop_interrupts_and_calls_markers() -> None:
+    sink = FakeSink(factor=1.0)  # в реальном времени: фрагмент на 1 с
+    player = Player(lambda: sink)
+    done: list[str] = []
+    player.put(Chunk(0, np.zeros(16000, dtype=np.float32), 16000))
+    player.put(Chunk(0, marker=lambda: done.append("m")))
+    end = time.monotonic() + 1.0
+    while not player.busy and time.monotonic() < end:
+        time.sleep(0.005)
+    time.sleep(0.05)
+    t0 = time.monotonic()
+    player.stop()
+    assert done == ["m"]  # метка сброшенной фразы вызвана — say(wait=True) не повиснет
+    while player.busy and time.monotonic() - t0 < 1.0:
+        time.sleep(0.005)
+    assert time.monotonic() - t0 < 0.2  # оборвано через блок, а не после целой фразы
+    assert sink.samples < 16000 and sink.aborted == 1
+    player.close()

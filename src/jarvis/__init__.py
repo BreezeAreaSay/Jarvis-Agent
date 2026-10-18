@@ -1,1 +1,0 @@
-"""Jarvis — локальный Agent Runtime."""

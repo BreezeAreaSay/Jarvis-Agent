@@ -1,0 +1,279 @@
+# Контракты Jarvis: ядро ↔ интерфейс, модули ядра
+
+Документ — договор между частями. Меняешь маршрут, событие или формат — правь этот файл в том же коммите.
+
+## 0. Устройство
+
+```
+desktop/ (Electron + React)                     core/ (Python 3.12, FastAPI)
+  main process: окна, трей, хоткеи, ядро  ──spawn──►  python -m jarvis --port 0 --parent-pid <pid>
+  renderer: главное окно, оверлей, аватар  ◄─HTTP /api/*, WebSocket /ws (события)─►  сервисы ядра
+```
+
+- Ядро печатает в stdout `JARVIS_CORE_READY {"port": N, "token": "…", "pid": …, "version": "…"}`.
+- Все `/api/*` (кроме `/api/health`) требуют заголовок `X-Jarvis-Token: <token>`; `/ws?token=<token>`.
+- Ошибки: HTTP 400 `{"detail": "текст для человека"}`, 404, 422 (валидация).
+- Ответы — JSON, ключи snake_case, время — unix-секунды (float).
+
+### Правила кода ядра
+
+- Python 3.12, аннотации типов, ruff (line-length 110). Идентификаторы — по-английски; докстринги, комментарии и
+  всё, что видит человек, — по-русски.
+- `import jarvis.<модуль>` обязан работать на Linux: Windows-библиотеки (`win32*`, `pycaw`, `comtypes`,
+  `uiautomation`, `winrt`, `ctypes.windll`) — только лениво внутри функций или под `sys.platform == "win32"`.
+  Тяжёлые/системные библиотеки (`sounddevice`, `soundcard`, `pynput`, `sherpa_onnx`, `cv2`) — тоже лениво.
+- Действия с ОС — только через `ctx.platform` (протокол `jarvis.platform.base.Platform`) и только из потока
+  платформы: `await ctx.run_platform(ctx.platform.volume_set, 50)`. Прочую блокирующую работу —
+  `await ctx.run_io(fn, …)`.
+- События — `ctx.bus.publish(type, data)` (из любого потока); данные — JSON-сериализуемые.
+- Ошибка для человека — `raise UserFacingError("…")` (API отдаст 400 с этим текстом).
+- База — `ctx.db` (таблицы в `jarvis/db.py`; новые таблицы не заводить — для своего состояния есть `kv`
+  с ключами `<область>:<имя>` и JSON-файлы в `paths.sub_dir("<область>")`).
+- Сеть — `httpx.AsyncClient` (прокси для ИИ — `settings.ai.proxy`). В тестах сети нет: `httpx.MockTransport`.
+- Тесты — `core/tests/<область>/`, фикстуры из `tests/conftest.py` (`ctx`, `running_ctx`, `client`,
+  `events`). Тесты проходят на Linux без микрофона, моделей и сети.
+- Новая зависимость: `uv pip install <пакет>` в `.venv` и строка в отчёте (pyproject правит интегратор).
+
+## 1. Ядро (общие маршруты)
+
+| Маршрут | Тело / параметры | Ответ |
+|---|---|---|
+| `GET /api/health` | — | `{ok, version}` (без токена) |
+| `GET /api/status` | — | `{version, platform, data_dir, uptime_s, voice: {state}, ai: {configured}, ready}` |
+| `GET /api/settings` | — | `{settings: Settings, secrets: {name: bool}}` |
+| `PATCH /api/settings` | частичный Settings | `{settings}` (422 — неверное значение) |
+| `PUT /api/secrets` | `{name, value}` (`""` — удалить) | `{secrets}` |
+| `POST /api/dispatch` | `{text, source?: "text"\|"ui"\|"voice"\|"remote", speak?: bool}` | итог (см. ниже) |
+| `GET /api/history?limit=50` | — | `{items: HistoryItem[]}` (новые первыми) |
+| `DELETE /api/history` | — | `{ok}` |
+| `GET /api/confirm` | — | `{items: Confirmation[]}` |
+| `POST /api/confirm/{id}` | `{allow: bool}` | `{ok}` |
+
+Settings — модель `jarvis/settings.py` (в интерфейсе — `desktop/src/api/types.ts`). Секреты:
+`ai_api_key, openai_api_key, fish_api_key, telegram_token, ha_token, yandex_iot_token, remote_token`.
+
+Итог `/api/dispatch`: `{kind: "command", result: ExecResult, history}` | `{kind: "ai", chat_id, text, actions,
+sources, error, history}` | `{kind: "unknown", history}` | `{kind: "stop"}` | `{kind: "empty"}`.
+
+`HistoryItem = {id, ts, source, text, kind: command|ai|unknown|system, title, status: ok|error|pending|cancelled,
+detail, icon, command_id}`.
+
+`ExecResult = {ok, title, message, icon, say, command_ids, data}`; `data.silent` — не показывать тост,
+`data.cancelled` — отменено человеком.
+
+`Confirmation = {id, title, detail, kind: command|agent|plugin, source, created, timeout}`.
+
+### События ядра
+
+| Событие | Данные |
+|---|---|
+| `hello` | первое сообщение WS: `{version, platform, settings, secrets, voice: {state}, ai: {configured}}` |
+| `core.ready` | `{}` |
+| `settings.changed` | `{settings}` |
+| `secrets.changed` | `{name, set}` |
+| `dispatch.started` / `dispatch.done` | `{text, source}` / `{text, kind, ok?}` |
+| `history.added` / `history.updated` | `{item: HistoryItem}` |
+| `history.cleared` | `{}` |
+| `command.executed` | `{text, source, result: ExecResult}` |
+| `toast` | `{title, message, status: ok\|error\|info, icon, ts}` — карточка в оверлее («Включить музыку — Выполнено ✓») |
+| `confirm.request` | `Confirmation` — карточка «Отклонить / Разрешить» |
+| `confirm.resolved` | `{id, allow}` |
+
+Иконки (`icon`): ключ бренда или категории — `spotify, chrome, telegram, discord, obs, steam, youtube, vk,
+yandex, photoshop, vscode, minecraft, explorer, volume, mute, media, window, power, lock, screenshot, keyboard,
+mouse, search, weather, timer, note, task, calendar, desk, ai, home, plugin, error, unknown, system`.
+Интерфейс показывает для ключа значок; неизвестный ключ — общий.
+
+## 2. Команды (`jarvis/commands`, `jarvis/api/commands.py`)
+
+### Формат команды
+
+```json
+{
+  "id": "user.stream_mode",
+  "name": "Режим стрима",
+  "category": "user",
+  "phrases": ["включи режим стрима", "режим стрима"],
+  "optional": ["пожалуйста", "быстро"],
+  "actions": [
+    {"type": "Launch.File", "value": "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe"},
+    {"type": "Keys.Press", "value": "ctrl+shift+s"},
+    {"type": "Wait", "value": "2"},
+    {"type": "Mouse.ClickLeft", "value": "960 540"},
+    {"type": "System.VolumeSet", "value": "35"}
+  ],
+  "confirm": false,
+  "chain": true,
+  "icon": "obs",
+  "enabled": true,
+  "say": ""
+}
+```
+
+- `phrases` — фразы активации (обязательная часть), `optional` — слова, которые можно добавить («пожалуйста»).
+- Шаблоны слотов в фразах: `{number}` (число словами или цифрами: «пятьдесят», «50», «50%»), `{app}` (программа
+  из меню «Пуск»), `{site}` (известный сайт), `{desk}` (стол), `{text}` / `{query}` (свободный хвост фразы).
+  В `value` действий слоты подставляются: `"value": "{number}"`.
+- `confirm` — спросить подтверждение перед выполнением; `chain` («Связывать») — команду можно соединять с другими
+  в одной фразе («сверни все окна и включи музыку»).
+- `id`: встроенные — `builtin.<имя>`, паков — `pack.<pack>.<имя>`, свои — `user.<slug>`, динамические —
+  `<провайдер>:<ключ>`.
+
+### Действия (`type`)
+
+`Launch.File, Launch.App, Launch.Url, Launch.Folder, Launch.Shell, App.Close, App.Kill, App.Focus, Keys.Press,
+Keys.Type, Keys.Paste, Mouse.ClickLeft, Mouse.ClickRight, Mouse.DoubleClick, Mouse.Move, Mouse.Scroll,
+System.VolumeSet, System.VolumeUp, System.VolumeDown, System.Mute, System.Unmute, System.MuteToggle,
+System.BrightnessSet, System.Lock, System.Sleep, System.Shutdown, System.Restart, System.CancelShutdown,
+System.Screenshot, System.EmptyRecycleBin, Media.PlayPause, Media.Next, Media.Prev, Media.Stop,
+Window.MinimizeAll, Window.Minimize, Window.Maximize, Window.Restore, Window.Close, Wait, Speak, Notify,
+Clipboard.Set, Web.Search, Info.Time, Info.Date, Info.Weather, Jarvis.OpenDesk, Jarvis.Ask, Jarvis.Command,
+Jarvis.Plugin, Jarvis.SilentMode, Jarvis.ShowWindow`. Каталог с описанием параметров — `GET /api/commands/actions`.
+
+### Маршруты
+
+| Маршрут | Тело | Ответ |
+|---|---|---|
+| `GET /api/commands` | `?q=&category=` | `{items: CommandInfo[], categories: [{id, title, count}], total}` |
+| `GET /api/commands/{id}` | — | `CommandInfo` |
+| `POST /api/commands` | `CommandIn` | `CommandInfo` (своя команда) |
+| `PUT /api/commands/{id}` | `CommandIn` | `CommandInfo` |
+| `PATCH /api/commands/{id}` | `{enabled}` | `CommandInfo` (так выключаются и встроенные) |
+| `DELETE /api/commands/{id}` | — | `{ok}` |
+| `POST /api/commands/{id}/run` | `{slots?}` | `ExecResult` |
+| `POST /api/commands/test` | `{text}` | `{match: {text, parts: [{command_id, title, text, score, slots}]} \| null}` |
+| `GET /api/commands/actions` | — | `{items: ActionType[]}` |
+| `POST /api/commands/record/start` | — | `{ok}` |
+| `POST /api/commands/record/stop` | — | `{actions: Action[]}` |
+| `POST /api/commands/build` | `{description}` | `{name, phrases, actions, steps: [{title, detail}]}` — «Создать с помощью AI» |
+| `GET /api/packs` | — | `{items: Pack[], totals: {packs, commands}}` |
+| `POST /api/packs/{id}/install` / `DELETE /api/packs/{id}` | — | `Pack` |
+| `GET /api/apps?refresh=0` | — | `{items: [{name, app_id, path, source}]}` |
+
+`CommandInfo = Command + {source: builtin|pack|user|dynamic, pack?, editable}`.
+`ActionType = {type, title, category, icon, params: [{name, kind: text|number|keys|path|app|url|select|coords,
+label, placeholder?, options?}], description}`.
+`Pack = {id, name, app, icon, description, commands_count, installed, commands: [{id, name, phrases}]}`.
+
+События: `commands.changed {}`; `record.state {recording, count}`; `packs.changed {}`.
+
+## 3. Голос (`jarvis/voice`, `jarvis/api/voice.py`)
+
+Конвейер: микрофон 16 кГц → Silero VAD → (пока идёт речь) потоковая модель для частичного текста →
+по концу фразы GigaAM v3 → слово-активатор (`jarvis.text.find_wake`) → `ctx.dispatcher.handle(text, "voice")`.
+Модели — `paths.models_dir()`; скачиваются из релизов `k2-fsa/sherpa-onnx` с проверкой SHA-256.
+
+| Маршрут | Тело | Ответ |
+|---|---|---|
+| `GET /api/voice` | — | `{state, enabled, error, wake_words, models_ready, input_device}` |
+| `POST /api/voice/enabled` | `{enabled}` | то же |
+| `POST /api/voice/listen` | — | `{ok}` — слушать команду без активатора (кнопка микрофона, хоткей) |
+| `POST /api/voice/stop` | — | `{ok}` |
+| `GET /api/voice/devices` | — | `{inputs: [{id, name, default}], outputs: [...]}` |
+| `GET /api/voice/models` | — | `{items: [{id, kind: asr\|stream\|vad\|tts, title, size_mb, installed, downloading, progress, required}]}` |
+| `POST /api/voice/models/{id}/download` | — | `{ok}` (прогресс — события) |
+| `DELETE /api/voice/models/{id}` | — | `{ok}` |
+| `GET /api/tts/voices?engine=` | — | `{items: [{id, name, lang, gender}]}` |
+| `POST /api/tts/say` | `{text}` | `{ok}` |
+| `POST /api/tts/test` | `{text?, engine?, voice?}` | `{ok}` — прослушать голос |
+| `POST /api/tts/stop` | — | `{ok}` |
+
+| Событие | Данные |
+|---|---|
+| `voice.state` | `{state: off\|loading\|idle\|listening\|processing\|speaking\|error, reason?}` |
+| `voice.level` | `{level: 0..1}` — громкость микрофона, ~15 раз в секунду, пока голос включён |
+| `voice.wake` | `{}` — услышан активатор |
+| `voice.partial` | `{text, wake: bool}` — текст по ходу речи |
+| `voice.final` | `{text, wake: bool, command: str}` — фраза целиком и команда без активатора |
+| `model.download` | `{id, progress: 0..1, done: bool, error?: str}` |
+| `tts.state` | `{speaking: bool, text?}` |
+| `tts.level` | `{level: 0..1}` — громкость речи Jarvis (~20 Гц), для пульсации аватара |
+
+## 4. ИИ, агент, память, заметки (`jarvis/ai`, `jarvis/notes`, `jarvis/mcp`)
+
+| Маршрут | Тело | Ответ |
+|---|---|---|
+| `GET /api/ai/providers` | — | `{items: [{id, title, base_url, needs_key, default_model, models}]}` |
+| `GET /api/ai/models` | — | `{items: [string]}` (с провайдера; ошибка — пресеты) |
+| `POST /api/ai/test` | — | `{ok, error?, latency_ms}` |
+| `GET /api/ai/usage` | — | `{month: {prompt_tokens, completion_tokens, cost}, budget}` |
+| `GET /api/chats` | — | `{items: Chat[]}` |
+| `POST /api/chats` | `{title?, mode?}` | `Chat` |
+| `GET /api/chats/{id}` | — | `{chat: Chat, messages: UiMessage[]}` |
+| `PATCH /api/chats/{id}` | `{title?, pinned?, mode?, model?}` | `Chat` |
+| `DELETE /api/chats/{id}` | — | `{ok}` |
+| `POST /api/chats/{id}/messages` | `{text, images?: [dataURL], mode?}` | `{chat_id, message_id}` — ответ идёт событиями |
+| `POST /api/chats/{id}/stop` | — | `{ok}` |
+| `POST /api/agent/run` | `{task}` | `{run_id}` |
+| `POST /api/agent/stop` | — | `{ok}` |
+| `GET/POST /api/memory`, `DELETE /api/memory/{id}` | `{text}` | `{items}` / item |
+| `GET/POST /api/notes`, `PATCH/DELETE /api/notes/{id}` | `{title, body, pinned, color}` | `{items}` / item |
+| `GET/POST /api/tasks`, `PATCH/DELETE /api/tasks/{id}` | `{title, done, due}` | `{items}` / item |
+| `GET /api/events?start=&end=`, `POST`, `PATCH/DELETE /api/events/{id}` | `{title, start, end, all_day, notes, remind_min}` | |
+| `GET/POST /api/reminders`, `DELETE /api/reminders/{id}` | `{text, at, repeat}` | |
+| `GET /api/mcp/servers` | — | `{items: McpServer[]}` |
+| `POST /api/mcp/servers`, `PUT/DELETE /api/mcp/servers/{id}` | `McpServerIn` | `McpServer` |
+| `POST /api/mcp/servers/{id}/reconnect` | — | `McpServer` |
+| `GET /api/mcp/catalog?q=&cursor=` | — | `{items: [{name, title, description, version, repository, install}], next_cursor, total}` |
+
+`Chat = {id, title, kind: chat|voice, mode: chat|all|agent, model, pinned, created, updated}`.
+`UiMessage = {id, chat_id, role: user|assistant, content, created, meta: {sources?: [{title, url}],
+actions?: [{title, ok, detail?}], memory?: [string], images?: [string], error?, usage?}}`.
+`McpServer = {id, name, transport: stdio|http, command, args, env, url, enabled, status: connected|connecting|
+error|disabled, error, tools: [{name, description}]}`.
+
+| Событие | Данные |
+|---|---|
+| `chat.created` / `chat.updated` | `{chat}` |
+| `chat.deleted` | `{id}` |
+| `chat.message` | `{chat_id, message: UiMessage}` — сообщение человека и итоговое ассистента |
+| `chat.delta` | `{chat_id, message_id, delta}` — кусок текста ответа |
+| `chat.status` | `{chat_id, message_id, status: thinking\|searching\|tool\|done\|error, text}` — «Ищу актуальную информацию…» |
+| `chat.tool` | `{chat_id, message_id, call_id, name, title, status: running\|ok\|error, detail?}` |
+| `chat.done` | `{chat_id, message_id, text, sources, actions, usage}` |
+| `chat.error` | `{chat_id, message_id?, error}` |
+| `memory.added` | `{item: {id, text, source, created}}` — «Запомнил: Аня не ест мясо» |
+| `memory.deleted` | `{id}` |
+| `notes.changed` / `tasks.changed` / `events.changed` / `reminders.changed` | `{op: add\|update\|delete, item?, id?}` |
+| `reminder.fired` | `{item}` |
+| `agent.state` | `{run_id, task, status: planning\|running\|waiting\|done\|stopped\|error, step, total, text}` |
+| `agent.step` | `{run_id, index, title, status: running\|ok\|error}` |
+| `mcp.status` | `{server_id, status, error?, tools_count}` |
+
+Подтверждения агента — общий механизм `ctx.confirmations.request(..., kind="agent")` (события `confirm.*`).
+
+## 5. Виджеты, столы, плагины, пульт (`jarvis/widgets`, `jarvis/desks`, `jarvis/plugins`, `jarvis/remote`)
+
+| Маршрут | Ответ |
+|---|---|
+| `GET /api/widgets/{kind}?…` | данные виджета: `weather` (`city`), `rates`, `crypto`, `stocks`, `news`, `system`, `media`, `recent`, `apps`, `history`, `smarthome` |
+| `POST /api/media/{action}` | `play_pause\|next\|prev` → `{ok}` |
+| `GET /api/desks` | `{items: Desk[]}` |
+| `PUT /api/desks` | `{items: Desk[]}` — сохранить порядок и раскладку |
+| `POST /api/desks` | `{name, preset}` → `Desk` |
+| `PATCH /api/desks/{id}`, `DELETE /api/desks/{id}` | `Desk` / `{ok}` |
+| `POST /api/desks/{id}/open` | `{ok}` |
+| `GET /api/desks/presets` | `{items: [{id, name, description, icon, widgets}]}` (12 заготовок) |
+| `GET /api/plugins` | `{items: Plugin[]}` |
+| `PUT /api/plugins/{id}` | `{enabled?, config?}` → `Plugin` |
+| `POST /api/plugins/{id}/action` | `{action, args}` → `{ok, …}` |
+| `GET /api/remote` | `{lan: {enabled, port, urls, qr_svg}, telegram: {enabled, status, bot, owner_id, pairing_code}}` |
+| `POST /api/remote/telegram/pair` | `{pairing_code}` |
+
+`Desk = {id, name, icon, preset, widgets: [{id, type, x, y, w, h, config}]}` — сетка 4 колонки, высота строки
+задаёт интерфейс. Типы виджетов: `avatar, history, control, weather, media, tasks, notes, calendar, clock,
+timer, stopwatch, rates, crypto, stocks, news, system, apps, quick, recent, volume, smarthome, pet, ai, worldclock,
+countdown, network, battery, sticky, plugins, desk_links`.
+
+`Plugin = {id, name, description, icon, color, enabled, config, schema: [{key, kind, label, options?, secret?}],
+status: {...}, actions: [{id, title}]}`. Плагины: `smart_home, dictation, subtitles, summary, reader, autolock,
+second_pc, notify_voice, pet`.
+
+| Событие | Данные |
+|---|---|
+| `desks.changed` | `{items}` |
+| `desk.open` | `{id, name}` — интерфейс показывает стол (голосом: «открой стол Игры») |
+| `media.changed` | `MediaInfo` (`jarvis/platform/base.py`) |
+| `plugins.changed` | `{items}` |
+| `plugin.<id>.<имя>` | события плагинов: `plugin.subtitles.text {text, translation}`, `plugin.dictation.state {state, text}`, `plugin.reader.progress {state, index, total, sentence}`, `plugin.summary.state {state, seconds}`, `plugin.pet.action {action}` … |
+| `fullscreen.changed` | `{fullscreen: bool}` — прятать оверлей и аватар над играми |

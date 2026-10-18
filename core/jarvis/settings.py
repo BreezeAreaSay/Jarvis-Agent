@@ -1,0 +1,306 @@
+"""Настройки Jarvis: модель (pydantic), хранение в <data>/settings.json и секреты (ключи API).
+
+Секреты лежат отдельно, в <data>/secrets.dat: на Windows — зашифрованы DPAPI (расшифровать может только этот
+пользователь Windows), на других системах — просто base64. Интерфейс видит только, задан ли секрет.
+
+Меняя модель, поправь desktop/src/api/types.ts (тип Settings) в том же коммите.
+"""
+
+import base64
+import contextlib
+import copy
+import json
+import logging
+import os
+import sys
+import threading
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from jarvis.bus import EventBus
+
+log = logging.getLogger(__name__)
+
+
+class _Model(BaseModel):
+    model_config = ConfigDict(extra="ignore", validate_assignment=True)
+
+
+class ProfileSettings(_Model):
+    name: str = ""
+    address: str = "сэр"  # как Jarvis обращается к пользователю
+    city: str = "Москва"  # город по умолчанию для погоды
+    assistant_name: str = "Джарвис"
+
+
+class InterfaceSettings(_Model):
+    accent: str = "#3B82F6"  # цвет темы
+    transparency: int = Field(30, ge=0, le=100)  # прозрачность панелей, %
+    blur: int = Field(90, ge=0, le=100)  # размытие под панелями, %
+    animations: bool = True
+    language: Literal["ru", "en"] = "ru"
+    minimize_to_tray: bool = True  # сворачивать в трей при закрытии
+    always_on_top: bool = False
+    window_material: Literal["none", "acrylic", "mica"] = "none"  # настоящая прозрачность окна (Windows 11)
+    start_minimized: bool = False
+    ui_scale: int = Field(100, ge=80, le=140)
+
+
+class VoiceSettings(_Model):
+    enabled: bool = True  # микрофон слушает
+    wake_words: list[str] = Field(default_factory=lambda: ["джарвис"])
+    prefix_mode: bool = True  # команда только после слова-активатора
+    silent_mode: bool = False  # тихий режим: без ответов голосом
+    input_device: str = ""  # часть имени микрофона; "" — по умолчанию
+    sensitivity: float = Field(0.5, ge=0.0, le=1.0)  # чувствительность детектора речи
+    asr_model: Literal["gigaam-v3", "gigaam-v3-punct", "vosk-small"] = "gigaam-v3"
+    follow_up_s: int = Field(6, ge=0, le=30)  # слушать продолжение без активатора после ответа
+    ptt_key: str = ""  # клавиша «держи и говори», например "right ctrl"; "" — выключено
+    earcons: bool = True  # короткие звуки «слушаю», «готово», «ошибка»
+    max_utterance_s: int = Field(15, ge=3, le=60)
+    confirm_by_voice: bool = True  # «да/нет» голосом для подтверждений команд
+    speak_confirmations: Literal["short", "off"] = "short"  # озвучивать итог команд («Готово, сэр»)
+
+
+class TtsSettings(_Model):
+    engine: Literal["piper", "windows", "edge", "openai", "fish"] = "piper"
+    piper_voice: Literal["ruslan", "denis", "dmitri", "irina"] = "ruslan"
+    windows_voice: str = ""
+    edge_voice: str = "ru-RU-DmitryNeural"
+    openai_model: str = "gpt-4o-mini-tts"
+    openai_voice: str = "onyx"
+    openai_instructions: str = (
+        "Говори как J.A.R.V.I.S. из «Железного человека»: спокойно, уверенно, учтиво, с лёгкой иронией."
+    )
+    fish_voice_id: str = ""  # reference_id голоса Fish Audio
+    fish_model: str = "s1"
+    speed: float = Field(1.0, ge=0.5, le=2.0)
+    pitch: float = Field(1.0, ge=0.8, le=1.2)
+    effect: float = Field(0.35, ge=0.0, le=1.0)  # «электроника» в голосе
+    volume: int = Field(100, ge=0, le=100)
+    output_device: str = ""
+
+
+AiProvider = Literal["openai", "openrouter", "deepseek", "anthropic", "groq", "ollama", "lmstudio", "custom"]
+
+
+class AiSettings(_Model):
+    enabled: bool = True
+    provider: AiProvider = "openai"
+    base_url: str = ""  # пусто — адрес провайдера по умолчанию
+    model: str = "gpt-5.4-mini"
+    temperature: float = Field(0.6, ge=0.0, le=2.0)
+    proxy: str = ""  # http://… или socks5://… для запросов к ИИ
+    persona: Literal["jarvis", "plain"] = "jarvis"
+    custom_instructions: str = ""
+    web_search: bool = True
+    memory: bool = True  # запоминать факты о пользователе
+    mode: Literal["chat", "all", "agent"] = "all"  # режим по умолчанию: чат / всё вместе / агент
+    vision: bool = False  # модель понимает картинки (снимки экрана для агента)
+    agent_confirm: Literal["risky", "always"] = "risky"
+    max_agent_steps: int = Field(25, ge=3, le=100)
+    monthly_budget: float = Field(0.0, ge=0.0)  # лимит расходов в месяц, $; 0 — без лимита
+
+
+class AvatarSettings(_Model):
+    desktop: bool = True  # живой аватар на рабочем столе
+    size: int = Field(150, ge=60, le=400)
+    on_top: bool = True
+    animated: bool = True  # анимация аватара
+    position: list[int] | None = None  # [x, y] или None — правый нижний угол
+    hide_fullscreen: bool = True  # прятать над играми и видео во весь экран
+
+
+class SystemSettings(_Model):
+    autostart: bool = True
+    hotkey_show: str = "Ctrl+Alt+J"
+    hotkey_listen: str = "Ctrl+Alt+Space"
+    check_updates: bool = True
+    overlay: bool = True  # всплывающая строка голоса и уведомления поверх окон
+
+
+class RemoteSettings(_Model):
+    lan_enabled: bool = False  # пульт в браузере телефона по Wi-Fi
+    lan_port: int = Field(8766, ge=1024, le=65535)
+    telegram_enabled: bool = False
+    telegram_owner_id: int = 0  # кому бот подчиняется (привязывается кодом)
+    favorites: list[str] = Field(default_factory=list)  # id команд на главном экране пульта
+
+
+class PluginState(_Model):
+    enabled: bool = False
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class Settings(_Model):
+    version: int = 1
+    onboarding_done: bool = False
+    profile: ProfileSettings = Field(default_factory=ProfileSettings)
+    interface: InterfaceSettings = Field(default_factory=InterfaceSettings)
+    voice: VoiceSettings = Field(default_factory=VoiceSettings)
+    tts: TtsSettings = Field(default_factory=TtsSettings)
+    ai: AiSettings = Field(default_factory=AiSettings)
+    avatar: AvatarSettings = Field(default_factory=AvatarSettings)
+    system: SystemSettings = Field(default_factory=SystemSettings)
+    remote: RemoteSettings = Field(default_factory=RemoteSettings)
+    plugins: dict[str, PluginState] = Field(default_factory=dict)
+    packs: list[str] = Field(default_factory=list)  # установленные паки команд
+    disabled_commands: list[str] = Field(default_factory=list)  # выключенные встроенные команды
+
+
+def deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Слить patch в копию base: словари — рекурсивно, остальное (включая списки) — заменой."""
+    out = copy.deepcopy(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = deep_merge(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+ChangeListener = Callable[[Settings, Settings], None]
+
+
+class SettingsStore:
+    """Настройки в памяти + атомарная запись в файл. patch() публикует settings.changed."""
+
+    def __init__(self, path: Path, bus: EventBus | None = None) -> None:
+        self.path = path
+        self._bus = bus
+        self._lock = threading.RLock()
+        self._listeners: list[ChangeListener] = []
+        self._value = self._load()
+
+    @property
+    def value(self) -> Settings:
+        return self._value
+
+    def get(self) -> Settings:
+        return self._value
+
+    def _load(self) -> Settings:
+        if not self.path.exists():
+            return Settings()
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            return Settings.model_validate(raw)
+        except (OSError, ValueError, ValidationError) as e:
+            log.error("настройки не читаются (%s) — беру значения по умолчанию, файл сохраню как .bad", e)
+            with contextlib.suppress(OSError):
+                self.path.replace(self.path.with_suffix(".json.bad"))
+            return Settings()
+
+    def save(self) -> None:
+        with self._lock:
+            data = self._value.model_dump(mode="json")
+            tmp = self.path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, self.path)
+
+    def patch(self, data: dict[str, Any]) -> Settings:
+        """Изменить часть настроек. Неверные значения — ValidationError (ничего не меняется)."""
+        with self._lock:
+            old = self._value
+            merged = deep_merge(old.model_dump(mode="json"), data)
+            new = Settings.model_validate(merged)
+            self._value = new
+            self.save()
+        self._notify(old, new)
+        return new
+
+    def replace(self, new: Settings) -> Settings:
+        with self._lock:
+            old = self._value
+            self._value = new
+            self.save()
+        self._notify(old, new)
+        return new
+
+    def on_change(self, listener: ChangeListener) -> Callable[[], None]:
+        self._listeners.append(listener)
+        return lambda: self._listeners.remove(listener) if listener in self._listeners else None
+
+    def _notify(self, old: Settings, new: Settings) -> None:
+        for listener in list(self._listeners):
+            try:
+                listener(old, new)
+            except Exception:
+                log.exception("обработчик изменения настроек упал")
+        if self._bus is not None:
+            self._bus.publish("settings.changed", {"settings": new.model_dump(mode="json")})
+
+
+# --- секреты --------------------------------------------------------------------------------------
+
+SECRET_NAMES = (
+    "ai_api_key",  # ключ выбранного провайдера ИИ
+    "openai_api_key",  # ключ OpenAI для голоса (если ИИ — другой провайдер)
+    "fish_api_key",
+    "telegram_token",
+    "ha_token",  # Home Assistant
+    "yandex_iot_token",  # Умный дом Яндекса
+    "remote_token",  # пароль пульта и второго компьютера
+)
+
+
+def _protect(data: bytes) -> bytes:
+    if sys.platform == "win32":
+        try:
+            import win32crypt  # type: ignore[import-not-found]
+
+            return b"DPAPI:" + win32crypt.CryptProtectData(data, "Jarvis", None, None, None, 0)
+        except Exception:
+            log.warning("DPAPI недоступен — секреты хранятся без шифрования")
+    return b"B64:" + base64.b64encode(data)
+
+
+def _unprotect(blob: bytes) -> bytes:
+    if blob.startswith(b"DPAPI:"):
+        import win32crypt  # type: ignore[import-not-found]
+
+        return win32crypt.CryptUnprotectData(blob[6:], None, None, None, 0)[1]
+    if blob.startswith(b"B64:"):
+        return base64.b64decode(blob[4:])
+    raise ValueError("неизвестный формат файла секретов")
+
+
+class Secrets:
+    def __init__(self, path: Path, bus: EventBus | None = None) -> None:
+        self.path = path
+        self._bus = bus
+        self._lock = threading.Lock()
+        self._values: dict[str, str] = self._load()
+
+    def _load(self) -> dict[str, str]:
+        if not self.path.exists():
+            return {}
+        try:
+            raw = json.loads(_unprotect(self.path.read_bytes()).decode("utf-8"))
+            return {str(k): str(v) for k, v in raw.items()}
+        except Exception as e:
+            log.error("секреты не читаются: %s", e)
+            return {}
+
+    def get(self, name: str) -> str:
+        return self._values.get(name, "")
+
+    def set(self, name: str, value: str) -> None:
+        with self._lock:
+            value = value.strip()
+            if value:
+                self._values[name] = value
+            else:
+                self._values.pop(name, None)
+            payload = json.dumps(self._values, ensure_ascii=False).encode("utf-8")
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_bytes(_protect(payload))
+            os.replace(tmp, self.path)
+        if self._bus is not None:
+            self._bus.publish("secrets.changed", {"name": name, "set": bool(value)})
+
+    def status(self) -> dict[str, bool]:
+        return {name: bool(self._values.get(name)) for name in SECRET_NAMES}

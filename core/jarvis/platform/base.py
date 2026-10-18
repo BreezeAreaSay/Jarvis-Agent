@@ -1,0 +1,156 @@
+"""Действия с операционной системой: звук, медиа, ввод, программы, окна, система.
+
+Platform — синхронный интерфейс (ctypes/COM/WinRT). Ядро вызывает его через AppContext.run_platform(),
+в отдельном потоке с инициализированным COM. Реализации: jarvis.platform.windows (настоящая) и
+jarvis.platform.fake (Linux, тесты, демо-режим интерфейса).
+
+Ошибки — PlatformError с текстом для человека («Программа «Spotify» не найдена»).
+"""
+
+from dataclasses import asdict, dataclass, field
+from typing import Any, Literal, Protocol, runtime_checkable
+
+MediaKey = Literal["play_pause", "next", "prev", "stop"]
+WindowAction = Literal["minimize", "maximize", "restore", "close", "focus", "minimize_all", "show_desktop"]
+PowerAction = Literal["lock", "sleep", "hibernate", "shutdown", "restart", "logoff", "cancel"]
+MouseButton = Literal["left", "right", "middle"]
+
+
+class PlatformError(RuntimeError):
+    """Действие не удалось; текст — для человека, по-русски."""
+
+
+@dataclass
+class AppInfo:
+    name: str  # как в меню «Пуск»: «Google Chrome»
+    app_id: str  # AppUserModelID или путь к exe — то, что умеет запускать launch()
+    path: str = ""  # exe, если известен (для иконки)
+    source: str = "start"  # start | uwp | path | custom
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WindowInfo:
+    hwnd: int
+    title: str
+    exe: str  # имя файла процесса: chrome.exe
+    pid: int = 0
+    rect: tuple[int, int, int, int] = (0, 0, 0, 0)  # left, top, right, bottom (физические пиксели)
+    minimized: bool = False
+    maximized: bool = False
+    foreground: bool = False
+
+    def to_json(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["rect"] = list(self.rect)
+        return data
+
+
+@dataclass
+class MediaInfo:
+    title: str = ""
+    artist: str = ""
+    album: str = ""
+    app: str = ""  # Spotify, Яндекс Музыка, Chrome…
+    status: Literal["playing", "paused", "stopped", "unknown"] = "unknown"
+    position_s: float = 0.0
+    duration_s: float = 0.0
+    thumbnail: str = ""  # data:image/png;base64,… или ""
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class FileInfo:
+    name: str
+    path: str
+    modified: float  # unix time
+    kind: str = ""  # расширение без точки
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class SystemStats:
+    cpu: float = 0.0  # загрузка, %
+    ram: float = 0.0
+    ram_used_gb: float = 0.0
+    ram_total_gb: float = 0.0
+    gpu: float | None = None  # % или None — неизвестно
+    disk: float = 0.0  # заполненность системного диска, %
+    net_down_kbps: float = 0.0
+    net_up_kbps: float = 0.0
+    battery: float | None = None
+    charging: bool | None = None
+    uptime_s: float = 0.0
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@runtime_checkable
+class Platform(Protocol):
+    name: str  # "windows" | "fake"
+
+    # --- звук -------------------------------------------------------------------------------------
+    def volume_get(self) -> int: ...
+    def volume_set(self, level: int) -> int: ...
+    def volume_change(self, delta: int) -> int: ...
+    def mute_set(self, muted: bool | None = None) -> bool: ...  # None — переключить; вернёт новое состояние
+    def is_muted(self) -> bool: ...
+    def app_volume_set(self, app: str, level: int) -> bool: ...  # громкость одной программы (микшер)
+
+    # --- медиа ------------------------------------------------------------------------------------
+    def media_key(self, key: MediaKey) -> None: ...
+    def now_playing(self) -> MediaInfo | None: ...
+
+    # --- ввод -------------------------------------------------------------------------------------
+    def press_keys(self, combo: str) -> None: ...  # "ctrl+shift+s", "win+d", "volume_up", "f5"
+    def key_down(self, key: str) -> None: ...
+    def key_up(self, key: str) -> None: ...
+    def type_text(self, text: str) -> None: ...
+    def paste_text(self, text: str) -> None: ...  # через буфер обмена, буфер восстанавливается
+    def mouse_move(self, x: int, y: int) -> None: ...
+    def mouse_click(
+        self, x: int | None = None, y: int | None = None, button: MouseButton = "left", double: bool = False
+    ) -> None: ...
+    def mouse_scroll(self, amount: int) -> None: ...  # >0 — вверх
+    def cursor_pos(self) -> tuple[int, int]: ...
+    def screen_size(self) -> tuple[int, int]: ...
+
+    # --- программы и процессы ---------------------------------------------------------------------
+    def list_apps(self, refresh: bool = False) -> list[AppInfo]: ...
+    def launch(self, target: str, args: str = "") -> None: ...  # exe, AppID, ярлык, файл, папка
+    def open_url(self, url: str) -> None: ...
+    def open_path(self, path: str) -> None: ...
+    def close_app(self, name: str) -> int: ...  # закрыть окна программы мягко; число закрытых окон
+    def kill_process(self, name: str) -> int: ...
+    def is_running(self, name: str) -> bool: ...
+
+    # --- окна -------------------------------------------------------------------------------------
+    def list_windows(self) -> list[WindowInfo]: ...
+    def foreground_window(self) -> WindowInfo | None: ...
+    def window_action(self, action: WindowAction, target: int | str | None = None) -> None: ...
+    def is_fullscreen_app(self) -> bool: ...  # активное окно — игра или видео во весь экран
+
+    # --- система ----------------------------------------------------------------------------------
+    def power(self, action: PowerAction, delay_s: int = 0) -> None: ...
+    def screenshot(self, window: int | None = None) -> bytes: ...  # PNG
+    def clipboard_get(self) -> str: ...
+    def clipboard_set(self, text: str) -> None: ...
+    def brightness_get(self) -> int | None: ...
+    def brightness_set(self, level: int) -> None: ...
+    def recycle_bin_count(self) -> int: ...
+    def empty_recycle_bin(self) -> None: ...
+    def trash(self, path: str) -> None: ...
+    def system_stats(self) -> SystemStats: ...
+    def recent_files(self, limit: int = 10) -> list[FileInfo]: ...
+    def idle_seconds(self) -> float: ...
+    def known_folder(
+        self, name: str
+    ) -> str | None: ...  # downloads, documents, desktop, pictures, music, videos

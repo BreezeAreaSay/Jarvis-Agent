@@ -44,6 +44,7 @@ desktop/ (Electron + React)                     core/ (Python 3.12, FastAPI)
 |---|---|---|
 | `GET /api/health` | — | `{ok, version}` (без токена) |
 | `GET /api/status` | — | `{version, platform, data_dir, uptime_s, voice: {state}, ai: {configured}, ready}` |
+| `POST /api/stop` | — | `{ok}` — «Стоп»: замолчать, бросить ответ ИИ и агента, перестать слушать (как «Джарвис, стоп») |
 | `POST /api/shutdown` | — | `{ok}` — штатный выход ядра (сервисы закрывают базу и файлы); 409 — запущено не сервером |
 | `GET /api/settings` | — | `{settings: Settings, secrets: {name: bool}}` |
 | `PATCH /api/settings` | частичный Settings | `{settings}` (422 — неверное значение) |
@@ -139,7 +140,7 @@ System.BrightnessSet, System.Lock, System.Sleep, System.Shutdown, System.Restart
 System.Screenshot, System.EmptyRecycleBin, Media.PlayPause, Media.Next, Media.Prev, Media.Stop,
 Window.MinimizeAll, Window.Minimize, Window.Maximize, Window.Restore, Window.Close, Wait, Speak, Notify,
 Clipboard.Set, Web.Search, Info.Time, Info.Date, Info.Weather, Jarvis.OpenDesk, Jarvis.Ask, Jarvis.Command,
-Jarvis.Plugin, Jarvis.SilentMode, Jarvis.ShowWindow` и для встроенных команд `Info.Volume, Info.Media,
+Jarvis.Plugin, Jarvis.SilentMode, Jarvis.Microphone, Jarvis.ShowWindow` и для встроенных команд `Info.Volume, Info.Media,
 Info.Battery, Info.System, Jarvis.Timer, Jarvis.Reminder`. Каталог с описанием параметров —
 `GET /api/commands/actions`.
 
@@ -149,8 +150,8 @@ Info.Battery, Info.System, Jarvis.Timer, Jarvis.Reminder`. Каталог с о�
 `pause`; `Web.Search` — «google: запрос» (`google, yandex, youtube, bing, duckduckgo, wikipedia, images, maps` или
 сайт с поиском: `avito, ozon…`); `Launch.Folder` — путь или `downloads, documents, desktop, pictures, music, videos,
 screenshots`; `Launch.Shell` — только в своих командах; `Jarvis.Command` — id команды или её фраза;
-`Jarvis.Plugin` — «плагин:действие» («dictation:toggle»), аргументы JSON после «|»; `Jarvis.SilentMode` — `on`,
-`off`, `toggle`; `Jarvis.ShowWindow` — `show`, `hide` или страница (`settings`, `commands`, `chat`);
+`Jarvis.Plugin` — «плагин:действие» («dictation:toggle»), аргументы JSON после «|»; `Jarvis.SilentMode` и
+`Jarvis.Microphone` (микрофон Jarvis: «не слушай меня»; голосом обратно не включить) — `on`, `off`, `toggle`; `Jarvis.ShowWindow` — `show`, `hide` или страница (`settings`, `commands`, `chat`);
 `Jarvis.Timer` — «5m»; `Jarvis.Reminder` — «10m | Позвонить маме».
 `Jarvis.Briefing` («Сводка дня», для сценариев) — `""` (утренняя сводка), `short`, `tasks`, `missed` — см. §6.
 
@@ -202,7 +203,7 @@ label, placeholder?, options?, required}], description}`.
 |---|---|---|
 | `GET /api/voice` | — | `{state, reason, enabled, error, ptt_error, wake_words, models_ready, input_device}` |
 | `POST /api/voice/enabled` | `{enabled}` | то же |
-| `POST /api/voice/listen` | — | `{ok}` — слушать команду без активатора (кнопка микрофона, хоткей) |
+| `POST /api/voice/listen` | `{toggle?}` | `{ok}` — слушать команду без активатора (кнопка микрофона, хоткей); `toggle` и Jarvis уже слушает/отвечает — «стоп»: `{ok, stopped: true}` |
 | `POST /api/voice/stop` | — | `{ok}` |
 | `POST /api/voice/capture` | `{timeout?: 15, punct?: true}` | `{text}` — выслушать одну фразу без активатора и без выполнения (диктовка в поле ввода чата) |
 | `GET /api/voice/devices` | — | `{inputs: [{id, name, default}], outputs: [...]}` |

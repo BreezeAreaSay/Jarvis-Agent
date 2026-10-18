@@ -102,6 +102,7 @@ export interface Settings {
     autostart: boolean;
     hotkey_show: string;
     hotkey_listen: string;
+    hotkey_mic: string;
     check_updates: boolean;
     auto_update: boolean;
     overlay: boolean;

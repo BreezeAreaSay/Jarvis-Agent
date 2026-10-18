@@ -11,7 +11,9 @@ voice.final {text, wake, command} → решение:
   новая просьба отменяет прежнюю;
 - «Джарвис, <команда>» — команда; «Джарвис» один — сигнал «слушаю» и ~6 с ждём команду без активатора;
 - без активатора — команда, только если prefix_mode выключен, идёт окно продолжения (follow_up после ответа)
-  или фраза сказана с клавишей «держи и говори»; иначе это чужой разговор — его не показываем;
+  или фраза сказана с клавишей «держи и говори»; иначе это чужой разговор — его не показываем. Окон
+  продолжения подряд — не больше MAX_FOLLOW_CHAIN: иначе фоновая речь (видео, чужой разговор) попадает в окно,
+  Jarvis отвечает, окно открывается снова — и он «слушает без остановки»;
 - пока Jarvis говорит, без активатора ничего не принимается: в микрофон попадает его же голос (эхо).
 
 Управляющие вызовы (request, follow_up, ptt…) можно делать из любого потока: они встают в очередь и
@@ -43,6 +45,7 @@ PARTIAL_FRAMES = max(1, round(PARTIAL_EVERY_S * RATE / FRAME))
 HEAD_S = 2.5  # длинная непрошеная фраза: GigaAM сначала только по началу (есть ли там «Джарвис»)
 MIN_PTT_S = 0.3  # короче — случайное нажатие клавиши
 VAD_LAG_S = 0.3  # VAD узнаёт о речи с задержкой: фраза началась примерно на столько раньше
+MAX_FOLLOW_CHAIN = 2  # команд подряд из окна продолжения (без «Джарвис»); дальше — снова по активатору
 
 
 class Host(Protocol):
@@ -184,6 +187,7 @@ class Listener:
         self.preroll = PreRoll()
         self.follow_until = 0.0
         self.follow_pending: float | None = None
+        self.follow_chain = 0  # сколько команд подряд пришло из окна продолжения
         self._cmds: queue.SimpleQueue[Callable[[float], None]] = queue.SimpleQueue()
         self._tts_last = -1e9
         self._was_speaking = False
@@ -238,7 +242,11 @@ class Listener:
         """Окно продолжения: после ответа Jarvis (когда он договорит) фраза принимается без активатора."""
 
         def apply(now: float) -> None:
-            if seconds <= 0:
+            if seconds <= 0 or self.follow_chain >= MAX_FOLLOW_CHAIN:
+                if seconds > 0:
+                    log.info(
+                        "голос: %s ответа подряд без «Джарвис» — дальше жду активатор", self.follow_chain
+                    )
                 self.follow_until, self.follow_pending = 0.0, None
             elif self.host.tts_speaking():
                 self.follow_pending = seconds
@@ -505,6 +513,7 @@ class Listener:
             if req.kind == "command":
                 self._publish_final(text, wake, value)
                 req.finish(value)
+                self.follow_chain = 0  # команду ждали (кнопка, хоткей, «Джарвис») — к нему обратились
                 self._dispatch(value)
             else:
                 if req.kind == "text":  # диктовка: точки и запятые модели сохраняем
@@ -521,14 +530,18 @@ class Listener:
             self._publish_final(text, True, "")
             return
         command = ""
+        via_follow = False
         if wake:
             command = rest
-        elif utt.manual or not s.prefix_mode or self._in_follow(utt.start):
+        elif utt.manual or not s.prefix_mode:
             command = text
+        elif self._in_follow(utt.start):
+            command, via_follow = text, True
         if not command:
             log.debug("голос: фраза не мне: %r", text)  # фоновый разговор — не показываем и не выполняем
             return
         self._publish_final(text, wake, command)
+        self.follow_chain = self.follow_chain + 1 if via_follow else 0
         self._dispatch(command)
 
     def _dispatch(self, command: str) -> None:

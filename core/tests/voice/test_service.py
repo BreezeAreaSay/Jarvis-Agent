@@ -2,12 +2,14 @@
 
 import asyncio
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
 
 from jarvis.context import AppContext
+from jarvis.platform.base import MediaInfo
 from jarvis.services import UserFacingError
 from jarvis.voice import service as service_mod
 from jarvis.voice.service import Voice
@@ -271,6 +273,23 @@ async def test_transcribe(rig: Rig) -> None:
     assert await rig.voice.transcribe(samples, 48000) == "Привет, это голосовое."
     with pytest.raises(UserFacingError, match="Whisper"):
         await rig.voice.transcribe(samples, 48000, language="en")
+
+
+async def test_no_follow_up_while_media_plays(rig: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Музыка или видео в колонках — их речь Jarvis принял бы за продолжение разговора: окна нет."""
+    calls: list[float] = []
+    monkeypatch.setattr(rig.voice.listener, "follow_up", lambda seconds: calls.append(seconds))
+    await rig.voice.start()
+    try:
+        watcher = SimpleNamespace(media=MediaInfo(title="Трек", status="playing"))
+        monkeypatch.setattr(rig.ctx, "widgets", SimpleNamespace(watcher=watcher), raising=False)
+        rig.voice.follow_up(5)
+        assert calls == []
+        watcher.media = MediaInfo(title="Трек", status="paused")
+        rig.voice.follow_up(5)
+        assert calls == [5.0]
+    finally:
+        await rig.voice.stop()
 
 
 def test_has_multilingual_follows_whisper_models(ctx: AppContext) -> None:

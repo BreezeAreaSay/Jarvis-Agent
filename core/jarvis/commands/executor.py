@@ -276,6 +276,7 @@ class Executor:
             "Jarvis.Command": self._run_other,
             "Jarvis.Plugin": self._plugin,
             "Jarvis.SilentMode": self._silent_mode,
+            "Jarvis.Microphone": self._microphone,
             "Jarvis.ShowWindow": self._show_window,
             "Jarvis.Timer": self._timer,
             "Jarvis.Reminder": self._reminder,
@@ -895,6 +896,21 @@ class Executor:
             st.info("Тихий режим включён")
         else:
             st.info("Тихий режим выключен", "Тихий режим выключен")
+
+    async def _microphone(self, value: str, st: RunState) -> None:
+        """«Не слушай меня»: микрофон Jarvis выключен — голосом обратно не включить, только в трее, хоткеем
+        или в настройках (об этом и говорим)."""
+        current = self.ctx.settings.value.voice.enabled
+        mode = (value or "toggle").casefold()
+        new = {"on": True, "off": False, "1": True, "0": False}.get(mode, not current)
+        if new != current:
+            await self.ctx.voice.set_enabled(new)
+        if new:
+            st.info("Микрофон Jarvis включён", "Слушаю")
+        else:
+            hotkey = self.ctx.settings.value.system.hotkey_mic
+            how = f"клавишами {hotkey} или «Микрофон» в трее" if hotkey else "«Микрофон» в трее"
+            st.info(f"Микрофон Jarvis выключен. Включить — {how}", "Больше не слушаю")
 
     async def _show_window(self, value: str, st: RunState) -> None:
         mode = (value or "show").casefold()

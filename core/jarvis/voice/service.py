@@ -159,9 +159,18 @@ class Voice(BaseService):
         self.listener.stop()
 
     def follow_up(self, seconds: float | None = None) -> None:
+        """Окно продолжения после ответа. Пока играет музыка или видео — нет: их речь в микрофоне Jarvis
+        принял бы за ответ человека и разговаривал бы с ними без конца."""
         secs = float(self.ctx.settings.value.voice.follow_up_s if seconds is None else seconds)
+        if secs > 0 and self._media_playing():
+            log.info("голос: играет музыка или видео — продолжение без «Джарвис» не слушаю")
+            return
         if self._phase == "running" or self._thread is not None:
             self.listener.follow_up(secs)
+
+    def _media_playing(self) -> bool:
+        watcher = getattr(getattr(self.ctx, "widgets", None), "watcher", None)
+        return getattr(getattr(watcher, "media", None), "status", "") == "playing"
 
     async def ask_yes_no(self, timeout: float = 8.0) -> bool | None:
         if not self.can_listen():

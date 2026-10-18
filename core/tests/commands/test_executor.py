@@ -218,6 +218,14 @@ async def test_timer_and_reminder(cmds: Commands, ctx: AppContext, monkeypatch: 
     assert abs(added[-1][1] - (time.time() + 1800)) < 5
 
 
+async def test_microphone_off_and_on(cmds: Commands, ctx: AppContext) -> None:
+    result = await run(cmds, "не слушай меня")
+    assert ctx.settings.value.voice.enabled is False
+    assert result.say == "Больше не слушаю" and "Ctrl+Alt+M" in result.message
+    result = await run(cmds, "включи прослушивание")
+    assert ctx.settings.value.voice.enabled is True and result.say == "Слушаю"
+
+
 async def test_jarvis_actions(cmds: Commands, ctx: AppContext, events: EventLog) -> None:
     await run(cmds, "тихий режим")
     assert ctx.settings.value.voice.silent_mode is True

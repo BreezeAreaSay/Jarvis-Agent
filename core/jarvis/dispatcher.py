@@ -85,6 +85,19 @@ class MainDispatcher:
             "toast", {"title": title, "message": message, "status": status, "icon": icon, "ts": time.time()}
         )
 
+    async def stop(self) -> None:
+        """«Стоп»: замолчать, бросить ответ ИИ и агента, перестать слушать (окна продолжения и ожидания)."""
+        self.ctx.tts.silence()
+        try:
+            self.ctx.ai.stop_all()  # ответ ИИ, который сейчас пишется и озвучивается
+            await self.ctx.agent.stop_run()
+        except Exception:
+            log.exception("ИИ или агент не остановились")
+        try:
+            await self.ctx.voice.stop_listening()
+        except Exception:
+            log.exception("голос не перестал слушать")
+
     # --- главный вход ----------------------------------------------------------------------------------
     async def handle(self, text: str, source: Source, *, speak: bool | None = None) -> dict[str, Any]:
         raw = textops.clean(text)
@@ -95,12 +108,7 @@ class MainDispatcher:
         self.ctx.bus.publish("dispatch.started", {"text": raw, "source": source})
 
         if textops.is_stop(raw):
-            self.ctx.tts.silence()
-            try:
-                self.ctx.ai.stop_all()  # ответ ИИ, который сейчас пишется и озвучивается
-                await self.ctx.agent.stop_run()
-            except Exception:
-                log.exception("ИИ или агент не остановились")
+            await self.stop()
             self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "stop"})
             return {"kind": "stop"}
 

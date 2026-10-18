@@ -143,7 +143,8 @@ class AvatarSettings(_Model):
 class SystemSettings(_Model):
     autostart: bool = True
     hotkey_show: str = "Ctrl+Alt+J"
-    hotkey_listen: str = "Ctrl+Alt+Space"
+    hotkey_listen: str = "Ctrl+Alt+Space"  # ещё раз, пока слушает или отвечает, — «стоп»
+    hotkey_mic: str = "Ctrl+Alt+M"  # микрофон Jarvis: выключить / включить
     check_updates: bool = True
     auto_update: bool = True  # найденное обновление скачивать самому; ставится при перезапуске
     overlay: bool = True  # всплывающая строка голоса и уведомления поверх окон

@@ -304,6 +304,7 @@ function quickMenu(): MenuItemConstructorOptions[] {
   return [
     { label: "Открыть Jarvis", click: () => showMain() },
     { label: "Сказать команду", click: () => api("POST", "/api/voice/listen") },
+    { label: "Стоп — замолчать и не слушать", click: () => api("POST", "/api/stop") },
     {
       label: "Музыка",
       submenu: [
@@ -317,6 +318,9 @@ function quickMenu(): MenuItemConstructorOptions[] {
       label: "Микрофон",
       type: "checkbox",
       checked: !!settings?.voice?.enabled,
+      // клавиша — только подписью: сам хоткей зарегистрирован глобально (registerShortcuts)
+      accelerator: settings?.system?.hotkey_mic || undefined,
+      registerAccelerator: false,
       click: (item) => patch({ voice: { enabled: item.checked } }),
     },
     {
@@ -354,6 +358,20 @@ function rebuildTray() {
 }
 
 // --- горячие клавиши и автозапуск ------------------------------------------------------------------------
+/** Микрофон Jarvis: выключить или включить (хоткей, меню) — с уведомлением, чтобы было видно, что случилось. */
+async function toggleMic() {
+  const on = !(settings?.voice?.enabled ?? true);
+  await patch({ voice: { enabled: on } });
+  if (Notification.isSupported()) {
+    new Notification({
+      title: "Jarvis",
+      body: on ? "Микрофон включён — слушаю «Джарвис»" : "Микрофон выключен — Jarvis не слушает",
+      icon: iconImage(),
+      silent: true,
+    }).show();
+  }
+}
+
 function registerShortcuts() {
   for (const acc of registered.splice(0)) globalShortcut.unregister(acc);
   const bind = (acc: string | undefined, fn: () => void) => {
@@ -365,7 +383,9 @@ function registerShortcuts() {
     }
   };
   bind(settings?.system?.hotkey_show, () => (mainWin?.isVisible() && mainWin.isFocused() ? mainWin.hide() : showMain()));
-  bind(settings?.system?.hotkey_listen, () => api("POST", "/api/voice/listen"));
+  // ещё раз, пока Jarvis слушает или отвечает, — «стоп»
+  bind(settings?.system?.hotkey_listen, () => api("POST", "/api/voice/listen", { toggle: true }));
+  bind(settings?.system?.hotkey_mic, () => toggleMic());
   // из ядра — действующие настройки с умолчаниями (сохранённые могут не содержать клавишу по умолчанию)
   const hotkeys =
     pluginHotkeys ??

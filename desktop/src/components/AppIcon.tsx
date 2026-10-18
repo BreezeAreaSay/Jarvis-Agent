@@ -30,6 +30,8 @@ import {
   VolumeX,
   LayoutGrid,
   Fish,
+  Mic,
+  MicOff,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import {
@@ -173,6 +175,8 @@ const CATEGORY: Record<string, ReactNode> = {
   bell: <Bell />,
   command: <Command />,
   fish: <Fish />,
+  mic: <Mic />,
+  "mic-off": <MicOff />,
 };
 
 const ALIASES: Record<string, string> = {

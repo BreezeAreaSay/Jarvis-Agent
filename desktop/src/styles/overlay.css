@@ -223,7 +223,8 @@
 }
 
 .ov-slot.leaving .ov-pill-body,
-.ov-slot.leaving .ov-pill-dots {
+.ov-slot.leaving .ov-pill-dots,
+.ov-slot.leaving .ov-pill-stop {
   opacity: 0;
   transition: opacity 140ms;
 }
@@ -320,6 +321,42 @@
 
 .ov-pill.is-miss .ov-pill-ph {
   color: #fecaca;
+}
+
+/* «Стоп» на строке голоса: перестать слушать, замолчать, бросить ответ */
+.ov-pill-stop {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  margin-left: -4px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+.ov-pill-stop:hover {
+  background: #e5484d;
+  border-color: transparent;
+  color: #fff;
+}
+
+.ov-pill-stop:active {
+  transform: scale(0.92);
+}
+
+.ov-pill-stop svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
 }
 
 .ov-pill-dots {

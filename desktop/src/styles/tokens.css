@@ -1,0 +1,75 @@
+/* Дизайн-токены Jarvis: тёмно-синее «стекло», акцент — цвет темы из настроек.
+   --accent-* выставляет src/lib/theme.ts по settings.interface.accent;
+   --glass-alpha и --glass-blur — по «Прозрачности» и «Размытию». */
+:root {
+  color-scheme: dark;
+
+  --font-ui: "Inter Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Manrope Variable", "Inter Variable", "Segoe UI", system-ui, sans-serif;
+
+  --bg-0: #121419;
+  --bg-1: #171a21;
+  --bg-2: #1c2029;
+  --bg-glow-1: rgba(48, 78, 160, 0.34);
+  --bg-glow-2: rgba(38, 60, 128, 0.26);
+
+  --accent: #3b82f6;
+  --accent-rgb: 59, 130, 246;
+  --accent-hover: #5a96f8;
+  --accent-press: #2f6fdc;
+  --accent-soft: rgba(59, 130, 246, 0.16);
+  --accent-softer: rgba(59, 130, 246, 0.08);
+  --accent-text: #8db6ff;
+  --on-accent: #ffffff;
+
+  --glass-alpha: 0.62;
+  --glass-blur: 22px;
+  --panel: rgba(36, 40, 50, var(--glass-alpha));
+  --panel-solid: #22262f;
+  --panel-raised: rgba(46, 51, 63, calc(var(--glass-alpha) + 0.12));
+  --row: rgba(255, 255, 255, 0.035);
+  --row-hover: rgba(255, 255, 255, 0.06);
+  --field: rgba(14, 16, 21, 0.42);
+  --field-hover: rgba(14, 16, 21, 0.55);
+
+  --line: rgba(255, 255, 255, 0.075);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --line-accent: rgba(var(--accent-rgb), 0.55);
+
+  --text: #f1f3f7;
+  --text-2: rgba(232, 236, 244, 0.66);
+  --text-3: rgba(232, 236, 244, 0.42);
+  --text-4: rgba(232, 236, 244, 0.26);
+
+  --ok: #34d399;
+  --ok-soft: rgba(52, 211, 153, 0.14);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.14);
+  --err: #f87171;
+  --err-soft: rgba(248, 113, 113, 0.14);
+
+  --r-xs: 6px;
+  --r-sm: 9px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-pill: 999px;
+
+  --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px rgba(0, 0, 0, 0.22);
+  --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 18px 48px rgba(0, 0, 0, 0.38);
+  --shadow-accent: 0 6px 22px rgba(var(--accent-rgb), 0.35);
+
+  --ease: cubic-bezier(0.22, 0.8, 0.24, 1);
+  --t-fast: 120ms;
+  --t-med: 220ms;
+  --t-slow: 420ms;
+
+  --sidebar-w: 68px;
+  --titlebar-h: 40px;
+}
+
+:root[data-anim="off"] {
+  --t-fast: 0ms;
+  --t-med: 0ms;
+  --t-slow: 0ms;
+}

@@ -169,6 +169,7 @@ label, placeholder?, options?}], description}`.
 | `POST /api/voice/enabled` | `{enabled}` | то же |
 | `POST /api/voice/listen` | — | `{ok}` — слушать команду без активатора (кнопка микрофона, хоткей) |
 | `POST /api/voice/stop` | — | `{ok}` |
+| `POST /api/voice/capture` | `{timeout?: 15, punct?: true}` | `{text}` — выслушать одну фразу без активатора и без выполнения (диктовка в поле ввода чата) |
 | `GET /api/voice/devices` | — | `{inputs: [{id, name, default}], outputs: [...]}` |
 | `GET /api/voice/models` | — | `{items: [{id, kind: asr\|stream\|vad\|tts, title, size_mb, installed, downloading, progress, required}]}` |
 | `POST /api/voice/models/{id}/download` | — | `{ok}` (прогресс — события) |

@@ -1,12 +1,14 @@
 // Плагины поверх экрана: живые субтитры и диктовка (внизу по центру), чтение вслух (мини-плеер справа
-// внизу), запись конспекта (значок справа вверху).
-import { BookOpenText, Check, Mic, Pause, Play, Square } from "lucide-react";
+// внизу), запись конспекта и включённые субтитры (значки справа вверху — видны и над полноэкранным видео:
+// человек должен знать, что звук записывается или слушается).
+import { BookOpenText, Captions, Check, Mic, Pause, Play, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "@/api/client";
 import { levels } from "@/lib/levels";
 import { useApp } from "@/store/app";
 import { cx } from "@/ui";
 import { useOverlayEvent } from "./bus";
-import { Fade, fmtClock, pluginAction, tail, useRaf } from "./common";
+import { DEMO, Fade, fmtClock, pluginAction, tail, useRaf } from "./common";
 
 // --- живые субтитры -----------------------------------------------------------------------------------
 interface SubtitleItem {
@@ -284,6 +286,48 @@ interface SummaryState {
   progress?: number;
 }
 
+/** Значки справа вверху стопкой: запись конспекта и включённые субтитры. */
+export function RecordingBadges({ hidden }: { hidden: boolean }) {
+  return (
+    <div className="ov-rec-stack">
+      <SummaryBadge hidden={hidden} />
+      <SubtitlesBadge />
+    </div>
+  );
+}
+
+/** Субтитры слушают звук компьютера — пока они включены, значок с «Стоп» (и над полноэкранным видео). */
+export function SubtitlesBadge() {
+  const [active, setActive] = useState(false);
+  useOverlayEvent<{ active: boolean }>("plugin.subtitles.state", (d) => setActive(!!d?.active));
+  // оверлей мог открыться, когда субтитры уже шли: событие о запуске было раньше
+  useEffect(() => {
+    if (DEMO) return;
+    api
+      .get<{ items: { id: string; enabled: boolean; status?: { active?: boolean } }[] }>("/api/plugins")
+      .then((r) => {
+        const p = r.items.find((x) => x.id === "subtitles");
+        setActive(!!(p?.enabled && p.status?.active));
+      })
+      .catch(() => undefined);
+  }, []);
+  return (
+    <Fade show={active}>
+      {(leaving) => (
+        <div className={cx("ov-summary ov-subs-badge ov-anim", leaving && "leaving")} data-interactive>
+          <Captions className="ov-subs-badge-ico" />
+          <span className="ov-sum-label">Субтитры</span>
+          <button type="button" className="ov-sum-stop" onClick={() => pluginAction("subtitles", "stop")} title="Остановить субтитры">
+            <Square />
+          </button>
+        </div>
+      )}
+    </Fade>
+  );
+}
+
+/** Запись конспекта. Пока пишет — виден всегда, даже над полноэкранной игрой; остальное (расшифровка, готово) —
+ * как прочий оверлей. */
 export function SummaryBadge({ hidden }: { hidden: boolean }) {
   const [s, setS] = useState<SummaryState | null>(null);
   const [show, setShow] = useState(false);
@@ -338,7 +382,7 @@ export function SummaryBadge({ hidden }: { hidden: boolean }) {
   }
 
   return (
-    <Fade show={show && !hidden && !!s}>
+    <Fade show={show && (!hidden || recording) && !!s}>
       {(leaving) => (
         <div className={cx("ov-summary ov-anim", leaving && "leaving", `is-${s?.state}`)} data-interactive>
           {s?.state === "recording" ? (

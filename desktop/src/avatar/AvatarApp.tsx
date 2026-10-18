@@ -1,8 +1,9 @@
 // Живой аватар на рабочем столе: сфера Jarvis во всё маленькое прозрачное окно и тонкое кольцо состояния
 // голоса (слушаю — ярче, думаю — бегущая дуга, говорю — пульсирует с речью). Перетаскивается мышью (окно
 // двигает главный процесс), щелчок открывает Jarvis, правый щелчок — меню; под указателем — кнопки плеера.
+// Микрофон выключен — сфера серее и с красным значком (щелчок по значку включает микрофон).
 import "@/styles/overlay.css";
-import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
+import { MicOff, Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/api/client";
 import { onEvent } from "@/api/events";
@@ -146,6 +147,25 @@ function StateRing() {
   return <canvas ref={ref} className="av-ring" aria-hidden />;
 }
 
+/** Микрофон выключен: красный значок на сфере — щелчок включает (сфера при этом не открывает Jarvis). */
+function MutedBadge() {
+  const stop = (e: React.PointerEvent) => e.stopPropagation();
+  const enable = () => void useApp.getState().patchSettings({ voice: { enabled: true } }).catch(() => undefined);
+  return (
+    <button
+      type="button"
+      className="av-mute"
+      title="Микрофон выключен — нажмите, чтобы включить"
+      aria-label="Включить микрофон"
+      onPointerDown={stop}
+      onPointerUp={stop}
+      onClick={enable}
+    >
+      <MicOff />
+    </button>
+  );
+}
+
 /** Плеер под сферой: назад, пауза/играть, вперёд — для того, что играет в Windows (Spotify, браузер, …). */
 function MediaControls({ media }: { media: MediaInfo | null }) {
   const playing = media?.status === "playing";
@@ -198,6 +218,8 @@ export default function AvatarApp() {
   }, [connected]);
 
   const hidden = !!settings && (!settings.avatar.desktop || (fullscreen && settings.avatar.hide_fullscreen));
+  // выключенный микрофон — не то же, что ядро не отвечает (av-offline): серее и с красным значком
+  const muted = connected && !!settings && !settings.voice.enabled;
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -241,8 +263,8 @@ export default function AvatarApp() {
 
   return (
     <div
-      className={cx("av-root", hidden && "av-hidden", !connected && "av-offline", dragging && "av-dragging")}
-      title={dragging || hover ? undefined : "Jarvis — нажмите, чтобы открыть"}
+      className={cx("av-root", hidden && "av-hidden", !connected && "av-offline", muted && "av-muted", dragging && "av-dragging")}
+      title={dragging || hover ? undefined : muted ? "Jarvis — микрофон выключен. Нажмите, чтобы открыть" : "Jarvis — нажмите, чтобы открыть"}
       onPointerEnter={() => setHover(true)}
       onPointerLeave={() => setHover(false)}
       onPointerDown={onPointerDown}
@@ -260,6 +282,7 @@ export default function AvatarApp() {
             <Orb scale={ORB_SCALE} />
           </div>
           <StateRing />
+          {muted && !dragging && <MutedBadge />}
           {hover && !dragging && <MediaControls media={media} />}
         </>
       )}

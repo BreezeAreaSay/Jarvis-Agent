@@ -20,6 +20,15 @@ extraResources:
     to: tray.ico
   - from: build/tray.png
     to: tray.png
+  # значок в трее, когда микрофон выключен и когда идёт запись конспекта
+  - from: build/tray-off.ico
+    to: tray-off.ico
+  - from: build/tray-off.png
+    to: tray-off.png
+  - from: build/tray-rec.ico
+    to: tray-rec.ico
+  - from: build/tray-rec.png
+    to: tray-rec.png
 win:
   target:
     - target: nsis

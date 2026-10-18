@@ -338,12 +338,62 @@ function quickMenu(): MenuItemConstructorOptions[] {
   ];
 }
 
+// --- значок в трее: микрофон выключен, идёт запись, что сейчас делает голос ---------------------------------
+let voiceState = "off";
+let summary = { state: "idle", seconds: 0 };
+let subtitlesOn = false;
+let trayLook = { icon: "", tip: "" };
+
+const TRAY_EXT = process.platform === "win32" ? "ico" : "png";
+
+function trayImage(name: string) {
+  // нет файла (сборка без вариантов значка) — обычный значок, а не пустое место в трее
+  const file = resource(`${name}.${TRAY_EXT}`);
+  return iconImage(fs.existsSync(file) ? `${name}.${TRAY_EXT}` : `tray.${TRAY_EXT}`);
+}
+
+function fmtClock(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function trayStatus(): { icon: string; tip: string } {
+  if (summary.state === "recording") return { icon: "tray-rec", tip: `Jarvis — запись конспекта ${fmtClock(summary.seconds)}` };
+  const extra = subtitlesOn ? " · субтитры" : "";
+  if (summary.state === "transcribing" || summary.state === "summarizing") {
+    return { icon: "tray", tip: `Jarvis — готовлю конспект…${extra}` };
+  }
+  if (!(settings?.voice?.enabled ?? true)) return { icon: "tray-off", tip: `Jarvis — микрофон выключен${extra}` };
+  const wake = String(settings?.voice?.wake_words?.[0] ?? "Джарвис");
+  const states: Record<string, string> = {
+    idle: `жду «${wake.charAt(0).toUpperCase()}${wake.slice(1)}»`,
+    listening: "слушаю",
+    processing: "думаю…",
+    speaking: "говорю",
+    loading: "загружаю голосовые модели…",
+    error: "голос не работает — откройте настройки",
+  };
+  return { icon: "tray", tip: `Jarvis${states[voiceState] ? ` — ${states[voiceState]}` : ""}${extra}` };
+}
+
+function updateTrayLook() {
+  if (!tray) return;
+  const next = trayStatus();
+  if (next.icon !== trayLook.icon) tray.setImage(trayImage(next.icon));
+  if (next.tip !== trayLook.tip) tray.setToolTip(next.tip);
+  trayLook = next;
+}
+
 function rebuildTray() {
   if (!tray) {
-    tray = new Tray(iconImage(process.platform === "win32" ? "tray.ico" : "tray.png"));
-    tray.setToolTip("Jarvis");
+    tray = new Tray(trayImage("tray"));
+    trayLook = { icon: "tray", tip: "" };
     tray.on("click", () => (mainWin?.isVisible() && mainWin.isFocused() ? mainWin.hide() : showMain()));
   }
+  updateTrayLook();
   tray.setContextMenu(
     Menu.buildFromTemplate([
       ...quickMenu(),
@@ -358,18 +408,27 @@ function rebuildTray() {
 }
 
 // --- горячие клавиши и автозапуск ------------------------------------------------------------------------
-/** Микрофон Jarvis: выключить или включить (хоткей, меню) — с уведомлением, чтобы было видно, что случилось. */
+/** Микрофон Jarvis: выключить или включить (хоткей) — уведомление скажет applySettings, как и при любом другом
+ * переключении (меню, голосом «не слушай меня», пульт). */
 async function toggleMic() {
-  const on = !(settings?.voice?.enabled ?? true);
-  await patch({ voice: { enabled: on } });
-  if (Notification.isSupported()) {
-    new Notification({
-      title: "Jarvis",
-      body: on ? "Микрофон включён — слушаю «Джарвис»" : "Микрофон выключен — Jarvis не слушает",
-      icon: iconImage(),
-      silent: true,
-    }).show();
-  }
+  await patch({ voice: { enabled: !(settings?.voice?.enabled ?? true) } });
+}
+
+/** Микрофон включили или выключили — уведомление: кроме случая, когда человек сам щёлкнул в главном окне. */
+function notifyMic(on: boolean) {
+  if (!Notification.isSupported() || (mainWin?.isVisible() && mainWin.isFocused())) return;
+  const wake = String(settings?.voice?.wake_words?.[0] ?? "Джарвис");
+  const key = settings?.system?.hotkey_mic ? ` (${settings.system.hotkey_mic})` : "";
+  const n = new Notification({
+    title: "Jarvis",
+    body: on
+      ? `Микрофон включён — слушаю «${wake.charAt(0).toUpperCase()}${wake.slice(1)}»`
+      : `Микрофон выключен — Jarvis не слушает. Нажмите, чтобы включить${key}`,
+    icon: iconImage(),
+    silent: true,
+  });
+  if (!on) n.on("click", () => void patch({ voice: { enabled: true } }));
+  n.show();
 }
 
 function registerShortcuts() {
@@ -476,6 +535,9 @@ function applySettings(next: any) {
   syncOverlay();
   syncAvatar();
   rebuildTray();
+  const micWas = prev?.voice?.enabled ?? true;
+  const micNow = next?.voice?.enabled ?? true;
+  if (prev && micWas !== micNow) notifyMic(micNow);
   if (
     !prev ||
     JSON.stringify(prev.system) !== JSON.stringify(next.system) ||
@@ -487,6 +549,7 @@ function applySettings(next: any) {
 }
 
 client.on("hello", (data) => {
+  voiceState = String(data?.voice?.state ?? "off");
   applySettings(data.settings);
   void loadPluginHotkeys();
   if (!updatesStarted) {
@@ -496,6 +559,19 @@ client.on("hello", (data) => {
 });
 client.on("settings.changed", (data) => applySettings(data.settings));
 client.on("plugins.changed", () => void loadPluginHotkeys());
+// значок и подсказка в трее: слушает, говорит, микрофон выключен, идёт запись
+client.on("voice.state", (data) => {
+  voiceState = String(data?.state ?? "off");
+  updateTrayLook();
+});
+client.on("plugin.summary.state", (data) => {
+  summary = { state: String(data?.state ?? "idle"), seconds: Number(data?.seconds) || 0 };
+  updateTrayLook();
+});
+client.on("plugin.subtitles.state", (data) => {
+  subtitlesOn = !!data?.active;
+  updateTrayLook();
+});
 client.on("fullscreen.changed", (data) => {
   fullscreen = !!data.fullscreen;
   syncAvatar();

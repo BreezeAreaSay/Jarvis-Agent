@@ -403,7 +403,7 @@ fields?: [поля элемента списка] (kind list), secret?: имя, 
 |---|---|---|
 | `smart_home` | `states`, `toggle`, `turn_on`, `turn_off`, `set`, `refresh` | `devices {items}` |
 | `dictation` | `toggle`, `start`, `stop` | `state {state: listening\|processing\|idle, text}` |
-| `subtitles` | `start`, `stop` | `text {id, text, translation, lang, pending}`, `state` |
+| `subtitles` | `start`, `stop` | `text {id, text, translation, lang, pending}`, `state {active}` (значок «Субтитры» в оверлее и в трее) |
 | `summary` | `start`, `stop`, `retry` | `state {state: recording\|transcribing\|summarizing\|done\|error, seconds}` |
 | `reader` | `read {text?\|url?}`, `pause`, `resume`, `stop`, `speed {speed}`, `seek {index}` | `progress {state, index, total, sentence, sentences?}` |
 | `autolock` | `pause`, `resume`, `check` | `state {present, last_seen, armed}` |

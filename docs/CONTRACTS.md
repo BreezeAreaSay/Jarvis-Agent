@@ -201,34 +201,36 @@ label, placeholder?, options?}], description}`.
 
 | Маршрут | Тело | Ответ |
 |---|---|---|
-| `GET /api/ai/providers` | — | `{items: [{id, title, base_url, needs_key, default_model, models}]}` |
+| `GET /api/ai/providers` | — | `{items: [{id, title, base_url, needs_key, local, key_url, default_model, models}]}` |
 | `GET /api/ai/models` | — | `{items: [string]}` (с провайдера; ошибка — пресеты) |
 | `POST /api/ai/test` | — | `{ok, error?, latency_ms}` |
-| `GET /api/ai/usage` | — | `{month: {prompt_tokens, completion_tokens, cost}, budget}` |
+| `GET /api/ai/usage` | — | `{month: {requests, prompt_tokens, completion_tokens, cost, since}, budget}` |
 | `GET /api/chats` | — | `{items: Chat[]}` |
 | `POST /api/chats` | `{title?, mode?}` | `Chat` |
 | `GET /api/chats/{id}` | — | `{chat: Chat, messages: UiMessage[]}` |
 | `PATCH /api/chats/{id}` | `{title?, pinned?, mode?, model?}` | `Chat` |
 | `DELETE /api/chats/{id}` | — | `{ok}` |
-| `POST /api/chats/{id}/messages` | `{text, images?: [dataURL], mode?}` | `{chat_id, message_id}` — ответ идёт событиями |
+| `POST /api/chats/{id}/messages` | `{text, images?: [dataURL], mode?}` | `{chat_id, message_id, reply_id}` — ответ идёт событиями (`chat.delta` с `message_id = reply_id`) |
 | `POST /api/chats/{id}/stop` | — | `{ok}` |
 | `POST /api/agent/run` | `{task}` | `{run_id}` |
 | `POST /api/agent/stop` | — | `{ok}` |
+| `GET /api/agent` | — | состояние текущего запуска (как `agent.state`) или `null` |
 | `GET/POST /api/memory`, `DELETE /api/memory/{id}` | `{text}` | `{items}` / item |
 | `GET/POST /api/notes`, `PATCH/DELETE /api/notes/{id}` | `{title, body, pinned, color}` | `{items}` / item |
 | `GET/POST /api/tasks`, `PATCH/DELETE /api/tasks/{id}` | `{title, done, due}` | `{items}` / item |
 | `GET /api/events?start=&end=`, `POST`, `PATCH/DELETE /api/events/{id}` | `{title, start, end, all_day, notes, remind_min}` | |
-| `GET/POST /api/reminders`, `DELETE /api/reminders/{id}` | `{text, at, repeat}` | |
+| `GET/POST /api/reminders`, `PATCH/DELETE /api/reminders/{id}` | `{text, at, repeat}` | |
 | `GET /api/mcp/servers` | — | `{items: McpServer[]}` |
 | `POST /api/mcp/servers`, `PUT/DELETE /api/mcp/servers/{id}` | `McpServerIn` | `McpServer` |
 | `POST /api/mcp/servers/{id}/reconnect` | — | `McpServer` |
-| `GET /api/mcp/catalog?q=&cursor=` | — | `{items: [{name, title, description, version, repository, install}], next_cursor, total}` |
+| `GET /api/mcp/catalog?q=&cursor=` | — | `{items: [{name, title, description, version, repository, website, install, installs}], next_cursor, total}` (`install` может содержать `headers`) |
 
 `Chat = {id, title, kind: chat|voice, mode: chat|all|agent, model, pinned, created, updated}`.
 `UiMessage = {id, chat_id, role: user|assistant, content, created, meta: {sources?: [{title, url}],
 actions?: [{title, ok, detail?}], memory?: [string], images?: [string], error?, usage?}}`.
-`McpServer = {id, name, transport: stdio|http, command, args, env, url, enabled, status: connected|connecting|
-error|disabled, error, tools: [{name, description}]}`.
+`McpServer = {id, name, transport: stdio|http, command, args, env, url, headers, enabled, status: connected|connecting|
+error|disabled, error, tools: [{name, description}]}` — секретные `env`/`headers` приходят замаскированными; маска,
+вернувшаяся при сохранении, оставляет прежнее значение.
 
 | Событие | Данные |
 |---|---|
@@ -238,17 +240,18 @@ error|disabled, error, tools: [{name, description}]}`.
 | `chat.delta` | `{chat_id, message_id, delta}` — кусок текста ответа |
 | `chat.status` | `{chat_id, message_id, status: thinking\|searching\|tool\|done\|error, text}` — «Ищу актуальную информацию…» |
 | `chat.tool` | `{chat_id, message_id, call_id, name, title, status: running\|ok\|error, detail?}` |
-| `chat.done` | `{chat_id, message_id, text, sources, actions, usage}` |
+| `chat.done` | `{chat_id, message_id, text, sources, actions, usage, stopped?}` |
 | `chat.error` | `{chat_id, message_id?, error}` |
-| `memory.added` | `{item: {id, text, source, created}}` — «Запомнил: Аня не ест мясо» |
+| `memory.added` | `{item: {id, text, source, created}}` — «Запомнил: Аня не ест мясо» (при замене факта — тот же id) |
 | `memory.deleted` | `{id}` |
 | `notes.changed` / `tasks.changed` / `events.changed` / `reminders.changed` | `{op: add\|update\|delete, item?, id?}` |
-| `reminder.fired` | `{item}` |
+| `reminder.fired` | `{item: {…, kind: reminder\|event, missed}}` |
 | `agent.state` | `{run_id, task, status: planning\|running\|waiting\|done\|stopped\|error, step, total, text}` |
 | `agent.step` | `{run_id, index, title, status: running\|ok\|error}` |
 | `mcp.status` | `{server_id, status, error?, tools_count}` |
 
 Подтверждения агента — общий механизм `ctx.confirmations.request(..., kind="agent")` (события `confirm.*`).
+Фраза «агент, …» отправляет задачу агенту в любом режиме чата; «стоп» останавливает и ответ ИИ, и агента.
 
 ## 5. Виджеты, столы, плагины, пульт (`jarvis/widgets`, `jarvis/desks`, `jarvis/plugins`, `jarvis/remote`)
 

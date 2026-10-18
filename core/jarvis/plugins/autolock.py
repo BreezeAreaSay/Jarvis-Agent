@@ -8,6 +8,8 @@
 Режим «бездействие»: блокировать, если нет ввода дольше config.away_seconds.
 Во время игр и видео во весь экран не блокирует (кроме config.force). Статус — {present, last_seen, …},
 событие plugin.autolock.state.
+
+OpenCV в установщик не входит (это +110 МБ): действие install_camera скачивает его в <data>/pylib.
 """
 
 import asyncio
@@ -19,6 +21,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 
+from jarvis import extras
 from jarvis.plugins.base import ConfigField, Option, Plugin, PluginAction, error_text
 from jarvis.services import DynamicCommand, ExecResult, UserFacingError
 
@@ -28,6 +31,10 @@ INTERVAL_S = 1.5
 LOCKED_INTERVAL_S = 5.0  # после блокировки проверяем реже — человека всё равно нет
 CAMERA_RETRY_S = 10.0
 CASCADES = ("haarcascade_frontalface_default.xml", "haarcascade_profileface.xml")
+CAMERA_PACKAGE = "opencv-python-headless>=4.10"
+CAMERA_MODULE_HINT = (
+    "Для режима «Камера» нужен модуль распознавания лица (~40 МБ) — нажмите «Скачать модуль камеры»"
+)
 
 
 class FaceDetector(Protocol):
@@ -50,10 +57,11 @@ class CameraFaceDetector:
         self._cascades: list[Any] | None = None
 
     def _cv2(self) -> Any:
+        extras.ensure_on_path()
         try:
             import cv2
         except ImportError as e:
-            raise UserFacingError("нет OpenCV (пакет opencv-python-headless)") from e
+            raise UserFacingError(CAMERA_MODULE_HINT) from e
         return cv2
 
     def _load_cascades(self, cv2: Any) -> list[Any]:
@@ -142,6 +150,7 @@ class AutoLock(Plugin):
         PluginAction("pause", "Не блокировать час"),
         PluginAction("resume", "Снова следить"),
         PluginAction("check", "Проверить камеру"),
+        PluginAction("install_camera", "Скачать модуль камеры"),
     )
     examples = ("не блокируй компьютер час", "включи автоблокировку")
 
@@ -365,6 +374,16 @@ class AutoLock(Plugin):
         self._publish_state()
         self.changed()
         return {"paused_until": 0.0}
+
+    async def act_install_camera(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Скачать OpenCV в <data>/pylib и сразу попробовать камеру."""
+        self.toast("Скачиваю модуль камеры", "Около 40 МБ, это займёт минуту", icon="lock")
+        await extras.install(CAMERA_PACKAGE)
+        await self._close_detector()
+        self._camera_retry_at = 0.0
+        self._camera_error = ""
+        self.toast("Модуль камеры готов", "Блокировка по камере работает", status="ok", icon="lock")
+        return {"ok": True}
 
     async def act_check(self, args: dict[str, Any]) -> dict[str, Any]:
         """Проверить камеру сейчас: видно ли лицо."""

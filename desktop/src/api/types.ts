@@ -103,6 +103,7 @@ export interface Settings {
     hotkey_show: string;
     hotkey_listen: string;
     check_updates: boolean;
+    auto_update: boolean;
     overlay: boolean;
   };
   remote: {

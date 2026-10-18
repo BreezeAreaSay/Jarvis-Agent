@@ -39,6 +39,21 @@
 Установщик не подписан цифровой подписью — Windows SmartScreen может предупредить: «Подробнее → Выполнить
 в любом случае».
 
+## Обновления
+
+Jarvis сам проверяет новые версии на GitHub — при запуске и каждые 6 часов, — качает их в фоне и предлагает
+перезапуститься (уведомление, пункт в трее и «Настройки → Система → Обновления», там же «Проверить сейчас»).
+Новая версия ставится тихо поверх старой; настройки, модели и история остаются.
+
+Выпуск версии:
+
+1. Поднять версию в `desktop/package.json`, `core/pyproject.toml` и `core/jarvis/__init__.py`.
+2. Собрать установщик: `pwsh -File scripts\build-win.ps1` — в `desktop\release` появятся
+   `Jarvis-Setup-<версия>.exe`, `Jarvis-Setup-<версия>.exe.blockmap` и `latest.yml`.
+3. Опубликовать: `pwsh -File scripts\publish-release.ps1 -Notes "что нового"` (нужен
+   [GitHub CLI](https://cli.github.com): `winget install GitHub.cli`, `gh auth login`) — или вручную: новый релиз
+   на GitHub с тегом `v<версия>` и этими тремя файлами. Без `latest.yml` приложение версию не увидит.
+
 ## Запуск из исходников (Windows)
 
 Нужны [uv](https://docs.astral.sh/uv/) и Node.js 22+.

@@ -42,4 +42,10 @@ nsis:
   language: "1049"
   deleteAppDataOnUninstall: false
   runAfterFinish: true
-publish: null
+# обновления из приложения (electron-updater): релизы GitHub; сборка сама ничего не публикует (--publish never),
+# файлы релиза кладёт scripts/publish-release.ps1
+publish:
+  provider: github
+  owner: BreezeAreaSay
+  repo: Jarvis-Agent
+  releaseType: release

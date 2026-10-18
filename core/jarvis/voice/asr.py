@@ -9,15 +9,17 @@
   модель под своим замком (декодер не делят два потока).
 """
 
+import contextlib
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
 
+from jarvis import crashguard
 from jarvis import text as textops
 from jarvis.voice import models as m
 from jarvis.voice.dsp import FRAME, RATE
@@ -32,6 +34,18 @@ MAX_SEGMENT_S = 20.0
 
 class AsrError(RuntimeError):
     """Модель не загрузилась; текст — для человека."""
+
+
+@contextlib.contextmanager
+def _guarded(stage: str, title: str) -> Iterator[None]:
+    """Нативная загрузка модели: если на ней ядро уже падало — понятная ошибка вместо нового вылета."""
+    try:
+        with crashguard.stage(stage):
+            yield
+    except crashguard.StageBlocked:
+        raise AsrError(
+            f"{title} аварийно останавливала ядро — пропускаю её. Скачайте модель заново в настройках голоса"
+        ) from None
 
 
 def _so() -> Any:
@@ -89,7 +103,8 @@ class SileroVad:
             max_speech_duration=max_speech,
         )
         cfg = so.VadModelConfig(silero_vad=silero, sample_rate=RATE, num_threads=1)
-        self._vad = so.VoiceActivityDetector(cfg, buffer_size_in_seconds=max_speech + 10)
+        with _guarded("vad", "Модель детектора речи"):
+            self._vad = so.VoiceActivityDetector(cfg, buffer_size_in_seconds=max_speech + 10)
 
     def accept(self, frame: np.ndarray) -> bool:
         self._vad.accept_waveform(np.asarray(frame, dtype=np.float32))
@@ -124,7 +139,8 @@ def speech_segments(
         max_speech_duration=max_segment_s,
     )
     cfg = so.VadModelConfig(silero_vad=silero, sample_rate=RATE, num_threads=1)
-    vad = so.VoiceActivityDetector(cfg, buffer_size_in_seconds=max(60.0, n / RATE + 5))
+    with _guarded("vad", "Модель детектора речи"):
+        vad = so.VoiceActivityDetector(cfg, buffer_size_in_seconds=max(60.0, n / RATE + 5))
     raw: list[tuple[int, int]] = []
 
     def drain() -> None:
@@ -189,16 +205,17 @@ class StreamingAsr:
         if files is None:
             raise AsrError(f"потоковая модель неполная: {folder}")
         so = _so()
-        self.rec = so.OnlineRecognizer.from_transducer(
-            tokens=str(files["tokens"]),
-            encoder=str(files["encoder"]),
-            decoder=str(files["decoder"]),
-            joiner=str(files["joiner"]),
-            num_threads=threads,
-            sample_rate=RATE,
-            feature_dim=80,
-            decoding_method="greedy_search",
-        )
+        with _guarded(f"asr-{folder.name}", "Потоковая модель распознавания"):
+            self.rec = so.OnlineRecognizer.from_transducer(
+                tokens=str(files["tokens"]),
+                encoder=str(files["encoder"]),
+                decoder=str(files["decoder"]),
+                joiner=str(files["joiner"]),
+                num_threads=threads,
+                sample_rate=RATE,
+                feature_dim=80,
+                decoding_method="greedy_search",
+            )
 
     def session(self) -> StreamSession:
         return StreamSession(self)
@@ -222,17 +239,18 @@ class OfflineAsr:
         so = _so()
         self.punct = punct
         self.lock = threading.Lock()
-        self.rec = so.OfflineRecognizer.from_transducer(
-            encoder=str(files["encoder"]),
-            decoder=str(files["decoder"]),
-            joiner=str(files["joiner"]),
-            tokens=str(files["tokens"]),
-            num_threads=threads,
-            sample_rate=RATE,
-            feature_dim=64,
-            decoding_method="greedy_search",
-            model_type="nemo_transducer",
-        )
+        with _guarded(f"asr-{folder.name}", "Модель распознавания"):
+            self.rec = so.OfflineRecognizer.from_transducer(
+                encoder=str(files["encoder"]),
+                decoder=str(files["decoder"]),
+                joiner=str(files["joiner"]),
+                tokens=str(files["tokens"]),
+                num_threads=threads,
+                sample_rate=RATE,
+                feature_dim=64,
+                decoding_method="greedy_search",
+                model_type="nemo_transducer",
+            )
 
     def recognize(self, samples: np.ndarray) -> str:
         x = np.asarray(samples, dtype=np.float32)
@@ -254,6 +272,7 @@ class WhisperAsr:
         if files is None:
             raise AsrError(f"модель Whisper неполная: {folder}")
         self.files = files
+        self.folder = folder
         self.threads = threads
         self.lock = threading.Lock()
         self._recs: dict[str, Any] = {}
@@ -262,14 +281,15 @@ class WhisperAsr:
         rec = self._recs.get(language)
         if rec is None:
             so = _so()
-            rec = so.OfflineRecognizer.from_whisper(
-                encoder=str(self.files["encoder"]),
-                decoder=str(self.files["decoder"]),
-                tokens=str(self.files["tokens"]),
-                language=language,
-                task="transcribe",
-                num_threads=self.threads,
-            )
+            with _guarded(f"asr-{self.folder.name}", "Модель Whisper"):
+                rec = so.OfflineRecognizer.from_whisper(
+                    encoder=str(self.files["encoder"]),
+                    decoder=str(self.files["decoder"]),
+                    tokens=str(self.files["tokens"]),
+                    language=language,
+                    task="transcribe",
+                    num_threads=self.threads,
+                )
             if len(self._recs) >= 2:
                 self._recs.pop(next(iter(self._recs)))
             self._recs[language] = rec

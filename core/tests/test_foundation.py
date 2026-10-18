@@ -174,3 +174,10 @@ def test_ws_rejects_bad_token(client: TestClient) -> None:
 
     with pytest.raises(WebSocketDisconnect), client.websocket_connect("/ws?token=bad") as ws:
         ws.receive_json()
+
+
+def test_shutdown_route_asks_server_to_exit(client: TestClient) -> None:
+    assert client.post("/api/shutdown").status_code == 409  # без сервера (тестовый клиент) выхода нет
+    asked: list[bool] = []
+    client.ctx.request_exit = lambda: asked.append(True)  # type: ignore[attr-defined]
+    assert client.post("/api/shutdown").json() == {"ok": True} and asked == [True]

@@ -19,6 +19,15 @@ async def health() -> dict[str, Any]:
     return {"ok": True, "version": __version__}
 
 
+@router.post("/api/shutdown")
+async def shutdown(ctx: Ctx) -> dict[str, Any]:
+    """Штатный выход по просьбе Electron: сервисы останавливаются и закрывают свои файлы."""
+    if ctx.request_exit is None:
+        raise HTTPException(409, detail="ядро запущено не сервером — выход недоступен")
+    ctx.request_exit()
+    return {"ok": True}
+
+
 @router.get("/api/status")
 async def status(ctx: Ctx) -> dict[str, Any]:
     return {

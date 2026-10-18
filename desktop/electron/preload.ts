@@ -7,6 +7,8 @@ const LISTEN = new Set([
   "window:focus",
   "core:restarting",
   "core:ready",
+  "core:failed",
+  "update:state",
   "navigate",
 ]);
 const SEND = new Set([
@@ -18,6 +20,11 @@ const SEND = new Set([
   "overlay:ignore-mouse",
   "overlay:ready",
   "overlay:focus",
+  "core:restart",
+  "logs:open",
+  "update:check",
+  "update:download",
+  "update:install",
 ]);
 
 function arg(name: string): string {
@@ -34,6 +41,8 @@ contextBridge.exposeInMainWorld("jarvis", {
   pickFile: (options: unknown) => ipcRenderer.invoke("dialog:pick-file", options),
   fileIcon: (path: string) => ipcRenderer.invoke("app:file-icon", String(path)),
   pickPoint: () => ipcRenderer.invoke("screen:pick-point"),
+  coreFailure: () => ipcRenderer.invoke("core:failure"),
+  updateState: () => ipcRenderer.invoke("update:get"),
   on: (channel: string, listener: (...args: unknown[]) => void) => {
     if (!LISTEN.has(channel)) return () => undefined;
     const wrapped = (_: IpcRendererEvent, ...args: unknown[]) => listener(...args);

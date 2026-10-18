@@ -8,13 +8,20 @@
 """
 
 import asyncio
+import contextlib
+import hashlib
 import logging
+import os
+import shutil
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from jarvis import crashguard
 from jarvis.voice import models as m
 from jarvis.voice.engines.base import SynthOptions, TtsEngineError, clamp
 
@@ -31,6 +38,50 @@ VOICES = {
     "dmitri": ("Дмитрий", "male"),
     "irina": ("Ирина", "female"),
 }
+
+
+def ascii_espeak_dir(src: Path) -> Path:
+    """Папка данных espeak-ng по пути только из латиницы.
+
+    espeak-ng внутри sherpa-onnx открывает файлы «узкими» путями: на Windows кириллица в пути
+    (C:\\Users\\Сашка\\…) их ломает, и espeak-ng не бросает ошибку, а завершает весь процесс ядра.
+    Такую папку копируем (данные произношения, ничего личного) в C:\\ProgramData\\Jarvis — один раз
+    на версию данных.
+    """
+    if sys.platform != "win32" or str(src).isascii():
+        return src
+    digest = hashlib.sha1()
+    for name in ("phontab", "phonindex", "phondata", "intonations", "ru_dict"):
+        with contextlib.suppress(OSError):
+            digest.update(f"{name}:{(src / name).stat().st_size};".encode())
+    key = digest.hexdigest()[:10]
+    bases = [
+        os.environ.get("PROGRAMDATA", ""),
+        os.environ.get("PUBLIC", ""),
+        os.environ.get("SYSTEMDRIVE", "C:") + "\\",
+    ]
+    for base in filter(None, bases):
+        target = Path(base) / "Jarvis" / f"espeak-ng-data-{key}"
+        if not str(target).isascii():
+            continue
+        try:
+            if not (target / ".complete").is_file():
+                tmp = target.with_name(target.name + f".tmp{os.getpid()}")
+                shutil.rmtree(tmp, ignore_errors=True)
+                shutil.copytree(src, tmp)
+                (tmp / ".complete").write_text("ok", encoding="ascii")
+                shutil.rmtree(target, ignore_errors=True)
+                os.replace(tmp, target)
+                log.info(
+                    "голос: данные espeak-ng скопированы в %s (в пути профиля не только латиница)", target
+                )
+            return target
+        except OSError as e:
+            log.warning("голос: не удалось скопировать данные espeak-ng в %s: %s", target, e)
+    raise TtsEngineError(
+        "в пути к данным Jarvis есть русские буквы, а голосу piper нужен путь латиницей — "
+        "задайте переменную среды JARVIS_DATA_DIR=C:\\JarvisData или выберите другой голос"
+    )
 
 
 class PiperEngine:
@@ -87,15 +138,24 @@ class PiperEngine:
                 import sherpa_onnx as so
             except Exception as e:
                 raise TtsEngineError(f"sherpa-onnx недоступен: {e}") from e
+            espeak = ascii_espeak_dir(files["espeak"])
             try:
-                vits = so.OfflineTtsVitsModelConfig(
-                    model=str(files["model"]), tokens=str(files["tokens"]), data_dir=str(files["espeak"])
-                )
-                cfg = so.OfflineTtsConfig(
-                    model=so.OfflineTtsModelConfig(vits=vits, num_threads=self.threads), max_num_sentences=1
-                )
-                tts = so.OfflineTts(cfg)
-                tts.generate(WARMUP_TEXT, _generation_config(so, 1.0))
+                # espeak-ng и sherpa-onnx при ошибке могут завершить процесс: после двух вылетов — не грузим
+                with crashguard.stage(f"tts-{voice}"):
+                    vits = so.OfflineTtsVitsModelConfig(
+                        model=str(files["model"]), tokens=str(files["tokens"]), data_dir=str(espeak)
+                    )
+                    cfg = so.OfflineTtsConfig(
+                        model=so.OfflineTtsModelConfig(vits=vits, num_threads=self.threads),
+                        max_num_sentences=1,
+                    )
+                    tts = so.OfflineTts(cfg)
+                    tts.generate(WARMUP_TEXT, _generation_config(so, 1.0))
+            except crashguard.StageBlocked:
+                raise TtsEngineError(
+                    f"голос {voice} аварийно останавливал ядро — говорю запасным; "
+                    "скачайте голос заново в настройках"
+                ) from None
             except Exception as e:
                 raise TtsEngineError(f"голос {voice} не загрузился: {type(e).__name__}: {e}") from e
             self._tts, self._loaded = tts, voice

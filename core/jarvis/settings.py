@@ -145,6 +145,7 @@ class SystemSettings(_Model):
     hotkey_show: str = "Ctrl+Alt+J"
     hotkey_listen: str = "Ctrl+Alt+Space"
     check_updates: bool = True
+    auto_update: bool = True  # найденное обновление скачивать самому; ставится при перезапуске
     overlay: bool = True  # всплывающая строка голоса и уведомления поверх окон
 
 

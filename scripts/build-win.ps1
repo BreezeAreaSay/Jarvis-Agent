@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Сборка установщика Jarvis на Windows: Jarvis-Setup-<версия>.exe в desktop\release.

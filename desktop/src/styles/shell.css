@@ -290,3 +290,76 @@ body.material .app-root {
 .desk-tabs.more {
   mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent);
 }
+
+/* ядро не запускается: экран с причиной и кнопками поверх всего окна */
+.core-down {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(6, 9, 15, 0.62);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  -webkit-app-region: no-drag;
+  animation: fade-in var(--t-med) var(--ease) both;
+}
+
+.core-down-card {
+  width: min(560px, 100%);
+  padding: 26px 28px 22px;
+  border-radius: var(--r-xl, 22px);
+  background: var(--panel-strong, rgba(22, 26, 36, 0.96));
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  box-shadow: var(--shadow-2);
+  text-align: center;
+}
+
+.core-down-icon {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: var(--err-soft);
+  color: #fca5a5;
+}
+
+.core-down-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.core-down-card h2 {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 21px;
+}
+
+.core-down-reason {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  max-height: 120px;
+  overflow: auto;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--line);
+  color: #fecaca;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.core-down-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin: 18px 0 12px;
+}

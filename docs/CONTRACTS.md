@@ -44,6 +44,7 @@ desktop/ (Electron + React)                     core/ (Python 3.12, FastAPI)
 |---|---|---|
 | `GET /api/health` | — | `{ok, version}` (без токена) |
 | `GET /api/status` | — | `{version, platform, data_dir, uptime_s, voice: {state}, ai: {configured}, ready}` |
+| `POST /api/shutdown` | — | `{ok}` — штатный выход ядра (сервисы закрывают базу и файлы); 409 — запущено не сервером |
 | `GET /api/settings` | — | `{settings: Settings, secrets: {name: bool}}` |
 | `PATCH /api/settings` | частичный Settings | `{settings}` (422 — неверное значение) |
 | `PUT /api/secrets` | `{name, value}` (`""` — удалить) | `{secrets}` |

@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Запуск Jarvis из исходников на Windows (режим разработки): ядро на Python + интерфейс Electron с горячей

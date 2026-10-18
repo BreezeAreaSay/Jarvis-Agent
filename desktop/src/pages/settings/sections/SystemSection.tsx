@@ -1,13 +1,14 @@
 // «Система»: автозапуск, горячие клавиши, оверлей, обновления, папка данных, экспорт/импорт, о программе.
-import { Download, FolderOpen, Info, Keyboard, RotateCcw, Rocket, Trash2, Upload, Wand } from "lucide-react";
+import { CircleArrowUp, Download, FolderOpen, Info, Keyboard, RefreshCw, RotateCcw, Rocket, Trash2, Upload, Wand } from "lucide-react";
 import { useRef, useState } from "react";
 import { api } from "@/api/client";
 import type { DeepPartial, Settings } from "@/api/types";
 import { LogoMark } from "@/components/Orb";
-import { bridge } from "@/lib/bridge";
+import { bridge, isElectron } from "@/lib/bridge";
+import { type UpdateState, updates, useUpdates } from "@/lib/updates";
 import { useApp } from "@/store/app";
 import { Button, Card, Modal, notify, notifyError, Setting, Toggle } from "@/ui";
-import { CopyButton, KeyCapture, useApi, useSettingsPatch } from "../kit";
+import { CopyButton, KeyCapture, ProgressBar, useApi, useSettingsPatch } from "../kit";
 
 interface Status {
   version: string;
@@ -229,6 +230,121 @@ function AboutCard() {
   );
 }
 
+function mb(bytes?: number): string {
+  return bytes ? `${(bytes / 1048576).toLocaleString("ru-RU", { maximumFractionDigits: 1 })} МБ` : "";
+}
+
+function whenChecked(ts?: number): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  return `проверено в ${d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+/** Обновления из GitHub: что сейчас, проверка, скачивание с прогрессом, перезапуск в новую версию. */
+function UpdatesCard({
+  checkUpdates,
+  autoUpdate,
+  onCheckUpdates,
+  onAutoUpdate,
+}: {
+  checkUpdates: boolean;
+  autoUpdate: boolean;
+  onCheckUpdates: (v: boolean) => void;
+  onAutoUpdate: (v: boolean) => void;
+}) {
+  const u: UpdateState = useUpdates();
+  const [notesOpen, setNotesOpen] = useState(false);
+  let line: React.ReactNode;
+  let action: React.ReactNode = null;
+  switch (u.status) {
+    case "disabled":
+      line = isElectron ? "Обновления работают в установленной версии Jarvis" : "Обновления доступны в приложении Jarvis";
+      break;
+    case "idle":
+      line = checkUpdates ? "Скоро проверю, есть ли новая версия" : "Автопроверка выключена — можно проверить вручную";
+      break;
+    case "checking":
+      line = (
+        <span className="row" style={{ gap: 8 }}>
+          <span className="spinner" /> Проверяю…
+        </span>
+      );
+      break;
+    case "available":
+      line = <b>Доступна версия {u.version}</b>;
+      action = (
+        <Button variant="primary" icon={<Download />} onClick={updates.download}>
+          Скачать
+        </Button>
+      );
+      break;
+    case "downloading":
+      line = (
+        <span>
+          Скачиваю {u.version} — {Math.round(u.percent ?? 0)}%
+          {u.total ? ` · ${mb(u.transferred)} из ${mb(u.total)}` : ""}
+          {u.speed ? ` · ${mb(u.speed)}/с` : ""}
+        </span>
+      );
+      break;
+    case "downloaded":
+      line = <b>Версия {u.version} скачана — установится при перезапуске</b>;
+      action = (
+        <Button variant="primary" icon={<CircleArrowUp />} onClick={updates.install}>
+          Перезапустить и обновить
+        </Button>
+      );
+      break;
+    case "error":
+      line = <span className="err-text">{u.error}</span>;
+      action = (
+        <Button icon={<RefreshCw />} onClick={updates.check}>
+          Попробовать снова
+        </Button>
+      );
+      break;
+    default:
+      line = `У вас последняя версия${u.checkedAt ? ` · ${whenChecked(u.checkedAt)}` : ""}`;
+  }
+  const canCheck = u.status === "idle" || u.status === "none"; // в остальных состояниях своя кнопка в рамке
+  return (
+    <Card
+      icon={<CircleArrowUp />}
+      title="Обновления"
+      sub={`Сейчас установлена версия ${u.current}`}
+      actions={
+        canCheck && (
+          <Button size="sm" variant="ghost" icon={<RefreshCw />} onClick={updates.check}>
+            Проверить сейчас
+          </Button>
+        )
+      }
+    >
+      <div className="update-box">
+        <div className="update-line">
+          <div className="grow">{line}</div>
+          {action}
+        </div>
+        {u.status === "downloading" && <ProgressBar value={(u.percent ?? 0) / 100} />}
+        {u.notes && (u.status === "available" || u.status === "downloading" || u.status === "downloaded") && (
+          <div className="update-notes">
+            <button className="link-btn" onClick={() => setNotesOpen(!notesOpen)}>
+              {notesOpen ? "Скрыть, что нового" : "Что нового"}
+            </button>
+            {notesOpen && <pre>{u.notes}</pre>}
+          </div>
+        )}
+      </div>
+      <Setting name="Проверять обновления" desc="При запуске и каждые 6 часов — на GitHub">
+        <Toggle checked={checkUpdates} onChange={onCheckUpdates} label="Проверять обновления" />
+      </Setting>
+      <Setting name="Скачивать сами" desc="Найденная версия скачается в фоне, Jarvis предложит перезапуститься">
+        <Toggle checked={autoUpdate} onChange={onAutoUpdate} label="Скачивать обновления сами" disabled={!checkUpdates} />
+      </Setting>
+    </Card>
+  );
+}
+
 export default function SystemSection() {
   const [settings, patch] = useSettingsPatch();
   if (!settings) return null;
@@ -243,10 +359,14 @@ export default function SystemSection() {
         <Setting name="Строка голоса поверх окон" desc="Что вы сказали, ответы и уведомления — поверх всех программ">
           <Toggle checked={s.overlay} onChange={(v) => patch({ system: { overlay: v } })} label="Оверлей" />
         </Setting>
-        <Setting name="Проверять обновления" desc="Сообщить, когда выйдет новая версия">
-          <Toggle checked={s.check_updates} onChange={(v) => patch({ system: { check_updates: v } })} label="Проверять обновления" />
-        </Setting>
       </Card>
+
+      <UpdatesCard
+        checkUpdates={s.check_updates}
+        autoUpdate={s.auto_update ?? true}
+        onCheckUpdates={(v) => patch({ system: { check_updates: v } })}
+        onAutoUpdate={(v) => patch({ system: { auto_update: v } })}
+      />
 
       <Card
         icon={<Keyboard />}

@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from jarvis import paths
+from jarvis import crashguard, paths
 from jarvis.services import UserFacingError
 
 if TYPE_CHECKING:
@@ -489,6 +489,7 @@ class ModelManager:
         finally:
             self._jobs.pop(spec.id, None)
         log.info("модель %s установлена в %s", spec.id, self.root / spec.folder)
+        crashguard.reset()  # свежая модель — заслуживает новой попытки, даже если прежняя валила ядро
         self._emit(spec.id, 1.0, True)
         await self._notify("installed", spec.id)
 
@@ -599,6 +600,7 @@ class ModelManager:
         await self._notify("deleting", spec.id)
         await asyncio.to_thread(self._remove, spec)
         self._errors.pop(spec.id, None)
+        crashguard.reset()
         log.info("модель %s удалена", spec.id)
         await self._notify("deleted", spec.id)
 

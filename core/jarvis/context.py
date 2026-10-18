@@ -72,6 +72,8 @@ class AppContext:
         # адрес и токен HTTP API ядра (заполняет jarvis.server) — для сервера MCP Jarvis (jarvis.mcp.server)
         self.api_url = ""
         self.api_token = ""
+        # штатный выход ядра (POST /api/shutdown от Electron) — задаёт jarvis.server
+        self.request_exit: Callable[[], None] | None = None
         # сервисы — заполняет jarvis.app.build_context
         self.confirmations: Confirmations
         self.commands: CommandService

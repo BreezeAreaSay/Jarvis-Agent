@@ -14,7 +14,24 @@ export interface CoreInfo {
 
 const READY = "JARVIS_CORE_READY ";
 
+/** Ядро перестало запускаться: код выхода, понятная причина и последние строки журнала. */
+export interface CoreFailure {
+  code: number | null;
+  reason: string;
+  tail: string[];
+  at: number;
+}
+
 type Listener = (info: CoreInfo | null) => void;
+
+/** Самая говорящая строка из хвоста журнала. */
+function pickReason(tail: string[], code: number | null): string {
+  if (code === 3) return "Ядро уже запущено другим процессом — возможно, осталось от прошлого запуска Jarvis";
+  const line = [...tail]
+    .reverse()
+    .find((l) => /error|ошибк|exception|fatal|failed|не удалось|no such file|не найден/i.test(l) && !/^\s*File "/.test(l));
+  return (line ?? tail[tail.length - 1] ?? `ядро завершилось с кодом ${code}`).trim().slice(0, 400);
+}
 
 export class CoreProcess {
   info: CoreInfo | null = null;
@@ -24,11 +41,32 @@ export class CoreProcess {
   private restarts: number[] = [];
   private stopping = false;
   private log: fs.WriteStream;
+  private tail: string[] = [];
+  private failed: CoreFailure | null = null;
+  private failListeners = new Set<(failure: CoreFailure | null) => void>();
 
   constructor() {
     const dir = path.join(app.getPath("userData"), "logs");
     fs.mkdirSync(dir, { recursive: true });
-    this.log = fs.createWriteStream(path.join(dir, "core-process.log"), { flags: "a" });
+    const file = path.join(dir, "core-process.log");
+    const fresh = !fs.existsSync(file) || fs.statSync(file).size === 0;
+    this.log = fs.createWriteStream(file, { flags: "a" });
+    if (fresh) this.log.write("\ufeff"); // UTF-8 с BOM: Блокнот и PowerShell 5 читают кириллицу правильно
+  }
+
+  /** Почему ядро не работает (null — работает или ещё пробуем). */
+  failure(): CoreFailure | null {
+    return this.failed;
+  }
+
+  onFailed(listener: (failure: CoreFailure | null) => void): () => void {
+    this.failListeners.add(listener);
+    return () => this.failListeners.delete(listener);
+  }
+
+  private setFailed(failure: CoreFailure | null) {
+    this.failed = failure;
+    for (const l of this.failListeners) l(failure);
   }
 
   onChange(listener: Listener): () => void {
@@ -82,6 +120,7 @@ export class CoreProcess {
     const spec = this.command();
     if (!spec) {
       this.write("не найден Python ядра: соберите core (uv sync) или установите программу заново\n");
+      this.setFailed({ code: null, reason: "Не найден Python ядра — установите Jarvis заново", tail: [], at: Date.now() });
       return;
     }
     this.stopping = false;
@@ -115,6 +154,7 @@ export class CoreProcess {
       this.restarts = this.restarts.filter((t) => now - t < 60_000);
       if (this.restarts.length >= 5) {
         this.write("ядро падает слишком часто — перезапуск остановлен\n");
+        this.setFailed({ code, reason: pickReason(this.tail, code), tail: this.tail.slice(-30), at: now });
         return;
       }
       this.restarts.push(now);
@@ -125,13 +165,33 @@ export class CoreProcess {
   async restart() {
     await this.stop();
     this.restarts = [];
+    this.setFailed(null);
     this.start();
   }
 
-  stop(): Promise<void> {
+  async stop(): Promise<void> {
     this.stopping = true;
     const proc = this.proc;
-    if (!proc || proc.exitCode !== null) return Promise.resolve();
+    if (!proc || proc.exitCode !== null) return;
+    // сначала просим выйти штатно: сервисы закроют базу и файлы (на Windows kill — это TerminateProcess)
+    const info = this.info;
+    if (info) {
+      const exited = new Promise<boolean>((resolve) => {
+        proc.once("exit", () => resolve(true));
+        setTimeout(() => resolve(false), 3000);
+      });
+      try {
+        await fetch(info.url + "/api/shutdown", {
+          method: "POST",
+          headers: { "X-Jarvis-Token": info.token },
+          signal: AbortSignal.timeout(2500),
+        });
+        if (await exited) return;
+      } catch {
+        /* ядро не отвечает — завершаем силой */
+      }
+    }
+    if (proc.exitCode !== null) return;
     return new Promise((resolve) => {
       const done = () => resolve();
       proc.once("exit", done);
@@ -150,6 +210,10 @@ export class CoreProcess {
   }
 
   private write(text: string) {
+    for (const line of text.split(/\r?\n/)) {
+      if (line.trim()) this.tail.push(line);
+    }
+    if (this.tail.length > 80) this.tail.splice(0, this.tail.length - 80);
     try {
       this.log.write(text);
     } catch {
@@ -236,5 +300,12 @@ export class CoreClient {
   close() {
     this.closed = true;
     this.ws?.close();
+  }
+
+  /** Снова на связи — выход отменился (установщик обновления не запустился). */
+  reopen() {
+    this.closed = false;
+    this.retry = 0;
+    this.connect();
   }
 }

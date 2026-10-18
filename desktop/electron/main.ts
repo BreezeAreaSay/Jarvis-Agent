@@ -17,6 +17,7 @@ import {
   type MenuItemConstructorOptions,
 } from "electron";
 import { CoreClient, CoreProcess } from "./core";
+import { Updater } from "./updater";
 
 const DEV_URL = process.env.JARVIS_DEV_URL ?? (app.isPackaged ? "" : "http://127.0.0.1:5173");
 const START_HIDDEN = process.argv.includes("--hidden");
@@ -39,11 +40,14 @@ let overlayWin: BrowserWindow | null = null;
 let avatarWin: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
+let coreStopped = false; // ядро остановлено перед выходом — можно закрываться
 let settings: any = null;
 let fullscreen = false;
 const registered: string[] = [];
-let update: { version: string; url: string } | null = null;
-const RELEASES_API = "https://api.github.com/repos/BreezeAreaSay/Jarvis-Agent/releases/latest";
+const LOGS_DIR = path.join(app.getPath("userData"), "logs");
+const updater = new Updater(LOGS_DIR);
+let updateNotified = ""; // «статус:версия», о которых уже сказали уведомлением
+let updatesStarted = false;
 
 // --- общее ------------------------------------------------------------------------------------------
 function resource(...parts: string[]): string {
@@ -290,11 +294,9 @@ function rebuildTray() {
     Menu.buildFromTemplate([
       ...quickMenu(),
       { type: "separator" },
-      ...(update
-        ? ([{ label: `Скачать обновление ${update.version}`, click: () => shell.openExternal(update!.url) }] as MenuItemConstructorOptions[])
-        : []),
+      ...updateMenu(),
       { label: "Перезапустить ядро", click: () => core.restart() },
-      { label: "Папка журналов", click: () => shell.openPath(path.join(app.getPath("userData"), "logs")) },
+      { label: "Папка журналов", click: () => shell.openPath(LOGS_DIR) },
       { type: "separator" },
       { label: "Выход", click: () => quit() },
     ]),
@@ -337,35 +339,59 @@ async function loadPluginHotkeys() {
   registerShortcuts();
 }
 
-// --- обновления: только проверка и ссылка, скачивает и ставит человек ------------------------------------------
-function newer(a: string, b: string): boolean {
-  const pa = a.replace(/^v/, "").split(".").map((x) => Number.parseInt(x, 10) || 0);
-  const pb = b.replace(/^v/, "").split(".").map((x) => Number.parseInt(x, 10) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0);
-  }
-  return false;
+// --- обновления: GitHub Releases через electron-updater (updater.ts) ------------------------------------------
+function updateMenu(): MenuItemConstructorOptions[] {
+  const u = updater.state;
+  if (u.status === "downloaded") return [{ label: `Перезапустить и обновить до ${u.version}`, click: () => installUpdate() }];
+  if (u.status === "downloading") return [{ label: `Скачиваю обновление… ${Math.round(u.percent ?? 0)}%`, enabled: false }];
+  if (u.status === "available") return [{ label: `Скачать обновление ${u.version}`, click: () => void updater.download() }];
+  return [];
 }
 
-async function checkUpdates() {
-  if (!app.isPackaged || !(settings?.system?.check_updates ?? true) || update) return;
-  try {
-    const res = await fetch(RELEASES_API, { headers: { Accept: "application/vnd.github+json" } });
-    if (!res.ok) return;
-    const data = (await res.json()) as { tag_name?: string; html_url?: string };
-    if (data.tag_name && data.html_url && newer(data.tag_name, VERSION)) {
-      update = { version: data.tag_name, url: data.html_url };
-      rebuildTray();
-      if (Notification.isSupported()) {
-        const n = new Notification({ title: "Jarvis", body: `Доступна версия ${data.tag_name}. Нажмите, чтобы скачать.`, icon: iconImage() });
-        n.on("click", () => shell.openExternal(update!.url));
-        n.show();
-      }
-    }
-  } catch {
-    /* нет сети — проверим в следующий раз */
-  }
+function installUpdate() {
+  void updater.install(shutdown, () => {
+    // установщик не запустился (причина — в карточке «Обновления»): работаем дальше
+    quitting = false;
+    coreStopped = false;
+    client.reopen();
+    core.start();
+    registerShortcuts();
+  });
 }
+
+function checkUpdates() {
+  if (settings?.system?.check_updates ?? true) void updater.check();
+}
+
+let trayKey = "";
+updater.onChange((state) => {
+  mainWin?.webContents.send("update:state", state);
+  const key = `${state.status}:${state.status === "downloading" ? Math.floor((state.percent ?? 0) / 10) : ""}`;
+  if (key !== trayKey) {
+    trayKey = key;
+    rebuildTray();
+  }
+  const auto = settings?.system?.auto_update ?? true;
+  if (state.status === "available" && auto) {
+    void updater.download(); // скажем, когда будет готово к установке
+    return;
+  }
+  if ((state.status === "available" || state.status === "downloaded") && Notification.isSupported()) {
+    const id = `${state.status}:${state.version}`;
+    if (updateNotified === id) return;
+    updateNotified = id;
+    const ready = state.status === "downloaded";
+    const n = new Notification({
+      title: "Jarvis",
+      body: ready
+        ? `Обновление ${state.version} готово. Нажмите, чтобы перезапустить Jarvis.`
+        : `Доступна версия ${state.version}. Нажмите, чтобы скачать.`,
+      icon: iconImage(),
+    });
+    n.on("click", () => (ready ? installUpdate() : void updater.download()));
+    n.show();
+  }
+});
 
 function applyAutostart() {
   if (!app.isPackaged) return;
@@ -393,7 +419,10 @@ function applySettings(next: any) {
 client.on("hello", (data) => {
   applySettings(data.settings);
   void loadPluginHotkeys();
-  setTimeout(checkUpdates, 15_000);
+  if (!updatesStarted) {
+    updatesStarted = true;
+    setTimeout(checkUpdates, 15_000);
+  }
 });
 client.on("settings.changed", (data) => applySettings(data.settings));
 client.on("plugins.changed", () => void loadPluginHotkeys());
@@ -545,6 +574,15 @@ ipcMain.on("overlay:ready", () => {
   overlayWin?.webContents.send("overlay:bounds", overlayBounds());
 });
 
+// обновления и состояние ядра для окна настроек и экрана «ядро не запускается»
+ipcMain.handle("update:get", () => updater.state);
+ipcMain.on("update:check", () => void updater.check());
+ipcMain.on("update:download", () => void updater.download());
+ipcMain.on("update:install", () => installUpdate());
+ipcMain.handle("core:failure", () => core.failure());
+ipcMain.on("core:restart", () => void core.restart());
+ipcMain.on("logs:open", () => void shell.openPath(LOGS_DIR));
+
 ipcMain.on("overlay:ignore-mouse", (_e, ignore: boolean) => {
   overlayWin?.setIgnoreMouseEvents(!!ignore, { forward: true });
 });
@@ -581,18 +619,31 @@ ipcMain.on("avatar:menu", () => {
 });
 
 // --- жизненный цикл ---------------------------------------------------------------------------------------
-async function quit() {
+/** Перед выходом: хоткеи, связь и само ядро — python.exe держит файлы в папке программы, а установщик
+ * обновления (по кнопке или при выходе) их заменяет. */
+async function shutdown() {
   quitting = true;
   globalShortcut.unregisterAll();
   client.close();
-  await core.stop();
+  try {
+    await core.stop();
+  } finally {
+    coreStopped = true;
+  }
+}
+
+async function quit() {
+  await shutdown();
   app.quit();
 }
 
 app.on("second-instance", () => showMain());
 
-app.on("before-quit", () => {
+app.on("before-quit", (e) => {
   quitting = true;
+  if (coreStopped) return;
+  e.preventDefault(); // выход не через quit() — сперва остановить ядро
+  void quit();
 });
 
 app.on("will-quit", () => {
@@ -610,6 +661,7 @@ app.whenReady().then(() => {
       win?.webContents.send(info ? "core:ready" : "core:restarting");
     }
   });
+  core.onFailed((failure) => mainWin?.webContents.send("core:failed", failure));
   core.start();
   createMain();
   createOverlay();

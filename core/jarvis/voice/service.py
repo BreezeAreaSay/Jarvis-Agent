@@ -27,5 +27,5 @@ class Voice(BaseService):
     async def capture_text(self, timeout: float = 15.0, *, punct: bool = True) -> str:
         return ""
 
-    async def transcribe(self, samples: Any, rate: int) -> str:
+    async def transcribe(self, samples: Any, rate: int, *, language: str = "ru") -> str:
         return ""

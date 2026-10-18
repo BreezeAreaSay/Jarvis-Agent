@@ -23,16 +23,18 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
+from jarvis.ai import policy
 from jarvis.ai.chatgpt import ChatGpt
 from jarvis.ai.chats import MODES, ChatStore, ui_message
 from jarvis.ai.cli import CliProviders
-from jarvis.ai.format import chat_title, speech_text
+from jarvis.ai.format import chat_title, one_line, speech_text
 from jarvis.ai.llm import LlmClient, LlmError, LlmResponse, ToolCall, Usage, user_content
 from jarvis.ai.prompts import system_prompt
 from jarvis.ai.providers import PRESETS
-from jarvis.ai.tools import Tool, ToolEnv, ToolOutput, ToolRegistry
+from jarvis.ai.tools import Tool, ToolEnv, ToolOutput, ToolRegistry, args_detail, confirm
 from jarvis.ai.web import WebClient
 from jarvis.db import new_id
 from jarvis.mcp.server import JarvisMcpServer
@@ -489,7 +491,7 @@ class Ai(BaseService):
         self._status(turn, "thinking", "Думаю…")
         tools = self.tools.available(turn.mode, source=turn.source)
         specs = [t.spec() for t in tools.values()]
-        env = ToolEnv(self.ctx, self.web, turn.source, turn.chat_id)
+        env = ToolEnv(self.ctx, self.web, turn.source, turn.chat_id, user_text=turn.text)
         try:
             messages = self._messages(turn, has_agent_tool="run_agent" in tools)
             for round_no in range(MAX_ROUNDS + 1):
@@ -540,12 +542,42 @@ class Ai(BaseService):
             except Exception:
                 log.exception("память не прочиталась")
         system = system_prompt(
-            settings, source=turn.source, mode=turn.mode, memory=memory, has_agent_tool=has_agent_tool
+            settings,
+            source=turn.source,
+            mode=turn.mode,
+            memory=memory,
+            has_agent_tool=has_agent_tool,
+            active=self._active_context(),
         )
         vision = self.llm.config(turn.model or None).vision
         current = {"role": "user", "content": user_content(turn.text, turn.images, vision)}
         history = sanitize_history([*self._history(turn), current])
         return [{"role": "system", "content": system}, *history]
+
+    def _active_context(self) -> str:
+        """Что идёт прямо сейчас: работающий агент и дела на сегодня — чтобы «как там письмо?» имело смысл."""
+        lines: list[str] = []
+        try:
+            state = self.ctx.agent.state()
+        except Exception:
+            state = {}
+        if state.get("status") in ("planning", "running", "waiting") and state.get("task"):
+            doing = state.get("text") or "в работе"
+            lines.append(f"Сейчас работает агент: «{one_line(str(state['task']), 120)}» — {doing}.")
+        try:
+            end_of_day = datetime.now().replace(hour=23, minute=59, second=59).timestamp()
+            tasks = [
+                t
+                for t in self.ctx.notes.tasks_list(include_done=False)
+                if t.get("due") and float(t["due"]) <= end_of_day
+            ]
+        except Exception:
+            tasks = []
+        if tasks:
+            lines.append(
+                "Дела на сегодня: " + "; ".join(one_line(str(t["title"]), 60) for t in tasks[:3]) + "."
+            )
+        return "\n".join(lines)
 
     def _history(self, turn: Turn) -> list[dict[str, Any]]:
         groups = group_turns(self.chats.rows(turn.chat_id))
@@ -593,6 +625,8 @@ class Ai(BaseService):
         self._tool_event(turn, call, title, "running")
         if args is None:
             out = ToolOutput.fail("аргументы не в формате JSON — повтори вызов", title=title)
+        elif (refused := await self._permission(turn, env, tool, title, args)) is not None:
+            out = refused
         else:
             try:
                 out = await asyncio.wait_for(tool.handler(env, args), tool.timeout)
@@ -621,6 +655,30 @@ class Ai(BaseService):
             content = content[:TOOL_RESULT_CHARS] + "… [обрезано]"
         self._save_tool_result(turn, call, content)
         return content
+
+    async def _permission(
+        self, turn: Turn, env: ToolEnv, tool: Tool, title: str, args: dict[str, Any]
+    ) -> ToolOutput | None:
+        """Разрешения инструментов (Настройки → Jarvis AI → Инструменты и разрешения): «Запрещено» — отказ,
+        «Спрашивать» — карточка подтверждения; рискованные инструменты MCP (отправка, удаление, оплата)
+        спрашиваются всегда. None — можно выполнять."""
+        risk = policy.tool_risk(tool.name, tool.description)
+        choice = policy.decision(self.ctx.settings.value.ai, tool.name, risk)
+        if choice == "deny":
+            return ToolOutput.fail(
+                "этот инструмент запрещён в настройках (Jarvis AI → Инструменты и разрешения) — скажи "
+                "пользователю и не обходи запрет другими инструментами",
+                title=title,
+            )
+        asks = choice == "ask" or (risk == "risky" and tool.name.startswith("mcp__"))
+        if asks and not await confirm(env, f"{title}?", args_detail(args)):
+            return ToolOutput(
+                "Пользователь не разрешил это действие. Не повторяй его и не обходи другим путём.",
+                ok=False,
+                title=title,
+                detail="Отклонено",
+            )
+        return None
 
     def _save_tool_result(self, turn: Turn, call: ToolCall, content: str) -> None:
         self.chats.add_message(

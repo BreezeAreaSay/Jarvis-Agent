@@ -40,12 +40,14 @@ from urllib.parse import urlparse
 from rapidfuzz import fuzz, process
 
 from jarvis.ai import playbooks, vision
+from jarvis.ai.catalog import AGENT_ACTIONS
 from jarvis.ai.chats import ChatStore, ui_message
 from jarvis.ai.format import chat_title, now_text, one_line, speech_text
 from jarvis.ai.llm import LlmClient, LlmError, LlmFormatError, ToolCall, Usage
 from jarvis.ai.policy import (
     CLOSE_KEYS,
     RISKY_KEYS,
+    SEARCH_HOSTS,
     SEND_KEYS,
     decision,
     has_card_number,
@@ -74,11 +76,6 @@ OUTCOMES = ("done", "partial", "failed")
 POOR_ELEMENTS = 6  # меньше интерактивных элементов — окно плохо видно UI Automation, к снимку нужна картинка
 OPAQUE_EXES = frozenset({"telegram.exe", "ayugram.exe", "kotatogram.exe", "64gram.exe"})
 URL_SCHEMES = ("http://", "https://", "tg://", "ms-settings:", "spotify:", "mailto:")
-SEARCH_HOSTS = re.compile(
-    r"(^|\.)(google\.[a-z.]+|yandex\.[a-z]+|ya\.ru|bing\.com|duckduckgo\.com|youtube\.com|wikipedia\.org|"
-    r"maps\.google\.[a-z.]+|2gis\.ru|ozon\.ru|wildberries\.ru|market\.yandex\.ru|github\.com)$",
-    re.I,
-)
 MAX_MCP_RESULT = 8000
 
 RISKY_NAME = re.compile(
@@ -105,6 +102,7 @@ SETTINGS_CHANGE = re.compile(
 )
 TOGGLE_KINDS = frozenset({"CheckBox", "RadioButton", "ComboBox", "Slider", "Spinner"})
 IMAGE_REFUSED = re.compile(r"image|vision|multimodal|изображ|картин", re.I)
+AGENT_RISK: dict[str, Any] = {a["name"]: a["risk"] for a in AGENT_ACTIONS}  # «agent.<имя>» в разрешениях
 
 PLAN_PROMPT = (
     "Ты планируешь работу агента, который сам управляет компьютером с Windows: открывает программы, нажимает "
@@ -207,6 +205,7 @@ class AgentRun:
     shot: vision.Shot | None = None  # последний снимок окна картинкой — для click_point
     vision: bool = False  # модель понимает картинки
     ask_all: bool = False  # после отказа спрашивать перед каждым действием, которое что-то меняет
+    ask_once: bool = False  # это действие человек велел спрашивать всегда (разрешения инструментов)
     outcome: str = ""
     given: set[str] = field(default_factory=set)  # подсказки по программам, которые модель уже получила
     mcp: dict[str, "Action"] = field(default_factory=dict)  # инструменты серверов MCP на этот запуск
@@ -791,6 +790,17 @@ class Agent(BaseService):
             args = call.parse_arguments()
         except ValueError:
             return "Ошибка: аргументы не в формате JSON — повтори вызов", []
+        run.ask_once = False
+        if call.name in self._actions:
+            risk = AGENT_RISK.get(call.name, "act")
+            choice = decision(self.ctx.settings.value.ai, f"agent.{call.name}", risk)
+            if choice == "deny":
+                return (
+                    "Ошибка: это действие агенту запрещено в настройках (Jarvis AI → Инструменты и "
+                    "разрешения) — обойдись без него или закончи работу и объясни",
+                    [],
+                )
+            run.ask_once = choice == "ask" and risk != "read"
         step = args.pop("step", None)
         if (
             isinstance(step, int | float)
@@ -837,7 +847,7 @@ class Agent(BaseService):
         return self.ctx.settings.value.ai.agent_confirm == "always"
 
     def _ask(self, run: AgentRun, risky: bool = False) -> bool:
-        return risky or self._always or run.ask_all
+        return risky or self._always or run.ask_all or run.ask_once
 
     async def _approve(self, run: AgentRun, title: str, detail: str = "") -> None:
         """Спросить разрешения; отказ — Denied, и дальше в этом запуске спрашиваем обо всём."""
@@ -1031,7 +1041,8 @@ class Agent(BaseService):
             choice = decision(ai, tool.name, risk)
             if choice == "deny":
                 return Outcome(False, f"Ошибка: «{title}» запрещён в настройках Jarvis AI", "Запрещено")
-            if choice == "ask" or (risk != "read" and self._ask(run)):
+            # отправка, удаление, оплата — спросить всегда, даже у разрешённого инструмента
+            if choice == "ask" or risk == "risky" or (risk != "read" and self._ask(run)):
                 await self._approve(run, f"{title}?", _args_detail(args))
             text = await asyncio.wait_for(self.ctx.mcp.call(tool.name, args), tool.timeout)
             text = str(text or "")
@@ -1276,7 +1287,12 @@ class Agent(BaseService):
             await self._approve(run, f"Запустить «{name}»?", "Командная строка может изменить систему")
         elif self._ask(run):
             await self._approve(run, f"Запустить «{name}»?")
-        launched = await launch_app(self.ctx, name)
+
+        async def ask(title: str, detail: str) -> bool:
+            await self._approve(run, title, detail)  # отказ — Denied
+            return True
+
+        launched = await launch_app(self.ctx, name, ask)
         return await self._observe(run, self.launch_settle_s, f"Запущено: {launched}")
 
     async def _open_url(self, run: AgentRun, args: dict[str, Any]) -> Outcome:

@@ -191,3 +191,11 @@ def jarvis_hotkeys(settings: Any) -> frozenset[str]:
             if isinstance(value, str) and _HOTKEY_RE.match(value.replace(" ", "")):
                 out.add(normalize_combo(value))
     return frozenset(out)
+
+
+# сайты, куда данные в адресе (поисковый запрос) уходят по делу: ссылки на них открываются без вопросов
+SEARCH_HOSTS = re.compile(
+    r"(^|\.)(google\.[a-z.]+|yandex\.[a-z]+|ya\.ru|bing\.com|duckduckgo\.com|youtube\.com|wikipedia\.org|"
+    r"maps\.google\.[a-z.]+|2gis\.ru|ozon\.ru|wildberries\.ru|market\.yandex\.ru|github\.com)$",
+    re.I,
+)

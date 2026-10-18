@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from rapidfuzz import fuzz, process
 
 from jarvis import paths
+from jarvis.ai.format import one_line
 from jarvis.commands import builder, validate
 from jarvis.commands.apps import AppResolver
 from jarvis.commands.executor import Executor
@@ -268,7 +269,12 @@ class Commands(BaseService):
                     )
                 )
                 break
-            if entry.command.confirm and not await self._confirm(entry, title, part, source):
+            needs = entry.command.confirm
+            detail = ""
+            if not needs and source in ("ai", "agent"):
+                detail = await self._ai_risk(entry, part)
+                needs = bool(detail)
+            if needs and not await self._confirm(entry, title, part, source, detail):
                 results.append(
                     ExecResult(
                         False,
@@ -286,11 +292,42 @@ class Commands(BaseService):
                 break
         return _combine(results, parts)
 
-    async def _confirm(self, entry: Entry, title: str, part: MatchedPart, source: Source) -> bool:
-        detail = f"Команда: «{part.text}»" if part.text else ""
+    async def _confirm(
+        self, entry: Entry, title: str, part: MatchedPart, source: Source, detail: str = ""
+    ) -> bool:
+        detail = detail or (f"Команда: «{part.text}»" if part.text else "")
         return await self.ctx.confirmations.request(
             title=f"{title}?", detail=detail, kind="command", source=source
         )
+
+    async def _ai_risk(self, entry: Entry, part: MatchedPart) -> str:
+        """Команда по просьбе ИИ, которой можно обойти его же запреты: консоль, запуск файла, опасные
+        клавиши (Win+R, Shift+Delete…), текст в окно терминала или номер карты. Вернёт, что показать
+        человеку; "" — можно без вопросов."""
+        from jarvis.ai.policy import RISKY_KEYS, has_card_number, is_shell_window, normalize_combo
+        from jarvis.commands.executor import substitute
+
+        for action in entry.command.actions:
+            try:
+                value = substitute(action.value, part.slots)
+            except Exception:
+                value = action.value
+            if action.type == "Launch.Shell":
+                return f"Команда консоли: «{one_line(value, 140)}»"
+            if action.type == "Launch.File":
+                return f"Открыть файл: «{one_line(value, 140)}»"
+            if action.type == "Keys.Press" and normalize_combo(value) in RISKY_KEYS:
+                return f"Сочетание клавиш {normalize_combo(value)}"
+            if action.type in ("Keys.Type", "Keys.Paste"):
+                if has_card_number(value):
+                    return "Ввод номера карты"
+                try:
+                    fg = await self.ctx.run_platform(self.ctx.platform.foreground_window)
+                except Exception:
+                    fg = None
+                if fg is not None and is_shell_window(fg.title, fg.exe):
+                    return f"Текст в «{fg.title}»: «{one_line(value, 140)}»"
+        return ""
 
     # --- для ИИ -----------------------------------------------------------------------------------
     def describe(self, limit: int = 300) -> list[dict[str, Any]]:

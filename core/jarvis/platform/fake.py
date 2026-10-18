@@ -197,6 +197,13 @@ class FakePlatform:
         self._call("launch", target, args)
         if not target:
             raise PlatformError("Не указано, что запустить")
+        # как в жизни: у запущенной программы появляется окно (если его ещё нет)
+        app = next((a for a in DEMO_APPS if target in (a.app_id, a.name)), None)
+        title = app.name if app is not None else target.rsplit("\\", 1)[-1]
+        exe = app.path.rsplit("\\", 1)[-1] if app is not None and app.path else target.rsplit("\\", 1)[-1]
+        if not any(w.title == title for w in self.windows):
+            hwnd = max((w.hwnd for w in self.windows), default=100) + 1
+            self.windows.append(WindowInfo(hwnd, title, exe, 7000 + hwnd, (240, 140, 1240, 840)))
 
     def open_url(self, url: str) -> None:
         self._call("open_url", url)

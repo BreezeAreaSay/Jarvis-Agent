@@ -86,13 +86,21 @@ class MainDispatcher:
         )
 
     async def stop(self) -> None:
-        """«Стоп»: замолчать, бросить ответ ИИ и агента, перестать слушать (окна продолжения и ожидания)."""
+        """«Стоп»: замолчать, бросить ответ ИИ и агента, отклонить открытые запросы «Разрешить?», остановить
+        идущие сценарии, перестать слушать (окна продолжения и ожидания)."""
         self.ctx.tts.silence()
         try:
             self.ctx.ai.stop_all()  # ответ ИИ, который сейчас пишется и озвучивается
             await self.ctx.agent.stop_run()
         except Exception:
             log.exception("ИИ или агент не остановились")
+        try:
+            self.ctx.confirmations.cancel_all()  # карточка, оставшаяся после «Стоп», не сработает потом
+            stop_all = getattr(self.ctx.scenarios, "stop_all", None)
+            if callable(stop_all):
+                stop_all()
+        except Exception:
+            log.exception("подтверждения или сценарии не остановились")
         try:
             await self.ctx.voice.stop_listening()
         except Exception:
@@ -167,7 +175,9 @@ class MainDispatcher:
         if result.say:
             await self._say(result.say, speak)
         elif result.ok and settings.speak_confirmations == "short":
-            await self._say(self._fmt(random.choice(OK_PHRASES)), speak)
+            # программа только запускается — «Открываю», а не «Готово»: что она открылась, мы ещё не видели
+            app = str(result.data.get("app") or "")
+            await self._say(f"Открываю {app}." if app else self._fmt(random.choice(OK_PHRASES)), speak)
         elif not result.ok:
             await self._say(result.message or "Не получилось.", speak)
         self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "command", "ok": result.ok})
@@ -197,7 +207,8 @@ class MainDispatcher:
             self._history_update(item, status="ok", detail=_one_line(result.text, 140))
             await self._say(short, speak)
             if speak:
-                self.ctx.voice.follow_up()
+                # Jarvis спросил — ответ слушаем без слова-активатора (и это не «бесконечный разговор»)
+                self.ctx.voice.follow_up(question=short.rstrip().endswith("?"))
         self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "ai", "ok": not result.error})
         return {
             "kind": "ai",

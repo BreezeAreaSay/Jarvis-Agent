@@ -121,6 +121,15 @@ export interface Settings {
     telegram_owner_id: number;
     favorites: string[];
   };
+  /** Сроки хранения в днях; 0 — хранить, пока не удалите сами. */
+  privacy: {
+    history_days: number;
+    chat_days: number;
+    voice_chat_days: number;
+    tool_results_days: number;
+    audio_days: number;
+    logs_days: number;
+  };
   plugins: Record<string, { enabled: boolean; config: Record<string, unknown> }>;
   packs: string[];
   disabled_commands: string[];
@@ -150,7 +159,8 @@ export interface HistoryItem {
   ts: number;
   source: string;
   text: string;
-  kind: "command" | "ai" | "unknown" | "system";
+  /** confirm — итог «Разрешить / Отклонить» (detail: «Разрешено», «Отклонено · …»). */
+  kind: "command" | "ai" | "unknown" | "system" | "confirm";
   title: string;
   status: "ok" | "error" | "pending" | "cancelled" | "denied";
   detail: string;
@@ -433,10 +443,17 @@ export interface CliProviderEvent {
   logged_in?: boolean | null;
 }
 
+export type MemoryKind = "fact" | "assumption" | "temp";
+
 export interface MemoryItem {
   id: string;
   text: string;
+  /** ai — записал Jarvis по просьбе в разговоре, user — добавили или поправили вы. */
   source: string;
+  /** fact — факт, assumption — предположение (Jarvis уточняет), temp — на сутки. */
+  kind: MemoryKind;
+  /** Когда временная запись забудется (unix-секунды); null — бессрочно. */
+  expires: number | null;
   created: number;
 }
 

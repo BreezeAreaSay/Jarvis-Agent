@@ -1,9 +1,12 @@
 """Заметки, задачи, календарь, напоминания и память о пользователе (таблицы notes, tasks, events, reminders,
 memory).
 
-Память — короткие факты о пользователе («Аня не ест мясо»): похожие факты не дублируются (новый заменяет
-старый, в том числе с противоположным смыслом — «ест мясо» / «не ест мясо»), фактов не больше 200, в системный
-промпт ИИ уходит сжатая строка не длиннее ~1500 символов, свежие — первыми.
+Память — короткие записи о пользователе («Аня не ест мясо»). Вид записи: fact — подтверждённый факт,
+assumption — предположение (ИИ должен уточнять, прежде чем на него опираться), temp — временное («сегодня
+работаю из дома»), забывается через сутки. Похожие записи не дублируются (новая заменяет старую, в том числе
+с противоположным смыслом — «ест мясо» / «не ест мясо»), но запись человека (source user) ИИ не
+перезаписывает. Записей не больше 200 (лишними уходят старые записи ИИ), в системный промпт ИИ уходит сжатая
+строка не длиннее ~1500 символов: подтверждённое, предположения и временное — отдельно, с датами.
 
 Напоминания проверяет фоновая задача раз в ~5 секунд: сработавшее напоминание — событие reminder.fired, тост
 «Напоминание» и голос «Напоминаю, сэр: …» (если не включён тихий режим). Повтор — каждый день или неделю.
@@ -31,6 +34,8 @@ log = logging.getLogger(__name__)
 
 MEMORY_LIMIT = 200
 PROMPT_LIMIT = 1500
+MEMORY_KINDS = ("fact", "assumption", "temp")
+TEMP_TTL_S = 24 * 3600  # временная запись живёт сутки
 TICK_S = 5.0
 LATE_S = 120.0  # опоздание больше 2 минут — напоминание «пропущено» (Jarvis был выключен, ПК спал)
 EVENT_STALE_S = 24 * 3600  # о событиях, начавшихся больше суток назад, уже не напоминаем
@@ -83,7 +88,27 @@ def _clean_fact(text: str) -> str:
 
 
 def _memory(row: dict[str, Any]) -> dict[str, Any]:
-    return {"id": row["id"], "text": row["text"], "source": row["source"], "created": row["created"]}
+    return {
+        "id": row["id"],
+        "text": row["text"],
+        "source": row["source"],
+        "kind": row.get("kind") or "fact",
+        "expires": row.get("expires"),
+        "created": row["created"],
+    }
+
+
+def _kind(value: Any) -> str:
+    kind = str(value or "fact")
+    if kind not in MEMORY_KINDS:
+        raise UserFacingError(
+            "Вид записи памяти: fact (факт), assumption (предположение) или temp (на сутки)"
+        )
+    return kind
+
+
+def _day(ts: float) -> str:
+    return datetime.fromtimestamp(ts).strftime("%d.%m.%Y")
 
 
 def _note(row: dict[str, Any]) -> dict[str, Any]:
@@ -200,30 +225,98 @@ class Notes(BaseService):
 
     # --- память --------------------------------------------------------------------------------------
     def memory_list(self) -> list[dict[str, Any]]:
-        rows = self.ctx.db.query("SELECT * FROM memory ORDER BY created DESC, rowid DESC")
+        """Записи памяти, свежие первыми; временные с истёкшим сроком не показываются."""
+        rows = self.ctx.db.query(
+            "SELECT * FROM memory WHERE expires IS NULL OR expires > ? ORDER BY created DESC, rowid DESC",
+            (self.clock(),),
+        )
         return [_memory(r) for r in rows]
 
-    def memory_add(self, text: str, source: str = "ai") -> dict[str, Any]:
+    def memory_get(self, memory_id: str) -> dict[str, Any]:
+        row = self.ctx.db.query_one("SELECT * FROM memory WHERE id=?", (memory_id,))
+        if row is None:
+            raise NotFound("Запись памяти не найдена")
+        return _memory(row)
+
+    def _expires(self, kind: str, ts: float) -> float | None:
+        return ts + TEMP_TTL_S if kind == "temp" else None
+
+    def memory_add(self, text: str, source: str = "ai", *, kind: str = "fact") -> dict[str, Any]:
+        """Запомнить запись. Похожая уже есть — новая версия заменяет её; но запись человека (source user)
+        ИИ не перезаписывает: тогда вернётся она же с пометкой unchanged=True (события нет)."""
         fact = _clean_fact(text)
         if not fact:
             raise UserFacingError("Пустой факт — нечего запоминать")
+        kind = _kind(kind)
         ts = self.clock()
         for item in self.memory_list():
             if same_fact(item["text"], fact):
+                if item["source"] == "user" and source != "user":
+                    return {**item, "unchanged": True}
                 # тот же факт другими словами или с противоположным смыслом — новая версия заменяет старую
-                self.ctx.db.update("memory", item["id"], {"text": fact, "source": source, "created": ts})
-                updated = {"id": item["id"], "text": fact, "source": source, "created": ts}
+                values = {"text": fact, "source": source, "kind": kind, "expires": self._expires(kind, ts)}
+                self.ctx.db.update("memory", item["id"], {**values, "created": ts})
+                updated = {"id": item["id"], **values, "created": ts}
                 self.ctx.bus.publish("memory.added", {"item": updated})
                 return updated
-        item = {"id": new_id(), "text": fact, "source": source, "created": ts}
+        item = {
+            "id": new_id(),
+            "text": fact,
+            "source": source,
+            "kind": kind,
+            "expires": self._expires(kind, ts),
+            "created": ts,
+        }
         self.ctx.db.insert("memory", item)
         self.ctx.bus.publish("memory.added", {"item": item})
         self._trim_memory()
         return item
 
+    def memory_update(
+        self, memory_id: str, *, text: str | None = None, kind: str | None = None
+    ) -> dict[str, Any]:
+        """Человек поправил запись: текст и/или вид. Поправленная запись — его (source user)."""
+        current = self.memory_get(memory_id)
+        values: dict[str, Any] = {"source": "user"}
+        if text is not None:
+            fact = _clean_fact(text)
+            if not fact:
+                raise UserFacingError("Пустой факт — удалите запись, если она больше не нужна")
+            values["text"] = fact
+        if kind is not None:
+            values["kind"] = _kind(kind)
+        new_kind = values.get("kind", current["kind"])
+        ts = self.clock()
+        if new_kind != current["kind"]:
+            values["expires"] = self._expires(new_kind, ts)
+        values["created"] = ts
+        self.ctx.db.update("memory", memory_id, values)
+        item = self.memory_get(memory_id)
+        self.ctx.bus.publish("memory.updated", {"item": item})
+        return item
+
+    def memory_clear(self) -> int:
+        """Забыть всё. Вернёт, сколько записей удалено."""
+        count = self.ctx.db.execute("DELETE FROM memory").rowcount
+        self.ctx.bus.publish("memory.cleared", {"count": count})
+        return count
+
+    def memory_purge_expired(self) -> int:
+        """Удалить временные записи с истёкшим сроком (зовёт ежедневная очистка)."""
+        rows = self.ctx.db.query(
+            "SELECT id FROM memory WHERE expires IS NOT NULL AND expires <= ?", (self.clock(),)
+        )
+        for row in rows:
+            self.ctx.db.delete("memory", row["id"])
+            self.ctx.bus.publish("memory.deleted", {"id": row["id"]})
+        return len(rows)
+
     def _trim_memory(self) -> None:
+        # сверх лимита уходят сначала старые записи ИИ, записи человека — в последнюю очередь
         extra = self.ctx.db.query(
-            "SELECT id FROM memory ORDER BY created DESC, rowid DESC LIMIT -1 OFFSET ?", (MEMORY_LIMIT,)
+            "SELECT id FROM memory ORDER BY CASE WHEN source='user' THEN 0 ELSE 1 END, created DESC, "
+            "rowid DESC LIMIT -1 OFFSET ?",
+            (MEMORY_LIMIT,),
         )
         for row in extra:
             self.ctx.db.delete("memory", row["id"])
@@ -250,18 +343,29 @@ class Notes(BaseService):
         return [item for score, item in sorted(scored, key=lambda x: -x[0]) if score >= threshold][:limit]
 
     def memory_prompt(self) -> str:
-        """Факты о пользователе одной строкой (свежие первыми, не длиннее ~1500 символов)."""
-        parts: list[str] = []
+        """Память для системного промпта ИИ (не длиннее ~1500 символов): подтверждённое пользователем,
+        предположения (уточнять) и временное — отдельными частями, свежие первыми, с датами."""
+        groups: dict[str, list[str]] = {kind: [] for kind in MEMORY_KINDS}
         total = 0
         for item in self.memory_list():
             fact = item["text"].strip().rstrip(".")
             if not fact:
                 continue
-            if total + len(fact) + 2 > PROMPT_LIMIT:
+            if item["kind"] == "temp" and item["expires"]:
+                until = datetime.fromtimestamp(item["expires"]).strftime("%d.%m %H:%M")
+                entry = f"{fact} (до {until})"
+            else:
+                entry = f"{fact} ({_day(item['created'])})"
+            if total + len(entry) + 2 > PROMPT_LIMIT:
                 break
-            parts.append(fact)
-            total += len(fact) + 2
-        return "; ".join(parts) + ("." if parts else "")
+            groups[item["kind"]].append(entry)
+            total += len(entry) + 2
+        titles = {
+            "fact": "Подтверждено пользователем",
+            "assumption": "Предположения — уточняй, прежде чем на них опираться",
+            "temp": "Временно",
+        }
+        return " ".join(f"{titles[kind]}: {'; '.join(items)}." for kind, items in groups.items() if items)
 
     # --- заметки ---------------------------------------------------------------------------------------
     def notes_list(self, query: str = "") -> list[dict[str, Any]]:

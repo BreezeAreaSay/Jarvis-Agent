@@ -179,6 +179,17 @@ class RemoteSettings(_Model):
     favorites: list[str] = Field(default_factory=list)  # id команд на главном экране пульта
 
 
+class PrivacySettings(_Model):
+    """Сроки хранения (дни; 0 — хранить, пока не удалите сами). Чистит jarvis.retention раз в сутки."""
+
+    history_days: int = Field(90, ge=0, le=3650)  # история команд
+    chat_days: int = Field(0, ge=0, le=3650)  # чаты Jarvis AI без новых сообщений (закреплённые не трогаем)
+    voice_chat_days: int = Field(30, ge=0, le=3650)  # сообщения голосового чата, Telegram и пульта
+    tool_results_days: int = Field(30, ge=0, le=3650)  # скрытые результаты инструментов и картинки в чатах
+    audio_days: int = Field(1, ge=0, le=365)  # записи созвонов «Конспекта» (если их не велено хранить)
+    logs_days: int = Field(14, ge=0, le=365)  # журналы
+
+
 class PluginState(_Model):
     enabled: bool = False
     config: dict[str, Any] = Field(default_factory=dict)
@@ -195,6 +206,7 @@ class Settings(_Model):
     avatar: AvatarSettings = Field(default_factory=AvatarSettings)
     system: SystemSettings = Field(default_factory=SystemSettings)
     remote: RemoteSettings = Field(default_factory=RemoteSettings)
+    privacy: PrivacySettings = Field(default_factory=PrivacySettings)
     plugins: dict[str, PluginState] = Field(default_factory=dict)
     packs: list[str] = Field(default_factory=list)  # установленные паки команд
     disabled_commands: list[str] = Field(default_factory=list)  # выключенные встроенные команды

@@ -20,6 +20,7 @@ from jarvis.settings import Secrets, SettingsStore
 
 if TYPE_CHECKING:
     from jarvis.confirm import Confirmations
+    from jarvis.retention import Retention
     from jarvis.scenarios.service import Scenarios
     from jarvis.services import (
         AgentService,
@@ -86,6 +87,7 @@ class AppContext:
         self.plugins: PluginManager
         self.remote: RemoteService
         self.scenarios: Scenarios
+        self.retention: Retention
         self.widgets: WidgetService
         self.desks: DeskService
         self.dispatcher: Dispatcher

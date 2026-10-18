@@ -1,13 +1,16 @@
 """Память, заметки, задачи, календарь и напоминания: дубли фактов, промпт, CRUD, срабатывание, API."""
 
+import sqlite3
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 from jarvis.context import AppContext
+from jarvis.db import MIGRATIONS, Database, _split_sql
 from jarvis.notes.service import MEMORY_LIMIT, Notes, next_occurrence, same_fact
 from jarvis.services import UserFacingError
 from tests.conftest import EventLog
@@ -49,8 +52,8 @@ def test_same_fact(a: str, b: str, same: bool) -> None:
 
 
 def test_memory_dedupe_cap_and_prompt(notes: Notes, events: EventLog) -> None:
-    first = notes.memory_add("аня ест мясо", "user")
-    assert first["text"] == "Аня ест мясо" and first["source"] == "user"
+    first = notes.memory_add("аня ест мясо")
+    assert first["text"] == "Аня ест мясо" and first["source"] == "ai" and first["kind"] == "fact"
     notes.clock = lambda: NOW + 10
     updated = notes.memory_add("Аня не ест мясо.")
     assert updated["id"] == first["id"] and updated["text"] == "Аня не ест мясо"
@@ -58,7 +61,9 @@ def test_memory_dedupe_cap_and_prompt(notes: Notes, events: EventLog) -> None:
     notes.clock = lambda: NOW + 20
     notes.memory_add("Живёт в Казани")
     assert [m["text"] for m in notes.memory_list()] == ["Живёт в Казани", "Аня не ест мясо"]
-    assert notes.memory_prompt() == "Живёт в Казани; Аня не ест мясо."
+    assert notes.memory_prompt() == (
+        "Подтверждено пользователем: Живёт в Казани (18.10.2026); Аня не ест мясо (18.10.2026)."
+    )
     assert [e["item"]["text"] for e in events.of("memory.added")] == [
         "Аня ест мясо",
         "Аня не ест мясо",
@@ -78,8 +83,92 @@ def test_memory_dedupe_cap_and_prompt(notes: Notes, events: EventLog) -> None:
     assert items[0]["text"] == facts[-1]  # свежие — первыми
     assert events.of("memory.deleted")
     prompt = notes.memory_prompt()
-    assert len(prompt) <= 1500 and prompt.startswith(facts[-1])
+    assert len(prompt) <= 1600 and prompt.startswith(f"Подтверждено пользователем: {facts[-1]} (")
     assert notes.memory_delete(items[0]["id"]) and not notes.memory_delete(items[0]["id"])
+
+
+def test_memory_user_fact_wins_over_ai(notes: Notes, events: EventLog) -> None:
+    mine = notes.memory_add("Аня ест мясо", "user")
+    notes.clock = lambda: NOW + 10
+    attempt = notes.memory_add("Аня не ест мясо")  # ИИ пытается переписать запись человека
+    assert attempt["id"] == mine["id"] and attempt["unchanged"] is True and attempt["text"] == "Аня ест мясо"
+    assert [m["text"] for m in notes.memory_list()] == ["Аня ест мясо"]
+    assert len(events.of("memory.added")) == 1
+    # а сам человек свою запись поправить может
+    again = notes.memory_add("Аня не ест мясо", "user")
+    assert again["id"] == mine["id"] and again["text"] == "Аня не ест мясо" and "unchanged" not in again
+    # запись ИИ человек тоже переписывает — она становится его
+    ai = notes.memory_add("Любит рок")
+    taken = notes.memory_add("Не любит рок", "user")
+    assert taken["id"] == ai["id"] and taken["source"] == "user" and taken["text"] == "Не любит рок"
+
+
+def test_memory_kinds_expiry_and_prompt(notes: Notes, events: EventLog) -> None:
+    notes.memory_add("Живёт в Казани", "user")
+    guess = notes.memory_add("Любит рок", kind="assumption")
+    temp = notes.memory_add("Сегодня работает из дома", kind="temp")
+    assert guess["kind"] == "assumption" and guess["expires"] is None
+    assert temp["kind"] == "temp" and temp["expires"] == NOW + 24 * 3600
+    assert notes.memory_prompt() == (
+        "Подтверждено пользователем: Живёт в Казани (18.10.2026). "
+        "Предположения — уточняй, прежде чем на них опираться: Любит рок (18.10.2026). "
+        "Временно: Сегодня работает из дома (до 19.10 12:00)."
+    )
+    with pytest.raises(UserFacingError):
+        notes.memory_add("Что-то", kind="secret")
+    # через сутки временная запись не видна и удаляется очисткой
+    notes.clock = lambda: NOW + 24 * 3600 + 1
+    assert [m["text"] for m in notes.memory_list()] == ["Любит рок", "Живёт в Казани"]
+    assert "Временно" not in notes.memory_prompt()
+    assert notes.memory_purge_expired() == 1 and notes.memory_purge_expired() == 0
+    assert events.of("memory.deleted")[-1] == {"id": temp["id"]}
+
+
+def test_memory_update_and_clear(notes: Notes, events: EventLog) -> None:
+    fact = notes.memory_add("Любит рок", kind="assumption")
+    notes.clock = lambda: NOW + 5
+    edited = notes.memory_update(fact["id"], text="любит джаз")
+    assert edited["text"] == "Любит джаз" and edited["source"] == "user" and edited["kind"] == "assumption"
+    assert edited["created"] == NOW + 5
+    temp = notes.memory_update(fact["id"], kind="temp")
+    assert temp["kind"] == "temp" and temp["expires"] == NOW + 5 + 24 * 3600
+    back = notes.memory_update(fact["id"], kind="fact")
+    assert back["kind"] == "fact" and back["expires"] is None
+    assert [e["item"]["text"] for e in events.of("memory.updated")] == ["Любит джаз"] * 3
+    with pytest.raises(UserFacingError):
+        notes.memory_update(fact["id"], text="  ")
+    with pytest.raises(UserFacingError):
+        notes.memory_update("nope", text="Что-то")
+    notes.memory_add("Живёт в Казани")
+    assert notes.memory_clear() == 2 and notes.memory_list() == []
+    assert events.of("memory.cleared") == [{"count": 2}]
+
+
+def test_memory_trim_keeps_user_facts(notes: Notes) -> None:
+    mine = notes.memory_add("Мой город — Казань", "user")
+    for i in range(MEMORY_LIMIT + 3):
+        notes.clock = lambda i=i: NOW + 10 + i
+        notes.memory_add(f"Факт {uuid.uuid4().hex[:10]} {uuid.uuid4().hex[:10]}")
+    items = notes.memory_list()
+    assert len(items) == MEMORY_LIMIT and mine["id"] in {m["id"] for m in items}
+
+
+def test_memory_migration_keeps_old_facts(tmp_path: Path) -> None:
+    """База версии 1 (до видов памяти): старые факты становятся фактами без срока."""
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    for statement in _split_sql(MIGRATIONS[0]):
+        conn.execute(statement)
+    conn.execute("INSERT INTO memory (id, text, source, created) VALUES ('m1', 'Живёт в Казани', 'ai', 1)")
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    row = db.query_one("SELECT * FROM memory WHERE id='m1'")
+    assert row is not None and row["kind"] == "fact" and row["expires"] is None
+    assert db.query_one("PRAGMA secure_delete") == {"secure_delete": 1}
+    assert db.query_one("PRAGMA user_version") == {"user_version": len(MIGRATIONS)}
+    db.close()
 
 
 def test_notes_crud(notes: Notes, events: EventLog) -> None:
@@ -219,6 +308,17 @@ def test_notes_api(client: TestClient) -> None:
     assert client.get("/api/memory").json()["items"][0]["id"] == fact["id"]
     assert client.delete(f"/api/memory/{fact['id']}").json() == {"ok": True}
     assert client.delete(f"/api/memory/{fact['id']}").status_code == 404
+    guess = client.post("/api/memory", json={"text": "Любит рок", "kind": "assumption"}).json()
+    assert guess["kind"] == "assumption" and guess["expires"] is None
+    edited = client.patch(
+        f"/api/memory/{guess['id']}", json={"text": "Любит рок и джаз", "kind": "temp"}
+    ).json()
+    assert edited["text"] == "Любит рок и джаз" and edited["kind"] == "temp" and edited["expires"]
+    assert client.patch("/api/memory/nope", json={"text": "x"}).status_code == 404
+    assert client.patch(f"/api/memory/{guess['id']}", json={"kind": "secret"}).status_code == 422
+    client.post("/api/memory", json={"text": "Живёт в Казани"})
+    assert client.delete("/api/memory").json() == {"ok": True, "count": 2}
+    assert client.get("/api/memory").json()["items"] == []
 
     note = client.post("/api/notes", json={"title": "План", "body": "Сделать API", "pinned": True}).json()
     assert note["pinned"] is True

@@ -1,6 +1,7 @@
 """Проверка команд: действия (тип, значение, клавиши) и своя команда из редактора (CommandIn → Command)."""
 
 import re
+from typing import Any
 
 from jarvis.commands import catalog, numbers
 from jarvis.commands.keys import normalize_keys, validate_keys
@@ -28,6 +29,28 @@ _CHOICES = {
     "Jarvis.SilentMode": ("", "on", "off", "toggle"),
     "Jarvis.Microphone": ("", "on", "off", "toggle"),
 }
+
+
+# «Команда консоли»: значение слота (что сказали голосом, прислал ИИ или пришло из события календаря) не
+# должно менять саму команду — со спецсимволами оболочки в нём команда не запускается
+SHELL_UNSAFE = re.compile(r"[&|<>^%!\"'`$;()\r\n]")
+SHELL_WAIT_S = 15.0  # столько ждём, чем закончится команда консоли; дольше — считаем запущенной
+
+
+def shell_slot_error(command: str, slots: dict[str, Any]) -> str | None:
+    """Что не так с подстановкой слотов в «Команду консоли» (текст для человека) или None."""
+    for name, value in slots.items():
+        if str(name).startswith("_") or value is None or isinstance(value, int | float):
+            continue
+        text = str(value)
+        if text and text in command and SHELL_UNSAFE.search(text):
+            chars = " ".join(dict.fromkeys(ch for ch in SHELL_UNSAFE.findall(text) if ch.strip()))
+            shown = " ".join(text.split())[:40]
+            return (
+                f"Команда консоли не выполнена: в «{shown}» есть спецсимволы {chars or 'перевода строки'} — "
+                "подставлять их в консоль небезопасно"
+            )
+    return None
 
 
 def _is_point(value: str) -> bool:

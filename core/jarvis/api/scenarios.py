@@ -8,6 +8,7 @@ GET    /api/scenarios/{id}             — Scenario
 PATCH  /api/scenarios/{id}             — часть ScenarioIn → Scenario
 DELETE /api/scenarios/{id}             — {ok}
 POST   /api/scenarios/{id}/run         — ExecResult (условия не проверяются)
+POST   /api/scenarios/{id}/stop        — {ok, stopped} — остановить, если выполняется
 """
 
 from typing import Any
@@ -89,3 +90,13 @@ async def run_scenario(scenario_id: str, ctx: Ctx) -> dict[str, Any]:
     except ScenarioNotFoundError as e:
         raise HTTPException(404, detail=str(e)) from None
     return result.to_json()
+
+
+@router.post("/api/scenarios/{scenario_id}/stop")
+async def stop_scenario(scenario_id: str, ctx: Ctx) -> dict[str, Any]:
+    service = _svc(ctx)
+    try:
+        service.require(scenario_id)
+    except ScenarioNotFoundError as e:
+        raise HTTPException(404, detail=str(e)) from None
+    return {"ok": True, "stopped": service.stop_run(scenario_id)}

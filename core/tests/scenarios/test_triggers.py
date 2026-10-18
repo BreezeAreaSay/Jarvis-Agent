@@ -445,6 +445,46 @@ async def test_failed_action_is_reported(
     assert spoken == []  # ошибку автоматического сценария не проговариваем
 
 
+async def test_stop_cancels_running_scenario(
+    ctx: AppContext, svc: Scenarios, clock: Clock, events: EventLog
+) -> None:
+    waits = [{"type": "Wait", "value": "300"}, {"type": "System.VolumeSet", "value": "40"}]
+    item = svc.create(scenario(actions=waits))
+    sid = item["id"]
+
+    async def started() -> None:
+        for _ in range(100):
+            if sid in svc._actions:  # действия уже идут (ждут 5 минут)
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("сценарий не начал выполняться")
+
+    # сработал сам — «Стоп», пока ещё не дошёл до действий
+    clock.set(MONDAY.replace(hour=8, second=1))
+    assert await svc.tick() == [f"{sid}:time"]
+    assert svc.stop_all() == 1
+    await svc.wait_idle()
+    assert runs(events)[-1]["cancelled"] is True and calls(ctx, "volume_set") == []
+    # сработал сам — «Стоп» посреди ожидания
+    clock.set(TUESDAY.replace(hour=8, second=1))
+    assert await svc.tick() == [f"{sid}:time"]
+    await started()
+    assert svc.stop_all() == 1
+    await svc.wait_idle()
+    run = runs(events)[-1]
+    assert run["ok"] is False and run["cancelled"] is True and run["error"] == "Остановлено"
+    assert events.of("history.added")[-1]["item"]["status"] == "cancelled"
+    assert calls(ctx, "volume_set") == [] and not svc.running(sid)
+    assert svc.stop_all() == 0 and svc.stop_run(sid) is False
+    # запуск кнопкой: «Стоп» возвращает итог тому, кто запустил
+    task = asyncio.create_task(svc.run(sid))
+    await started()
+    assert svc.stop_run(sid) is True
+    result = await task
+    assert not result.ok and result.message == "Остановлено" and result.data["cancelled"] is True
+    assert not svc.running(sid) and svc.require(sid)["last_error"] == "Остановлено"
+
+
 async def test_disabled_and_deleted_scenarios_do_not_fire(svc: Scenarios, clock: Clock) -> None:
     item = svc.create(scenario(enabled=False))
     clock.set(MONDAY.replace(hour=8, second=1))

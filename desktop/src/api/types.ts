@@ -154,7 +154,8 @@ export interface HistoryItem {
   ts: number;
   source: string;
   text: string;
-  kind: "command" | "ai" | "unknown" | "system";
+  /** confirm — итог «Разрешить / Отклонить» (detail: «Разрешено», «Отклонено · …»). */
+  kind: "command" | "ai" | "unknown" | "system" | "confirm";
   title: string;
   status: "ok" | "error" | "pending" | "cancelled" | "denied";
   detail: string;

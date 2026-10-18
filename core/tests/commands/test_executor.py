@@ -1,6 +1,7 @@
 """Выполнение команд на платформе-заглушке: вызовы ОС, слоты, информация, подтверждения, ошибки."""
 
 import asyncio
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -300,6 +301,32 @@ async def test_shell_only_in_user_commands(cmds: Commands, ctx: AppContext) -> N
     result = await cmds.executor.run_entry(state_entry, {}, "text")
     assert not result.ok and "своих команд" in result.message
     await asyncio.sleep(0.05)
+
+
+async def test_shell_reports_exit_code_and_refuses_unsafe_slots(
+    cmds: Commands, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    py = f'"{sys.executable}" -c'
+    failing = user(cmds, ("Launch.Shell", f"{py} \"import sys; sys.stderr.write('нет файла'); sys.exit(3)\""))
+    result = await cmds.run_command(failing)
+    assert not result.ok and "код 3" in result.message and "нет файла" in result.message
+
+    echo = user(cmds, ("Launch.Shell", "echo {text}"), name="Эхо", phrases=["эхо {text}"])
+    entry = cmds.get_entry(echo)
+    assert entry is not None
+    ok = await cmds.executor.run_entry(entry, {"text": "привет мир"}, "text")
+    assert ok.ok and ok.data["pid"] > 0
+    for bad in ("привет & calc", "a | b", "x > y.txt", "%PATH%", "1\nshutdown /s"):
+        result = await cmds.executor.run_entry(entry, {"text": bad}, "ai")
+        assert not result.ok and "спецсимвол" in result.message, bad
+        assert "pid" not in result.data
+
+    # долгая программа — «Запущено», не ждём её конца
+    monkeypatch.setattr("jarvis.commands.validate.SHELL_WAIT_S", 0.3)
+    slow = user(cmds, ("Launch.Shell", f'{py} "import time; time.sleep(2)"'), name="Долго", phrases=["долго"])
+    started = time.monotonic()
+    result = await cmds.run_command(slow)
+    assert result.ok and result.message == "Запущено" and time.monotonic() - started < 1.5
 
 
 async def test_confirmation_allow_and_deny(cmds: Commands, ctx: AppContext, events: EventLog) -> None:

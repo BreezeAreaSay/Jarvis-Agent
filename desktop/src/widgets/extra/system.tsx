@@ -239,7 +239,7 @@ export function ActivityWidget({ w, h, config }: WidgetProps) {
 
   const today = useMemo(() => {
     const from = startOfDay();
-    return (items ?? []).filter((x) => x.ts >= from && x.kind !== "system");
+    return (items ?? []).filter((x) => x.ts >= from && x.kind !== "system" && x.kind !== "confirm");
   }, [items]);
   const ok = today.filter((x) => x.status === "ok").length;
   const hours = useMemo(() => {

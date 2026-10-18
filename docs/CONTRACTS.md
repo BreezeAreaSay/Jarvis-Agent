@@ -61,8 +61,10 @@ Settings — модель `jarvis/settings.py` (в интерфейсе — `des
 Итог `/api/dispatch`: `{kind: "command", result: ExecResult, history}` | `{kind: "ai", chat_id, text, actions,
 sources, error, history}` | `{kind: "unknown", history}` | `{kind: "stop"}` | `{kind: "empty"}`.
 
-`HistoryItem = {id, ts, source, text, kind: command|ai|unknown|system, title, status: ok|error|pending|cancelled,
-detail, icon, command_id}`.
+`HistoryItem = {id, ts, source, text, kind: command|ai|unknown|system|confirm, title, status: ok|error|pending|cancelled|
+denied, detail, icon, command_id}` — `confirm`: итог подтверждения (`title` — вопрос, `status`: `ok` разрешено, `denied`
+отклонено, `cancelled` нет ответа или отменено «Стопом»; `detail` — «Разрешено · Будет отправлено: …», секреты
+замаскированы).
 
 `ExecResult = {ok, title, message, icon, say, command_ids, data}`; `data.silent` — не показывать тост,
 `data.cancelled` — отменено человеком.
@@ -149,7 +151,10 @@ Info.Battery, Info.System, Jarvis.Timer, Jarvis.Reminder`. Каталог с о�
 `Mouse.*` — «x y» (пусто — где курсор, `center` — центр экрана); `Media.PlayPause` — «» (переключить), `play`,
 `pause`; `Web.Search` — «google: запрос» (`google, yandex, youtube, bing, duckduckgo, wikipedia, images, maps` или
 сайт с поиском: `avito, ozon…`); `Launch.Folder` — путь или `downloads, documents, desktop, pictures, music, videos,
-screenshots`; `Launch.Shell` — только в своих командах; `Jarvis.Command` — id команды или её фраза;
+screenshots`; `Launch.Shell` — только в своих командах; значение слота со спецсимволами оболочки (`&`, `|`, `<`,
+`>`, `^`, `%`, `!`, `$`, `;`, кавычки, скобки, обратная кавычка, перевод строки) не подставляется — команда не
+запускается; код выхода ждём до 15 с: не 0 — ошибка с последней строкой stderr, дольше — «Запущено»;
+`Jarvis.Command` — id команды или её фраза;
 `Jarvis.Plugin` — «плагин:действие» («dictation:toggle»), аргументы JSON после «|»; `Jarvis.SilentMode` и
 `Jarvis.Microphone` (микрофон Jarvis: «не слушай меня»; голосом обратно не включить) — `on`, `off`, `toggle`; `Jarvis.ShowWindow` — `show`, `hide` или страница (`settings`, `commands`, `chat`);
 `Jarvis.Timer` — «5m»; `Jarvis.Reminder` — «10m | Позвонить маме».
@@ -525,6 +530,7 @@ name, kind (как в kinds или other), size, modified, folder, where}` (`whe
 | `PATCH /api/scenarios/{id}` | часть `ScenarioIn` (`{enabled}` — включить/выключить) | `Scenario` |
 | `DELETE /api/scenarios/{id}` | — | `{ok}` |
 | `POST /api/scenarios/{id}/run` | — | `ExecResult` (`data.trigger: "manual"`); условия не проверяются |
+| `POST /api/scenarios/{id}/stop` | — | `{ok, stopped}` — остановить, если выполняется (итог запуска — «Остановлено», `data.cancelled`); 404 — нет сценария |
 
 `ScenarioIn = {name, icon?, enabled? (true), triggers (1–10), conditions?, actions (до 60), say?, template?}` (`template` — id
 шаблона, если сценарий настроен из витрины; незнакомый не запоминается) — нужны действие

@@ -5,6 +5,7 @@ import { api } from "@/api/client";
 import type { DeepPartial, Settings } from "@/api/types";
 import { LogoMark } from "@/components/Orb";
 import { bridge, isElectron } from "@/lib/bridge";
+import { navigate } from "@/lib/router";
 import { type UpdateState, updates, useUpdates } from "@/lib/updates";
 import { useApp } from "@/store/app";
 import { Button, Card, Modal, notify, notifyError, Setting, Toggle } from "@/ui";
@@ -41,7 +42,7 @@ function pickSettings(raw: unknown): DeepPartial<Settings> | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const src = (raw as { settings?: unknown }).settings ?? raw;
   if (!src || typeof src !== "object") return null;
-  const keys = ["profile", "interface", "voice", "tts", "ai", "avatar", "system", "remote", "plugins", "packs", "disabled_commands"];
+  const keys = ["profile", "interface", "voice", "tts", "ai", "avatar", "system", "remote", "privacy", "plugins", "packs", "disabled_commands"];
   const out: Record<string, unknown> = {};
   for (const k of keys) if (k in (src as Record<string, unknown>)) out[k] = (src as Record<string, unknown>)[k];
   return Object.keys(out).length ? (out as DeepPartial<Settings>) : null;
@@ -112,7 +113,19 @@ function DataCard() {
   };
 
   return (
-    <Card icon={<FolderOpen />} title="Данные" sub="Настройки, история, заметки и модели хранятся только на этом компьютере">
+    <Card
+      icon={<FolderOpen />}
+      title="Данные"
+      sub={
+        <>
+          Настройки, история, заметки и модели лежат в папке данных на этом компьютере. Что уходит провайдеру ИИ, сроки
+          хранения и удаление —{" "}
+          <button type="button" className="link-btn" onClick={() => navigate("settings", "privacy")}>
+            «Приватность и данные»
+          </button>
+        </>
+      }
+    >
       <Setting name="Папка данных" desc={dir ? <span className="mono path-text">{dir}</span> : status.error ? "Нет связи с ядром" : "…"} wide>
         {dir && <CopyButton text={dir} label="Скопировать путь" />}
         <Button size="sm" icon={<FolderOpen />} disabled={!dir} onClick={() => bridge.openExternal(fileUrl(dir))}>
@@ -143,7 +156,7 @@ function DataCard() {
           Запустить
         </Button>
       </Setting>
-      <Setting name="История команд" desc="Список того, что вы говорили и что выполнил Jarvis">
+      <Setting name="История команд" desc="Список того, что вы говорили и что выполнил Jarvis (и ваши «Разрешить» / «Отклонить»)">
         {clearAsk ? (
           <>
             <Button size="sm" variant="danger" onClick={clearHistory}>
@@ -198,6 +211,7 @@ const SECTION_NAMES: Record<string, string> = {
   avatar: "Аватар",
   system: "Система",
   remote: "Пульт",
+  privacy: "Сроки хранения",
   plugins: "Плагины",
   packs: "Паки команд",
   disabled_commands: "Выключенные команды",

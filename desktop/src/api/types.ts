@@ -116,6 +116,15 @@ export interface Settings {
     telegram_owner_id: number;
     favorites: string[];
   };
+  /** Сроки хранения в днях; 0 — хранить, пока не удалите сами. */
+  privacy: {
+    history_days: number;
+    chat_days: number;
+    voice_chat_days: number;
+    tool_results_days: number;
+    audio_days: number;
+    logs_days: number;
+  };
   plugins: Record<string, { enabled: boolean; config: Record<string, unknown> }>;
   packs: string[];
   disabled_commands: string[];

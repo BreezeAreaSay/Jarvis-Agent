@@ -1,14 +1,16 @@
 // «НАСТРОЙКИ»: слева — разделы, справа — карточки раздела (#/settings/<раздел>).
 import "@/styles/settings.css";
-import { AudioLines, Mic, Monitor, Palette, Smartphone, Sparkles, SquareUser } from "lucide-react";
+import { AudioLines, Mic, Monitor, Palette, ShieldCheck, Smartphone, Sparkles, SquareUser, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { navigate } from "@/lib/router";
 import { useApp } from "@/store/app";
 import { cx } from "@/ui";
 import AiSection from "./sections/AiSection";
+import AiToolsSection from "./sections/AiToolsSection";
 import AvatarSection from "./sections/AvatarSection";
 import InterfaceSection from "./sections/InterfaceSection";
+import PrivacySection from "./sections/PrivacySection";
 import RemoteSection from "./sections/RemoteSection";
 import SystemSection from "./sections/SystemSection";
 import TtsSection from "./sections/TtsSection";
@@ -27,8 +29,10 @@ const SECTIONS: Section[] = [
   { id: "voice", title: "Голос и распознавание", hint: "Микрофон и активатор", icon: <Mic />, view: <VoiceSection /> },
   { id: "tts", title: "Синтез речи", hint: "Голос Jarvis", icon: <AudioLines />, view: <TtsSection /> },
   { id: "ai", title: "Jarvis AI", hint: "Провайдер и модель", icon: <Sparkles />, view: <AiSection /> },
+  { id: "tools", title: "Инструменты и разрешения", hint: "Что ИИ может делать сам", icon: <Wrench />, view: <AiToolsSection /> },
   { id: "avatar", title: "Аватар и питомец", hint: "Сфера на рабочем столе", icon: <SquareUser />, view: <AvatarSection /> },
   { id: "remote", title: "Пульт в телефоне", hint: "Wi-Fi и Telegram", icon: <Smartphone />, view: <RemoteSection /> },
+  { id: "privacy", title: "Приватность и данные", hint: "Что хранится и куда уходит", icon: <ShieldCheck />, view: <PrivacySection /> },
   { id: "system", title: "Система", hint: "Запуск, клавиши, данные", icon: <Monitor />, view: <SystemSection /> },
 ];
 

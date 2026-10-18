@@ -2551,6 +2551,21 @@
   animation: ai-fresh 2.2s var(--ease) both;
 }
 
+/* предположения и временные записи — тише фактов */
+.nt-fact.soft .nt-fact-text {
+  color: var(--text-2);
+}
+
+.nt-fact .chip.kind {
+  background: rgba(var(--ai-violet), 0.12);
+  border-color: rgba(var(--ai-violet), 0.3);
+  color: rgb(var(--ai-violet));
+}
+
+.nt-fact.editing {
+  background: var(--row-hover);
+}
+
 @keyframes ai-fresh {
   0% {
     background: rgba(var(--ai-violet), 0.2);

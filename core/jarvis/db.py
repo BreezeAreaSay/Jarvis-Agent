@@ -130,6 +130,11 @@ MIGRATIONS: list[str] = [
         value TEXT NOT NULL
     );
     """,
+    # 2 — память: вид записи и срок жизни
+    """
+    ALTER TABLE memory ADD COLUMN kind TEXT NOT NULL DEFAULT 'fact';  -- fact | assumption | temp
+    ALTER TABLE memory ADD COLUMN expires REAL;                       -- temp: когда забыть (unix-время)
+    """,
 ]
 
 
@@ -163,6 +168,8 @@ class Database:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.execute("PRAGMA synchronous=NORMAL")
+        # удалённое (чаты, память, история) затирается в файле, а не остаётся на диске до перезаписи
+        self._conn.execute("PRAGMA secure_delete=ON")
         self._migrate()
 
     def _migrate(self) -> None:

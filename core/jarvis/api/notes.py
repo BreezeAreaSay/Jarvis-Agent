@@ -39,8 +39,17 @@ def _deleted(removed: bool, what: str) -> dict[str, Any]:
 # --- память -----------------------------------------------------------------------------------------------
 
 
+MemoryKind = Literal["fact", "assumption", "temp"]
+
+
 class MemoryIn(BaseModel):
     text: str
+    kind: MemoryKind = "fact"
+
+
+class MemoryPatch(BaseModel):
+    text: str | None = None
+    kind: MemoryKind | None = None
 
 
 @router.get("/api/memory")
@@ -50,7 +59,17 @@ async def memory_list(ctx: Ctx) -> dict[str, Any]:
 
 @router.post("/api/memory")
 async def memory_add(body: MemoryIn, ctx: Ctx) -> dict[str, Any]:
-    return _notes(ctx).memory_add(body.text, "user")
+    return _notes(ctx).memory_add(body.text, "user", kind=body.kind)
+
+
+@router.patch("/api/memory/{memory_id}")
+async def memory_update(memory_id: str, body: MemoryPatch, ctx: Ctx) -> dict[str, Any]:
+    return _found(_notes(ctx).memory_update, memory_id, text=body.text, kind=body.kind)
+
+
+@router.delete("/api/memory")
+async def memory_clear(ctx: Ctx) -> dict[str, Any]:
+    return {"ok": True, "count": _notes(ctx).memory_clear()}
 
 
 @router.delete("/api/memory/{memory_id}")

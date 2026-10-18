@@ -254,7 +254,9 @@ label, placeholder?, options?, required}], description}`.
 | `POST /api/agent/run` | `{task}` | `{run_id}` — задача агенту в новом чате; из открытого чата агент запускается сообщением с `mode: "agent"` |
 | `POST /api/agent/stop` | — | `{ok}` |
 | `GET /api/agent` | — | состояние текущего запуска (как `agent.state`) или `null` |
-| `GET/POST /api/memory`, `DELETE /api/memory/{id}` | `{text}` | `{items}` / item |
+| `GET/POST /api/memory`, `DELETE /api/memory/{id}` | `{text, kind?}` | `{items}` / `MemoryItem` (временные с истёкшим сроком не приходят) |
+| `PATCH /api/memory/{id}` | `{text?, kind?}` | `MemoryItem` — поправленная запись становится записью человека (`source: user`); 404 — нет записи |
+| `DELETE /api/memory` | — | `{ok, count}` — забыть всё |
 | `GET/POST /api/notes`, `PATCH/DELETE /api/notes/{id}` | `{title, body, pinned, color}` | `{items}` / item |
 | `GET/POST /api/tasks`, `PATCH/DELETE /api/tasks/{id}` | `{title, done, due}` | `{items}` / item |
 | `GET /api/events?start=&end=`, `POST`, `PATCH/DELETE /api/events/{id}` | `{title, start, end, all_day, notes, remind_min}` | |
@@ -266,6 +268,7 @@ label, placeholder?, options?, required}], description}`.
 | `POST /api/mcp/import` | `{keys: string[]}` | `{items: McpServer[], skipped: [{key, reason}]}` |
 | `GET /api/mcp/catalog?q=&cursor=` | — | `{items: [{name, title, description, version, repository, website, install, installs}], next_cursor, total}` (`install` может содержать `headers`) |
 
+`MemoryItem = {id, text, source: ai|user, kind: fact|assumption|temp, expires, created}` — `assumption`: предположение (ИИ уточняет, прежде чем на него опираться), `temp`: забывается через сутки (`expires` — unix-время). Запись человека ИИ не перезаписывает: `Notes.memory_add` вернёт её же с `unchanged: true`.
 `Chat = {id, title, kind: chat|voice, mode: chat|all|agent, model, pinned, created, updated}`.
 `UiMessage = {id, chat_id, role: user|assistant, content, created, meta: {sources?: [{title, url}],
 actions?: [{title, ok, detail?}], memory?: [string], images?: [string], error?, usage?, stopped?,
@@ -292,8 +295,10 @@ error|disabled, error, tools: [{name, description}]}` — секретные `en
 | `chat.tool` | `{chat_id, message_id, call_id, name, title, status: running\|ok\|error, detail?}` |
 | `chat.done` | `{chat_id, message_id, text, sources, actions, usage, stopped?}` |
 | `chat.error` | `{chat_id, message_id?, error}` |
-| `memory.added` | `{item: {id, text, source, created}}` — «Запомнил: Аня не ест мясо» (при замене факта — тот же id) |
+| `memory.added` | `{item: MemoryItem}` — «Запомнил: Аня не ест мясо» (при замене факта — тот же id) |
+| `memory.updated` | `{item: MemoryItem}` — человек поправил запись |
 | `memory.deleted` | `{id}` |
+| `memory.cleared` | `{count}` — память очищена целиком |
 | `notes.changed` / `tasks.changed` / `events.changed` / `reminders.changed` | `{op: add\|update\|delete, item?, id?}` |
 | `reminder.fired` | `{item: {…, kind: reminder\|event, missed}}` |
 | `agent.state` | `{run_id, task, status: planning\|running\|waiting\|done\|stopped\|error, step, total, text}` |

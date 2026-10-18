@@ -145,6 +145,9 @@ def main(argv: list[str] | None = None) -> None:
         log.error("ядро уже запущено для каталога %s", paths.data_dir())
         sys.exit(3)
 
+    if args.parent_pid:
+        # корень дерева процессов Jarvis: платформа не трогает свои окна и процессы (Electron и потомки)
+        os.environ.setdefault("JARVIS_ROOT_PID", str(args.parent_pid))
     token = args.token or secrets.token_urlsafe(24)
     ctx = build_context(args.platform)
     app = create_app(ctx, token)

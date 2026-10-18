@@ -25,6 +25,10 @@ desktop/ (Electron + React)                     core/ (Python 3.12, FastAPI)
 - Действия с ОС — только через `ctx.platform` (протокол `jarvis.platform.base.Platform`) и только из потока
   платформы: `await ctx.run_platform(ctx.platform.volume_set, 50)`. Прочую блокирующую работу —
   `await ctx.run_io(fn, …)`.
+- Платформа Windows: координаты — физические пиксели (процесс DPI-aware); `screen_size()` — основной монитор,
+  `virtual_screen()` — все мониторы (для снимков); `foreground_window()` и действия без цели не трогают окна Jarvis;
+  `close_app`/`kill_process` возвращают 0, если ничего не нашлось; ввод от Jarvis помечен `dwExtraInfo = 0x4A525653`
+  (запись действий и «держи и говори» его пропускают); свои процессы — дерево от `JARVIS_ROOT_PID` (= --parent-pid).
 - События — `ctx.bus.publish(type, data)` (из любого потока); данные — JSON-сериализуемые.
 - Ошибка для человека — `raise UserFacingError("…")` (API отдаст 400 с этим текстом).
 - База — `ctx.db` (таблицы в `jarvis/db.py`; новые таблицы не заводить — для своего состояния есть `kv`
@@ -161,17 +165,19 @@ label, placeholder?, options?}], description}`.
 
 Конвейер: микрофон 16 кГц → Silero VAD → (пока идёт речь) потоковая модель для частичного текста →
 по концу фразы GigaAM v3 → слово-активатор (`jarvis.text.find_wake`) → `ctx.dispatcher.handle(text, "voice")`.
-Модели — `paths.models_dir()`; скачиваются из релизов `k2-fsa/sherpa-onnx` с проверкой SHA-256.
+Модели — `paths.models_dir()`; скачиваются из релизов `k2-fsa/sherpa-onnx` с проверкой SHA-256 (докачка, атомарная
+замена папки). При первом запуске недостающие обязательные модели качаются сами (на платформе `fake` — нет;
+`JARVIS_VOICE_AUTODOWNLOAD=1|0` переопределяет).
 
 | Маршрут | Тело | Ответ |
 |---|---|---|
-| `GET /api/voice` | — | `{state, enabled, error, wake_words, models_ready, input_device}` |
+| `GET /api/voice` | — | `{state, reason, enabled, error, ptt_error, wake_words, models_ready, input_device}` |
 | `POST /api/voice/enabled` | `{enabled}` | то же |
 | `POST /api/voice/listen` | — | `{ok}` — слушать команду без активатора (кнопка микрофона, хоткей) |
 | `POST /api/voice/stop` | — | `{ok}` |
 | `POST /api/voice/capture` | `{timeout?: 15, punct?: true}` | `{text}` — выслушать одну фразу без активатора и без выполнения (диктовка в поле ввода чата) |
 | `GET /api/voice/devices` | — | `{inputs: [{id, name, default}], outputs: [...]}` |
-| `GET /api/voice/models` | — | `{items: [{id, kind: asr\|stream\|vad\|tts, title, size_mb, installed, downloading, progress, required}]}` |
+| `GET /api/voice/models` | — | `{items: [{id, kind: asr\|stream\|vad\|tts\|whisper, title, description, size_mb, installed, downloading, progress, required, error}]}` |
 | `POST /api/voice/models/{id}/download` | — | `{ok}` (прогресс — события) |
 | `DELETE /api/voice/models/{id}` | — | `{ok}` |
 | `GET /api/tts/voices?engine=` | — | `{items: [{id, name, lang, gender}]}` |
@@ -189,6 +195,7 @@ label, placeholder?, options?}], description}`.
 | `model.download` | `{id, progress: 0..1, done: bool, error?: str}` |
 | `tts.state` | `{speaking: bool, text?}` |
 | `tts.level` | `{level: 0..1}` — громкость речи Jarvis (~20 Гц), для пульсации аватара |
+| `tts.error` | `{error, engine}` — выбранный голос не сработал, Jarvis говорит запасным (piper или Windows) |
 
 ## 4. ИИ, агент, память, заметки (`jarvis/ai`, `jarvis/notes`, `jarvis/mcp`)
 
@@ -247,9 +254,13 @@ error|disabled, error, tools: [{name, description}]}`.
 
 | Маршрут | Ответ |
 |---|---|
-| `GET /api/widgets/{kind}?…` | данные виджета: `weather` (`city`), `rates`, `crypto`, `stocks`, `news`, `system`, `media`, `recent`, `apps`, `history`, `smarthome` |
-| `POST /api/media/{action}` | `play_pause\|next\|prev` → `{ok}` |
-| `GET /api/desks` | `{items: Desk[]}` |
+| `GET /api/widgets/{kind}?…` | данные виджета: `weather` (`city`), `rates`, `crypto`, `stocks`, `news`, `system`, `media`, `volume`, `recent`, `apps`, `history`, `smarthome`; при сбое сети — прежние данные с `stale: true` или `{error}` |
+| `POST /api/widgets/{kind}/{action}` | действие виджета: `apps/launch {app_id\|name}`, `recent/open {path}`, `quick/run {command_id\|text\|url}`, `smarthome/<действие> {…}` |
+| `POST /api/media/{action}` | `play_pause\|next\|prev\|stop\|volume_up\|volume_down\|mute\|unmute\|volume {level}` → `{ok, action, volume?, muted?}` |
+| `GET /api/desks` | `{items: Desk[], current}` |
+| `GET /api/desks/{id}` | `Desk` |
+| `GET /api/desks/widgets` | `{items: [{type, title, w, h, min, max}]}` — каталог виджетов |
+| `POST /api/desks/{id}/widgets`, `PATCH/DELETE /api/desks/{id}/widgets/{widget_id}` | добавить / изменить / убрать виджет (сервер раздвигает соседей) |
 | `PUT /api/desks` | `{items: Desk[]}` — сохранить порядок и раскладку |
 | `POST /api/desks` | `{name, preset}` → `Desk` |
 | `PATCH /api/desks/{id}`, `DELETE /api/desks/{id}` | `Desk` / `{ok}` |
@@ -258,17 +269,38 @@ error|disabled, error, tools: [{name, description}]}`.
 | `GET /api/plugins` | `{items: Plugin[]}` |
 | `PUT /api/plugins/{id}` | `{enabled?, config?}` → `Plugin` |
 | `POST /api/plugins/{id}/action` | `{action, args}` → `{ok, …}` |
-| `GET /api/remote` | `{lan: {enabled, port, urls, qr_svg}, telegram: {enabled, status, bot, owner_id, pairing_code}}` |
-| `POST /api/remote/telegram/pair` | `{pairing_code}` |
+| `GET /api/remote` | `{lan: {enabled, port, urls, qr_svg, status, error}, telegram: {enabled, status, bot, owner_id, pairing_code, pairing_expires, pairing_link, token_set, error}}` |
+| `POST /api/remote/telegram/pair` | `{pairing_code, expires, bot, link}` — код живёт 10 минут |
+| `POST /api/remote/token` | `{ok}` — новый токен страницы пульта (старые ссылки перестают работать) |
 
-`Desk = {id, name, icon, preset, widgets: [{id, type, x, y, w, h, config}]}` — сетка 4 колонки, высота строки
+`Desk = {id, name, icon, preset, position, widgets: [{id, type, x, y, w, h, config}]}` (значки столов: `home, desk, sunrise, briefcase, book, clock, chart, music, gamepad, monitor, paw, avatar`) — сетка 4 колонки, высота строки
 задаёт интерфейс. Типы виджетов: `avatar, history, control, weather, media, tasks, notes, calendar, clock,
 timer, stopwatch, rates, crypto, stocks, news, system, apps, quick, recent, volume, smarthome, pet, ai, worldclock,
 countdown, network, battery, sticky, plugins, desk_links`.
 
-`Plugin = {id, name, description, icon, color, enabled, config, schema: [{key, kind, label, options?, secret?}],
-status: {...}, actions: [{id, title}]}`. Плагины: `smart_home, dictation, subtitles, summary, reader, autolock,
+`Plugin = {id, name, description, icon, color: [от, до], enabled, config, schema, status: {running, error?, …},
+actions: [{id, title}], examples: [фраза]}`. Плагины: `smart_home, dictation, subtitles, summary, reader, autolock,
 second_pc, notify_voice, pet`.
+
+Поле схемы: `{key, kind: text|number|bool|select|secret|hotkey|device|list, label, hint?, placeholder?, default?,
+options?: [{value, label}], min?, max?, step?, device?: input|output (список — из /api/voice/devices),
+fields?: [поля элемента списка] (kind list), secret?: имя, set?: bool (kind secret — задан ли)}`. В
+`PUT /api/plugins/{id}` секрет: строка — сохранить, `""` — не трогать, `null` — удалить.
+
+| Плагин | Действия (`POST …/action`) | События `plugin.<id>.*` |
+|---|---|---|
+| `smart_home` | `states`, `toggle`, `turn_on`, `turn_off`, `set`, `refresh` | `devices {items}` |
+| `dictation` | `toggle`, `start`, `stop` | `state {state: listening\|processing\|idle, text}` |
+| `subtitles` | `start`, `stop` | `text {id, text, translation, lang, pending}`, `state` |
+| `summary` | `start`, `stop`, `retry` | `state {state: recording\|transcribing\|summarizing\|done\|error, seconds}` |
+| `reader` | `read {text?\|url?}`, `pause`, `resume`, `stop`, `speed {speed}`, `seek {index}` | `progress {state, index, total, sentence, sentences?}` |
+| `autolock` | `pause`, `resume`, `check` | `state {present, last_seen, armed}` |
+| `second_pc` | `ping`, `dispatch {pc, text}` | `state` |
+| `notify_voice` | `test`, `request_access` | `state` |
+| `pet` | `feed`, `pet`, `eat {path}` | `state {playing, recycle_count, windows, fullscreen}`, `action {action}` |
+
+Голосовые команды плагинов — динамические, id `plugin.<id>:<ключ>`; хоткей из `config.hotkey` регистрирует Electron
+и вызывает действие `toggle`.
 
 | Событие | Данные |
 |---|---|
@@ -278,3 +310,4 @@ second_pc, notify_voice, pet`.
 | `plugins.changed` | `{items}` |
 | `plugin.<id>.<имя>` | события плагинов: `plugin.subtitles.text {text, translation}`, `plugin.dictation.state {state, text}`, `plugin.reader.progress {state, index, total, sentence}`, `plugin.summary.state {state, seconds}`, `plugin.pet.action {action}` … |
 | `fullscreen.changed` | `{fullscreen: bool}` — прятать оверлей и аватар над играми |
+| `remote.changed` | то же, что `GET /api/remote` |

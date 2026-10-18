@@ -54,7 +54,8 @@ if command -v "$PYTHON_HOST" >/dev/null; then
   "$PYTHON_HOST" -m compileall -q -j 0 "$OUT/app/jarvis" || true
 fi
 
-# удалить кэши байткода зависимостей другой платформы и лишнее
+# удалить кэши байткода зависимостей другой платформы и лишнее (обёртки консольных скриптов — ядру не нужны)
+rm -rf "$OUT/python/Lib/site-packages/Scripts" "$OUT/python/Lib/site-packages/bin"
 find "$OUT/python/Lib/site-packages" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 find "$OUT/python/Lib/site-packages" -path '*/tests/*' -name '*.py' -delete 2>/dev/null || true
 

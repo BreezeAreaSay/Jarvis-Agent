@@ -3,6 +3,7 @@
 export type VoiceState = "off" | "loading" | "idle" | "listening" | "processing" | "speaking" | "error";
 export type AiProvider =
   | "openai"
+  | "chatgpt"
   | "openrouter"
   | "deepseek"
   | "anthropic"

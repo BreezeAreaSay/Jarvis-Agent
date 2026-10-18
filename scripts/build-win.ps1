@@ -57,8 +57,10 @@ if (-not $SkipCore) {
     uv pip install --python (Join-Path $Out 'python\python.exe') --target (Join-Path $Out 'python\Lib\site-packages') -r $req
     $sys32 = Join-Path $Out 'python\Lib\site-packages\pywin32_system32'
     if (Test-Path $sys32) { Copy-Item "$sys32\*.dll" (Join-Path $Out 'python') }
-    $scripts = Join-Path $Out 'python\Lib\site-packages\bin'
-    if (Test-Path $scripts) { Remove-Item -Recurse -Force $scripts }
+    foreach ($junk in 'bin', 'Scripts') {
+        $p = Join-Path $Out "python\Lib\site-packages\$junk"
+        if (Test-Path $p) { Remove-Item -Recurse -Force $p }
+    }
 
     Write-Host '==> Пакет jarvis'
     New-Item -ItemType Directory -Force (Join-Path $Out 'app') | Out-Null

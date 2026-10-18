@@ -201,13 +201,33 @@ class AiService(Protocol):
         """Одиночный запрос к модели без инструментов. С json_schema возвращает dict, иначе str."""
         ...
 
+    def stop_all(self) -> int:
+        """Остановить все ответы, которые сейчас пишутся («стоп»). Возвращает, сколько остановлено."""
+        ...
+
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
 
 
 class AgentService(Protocol):
-    async def run(self, task: str, source: Source = "text") -> str:
-        """Запустить агента («работает сам»); возвращает id запуска. Ход — события agent.*"""
+    async def run(
+        self,
+        task: str,
+        source: Source = "text",
+        *,
+        chat_id: str | None = None,
+        turn_id: str | None = None,
+        reply_id: str | None = None,
+        speak: bool | None = None,
+    ) -> str:
+        """Запустить агента («работает сам»); возвращает id запуска. Ход — события agent.*.
+
+        chat_id/turn_id/reply_id — продолжить ответ в чате (агента позвал ИИ); speak — итог голосом.
+        """
+        ...
+
+    async def wait(self, run_id: str) -> Any:
+        """Дождаться итога запуска (AgentResult: status, summary, actions, error)."""
         ...
 
     async def stop_run(self) -> None: ...

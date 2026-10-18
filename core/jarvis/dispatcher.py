@@ -97,9 +97,10 @@ class MainDispatcher:
         if textops.is_stop(raw):
             self.ctx.tts.silence()
             try:
+                self.ctx.ai.stop_all()  # ответ ИИ, который сейчас пишется и озвучивается
                 await self.ctx.agent.stop_run()
             except Exception:
-                log.exception("агент не остановился")
+                log.exception("ИИ или агент не остановились")
             self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "stop"})
             return {"kind": "stop"}
 

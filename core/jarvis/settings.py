@@ -129,6 +129,8 @@ class AiSettings(_Model):
     max_agent_steps: int = Field(25, ge=3, le=100)
     monthly_budget: float = Field(0.0, ge=0.0)  # лимит расходов в месяц, $; 0 — без лимита
     folder_id: str = ""  # ID каталога Yandex Cloud (для YandexGPT)
+    # разрешения инструментов ИИ по имени: allow / ask / deny; auto или нет записи — по риску (ai/policy.py)
+    tool_policy: dict[str, Literal["auto", "allow", "ask", "deny"]] = Field(default_factory=dict)
 
 
 class AvatarSettings(_Model):

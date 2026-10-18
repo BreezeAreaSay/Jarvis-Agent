@@ -22,6 +22,7 @@ def test_providers_usage_and_test_without_key(client: TestClient) -> None:
     items = {p["id"]: p for p in client.get("/api/ai/providers").json()["items"]}
     assert set(items) == {
         "openai",
+        "chatgpt",
         "openrouter",
         "deepseek",
         "anthropic",
@@ -31,6 +32,10 @@ def test_providers_usage_and_test_without_key(client: TestClient) -> None:
         "custom",
     }
     assert items["openai"]["default_model"] == "gpt-5.4-mini" and items["openai"]["needs_key"] is True
+    gpt = items["chatgpt"]
+    assert gpt["needs_key"] is False and gpt["login"] is True and gpt["component"] is True
+    assert gpt["local"] is False and gpt["key_url"] == "" and gpt["default_model"] in gpt["models"]
+    assert items["openai"]["login"] is False and items["openai"]["component"] is False
     assert (
         items["lmstudio"]["base_url"] == "http://127.0.0.1:1234/v1"
         and items["lmstudio"]["needs_key"] is False

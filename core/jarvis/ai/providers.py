@@ -3,6 +3,9 @@
 Все провайдеры говорят на протоколе OpenAI /chat/completions; различия (как просить JSON-ответ, понимает ли
 провайдер stream_options, как называется лимит длины ответа) описаны в ProviderPreset и учитываются клиентом
 jarvis.ai.llm. Цены — оценка для счётчика расходов и месячного лимита, точные суммы — в кабинете провайдера.
+
+Исключение — «ChatGPT (подписка)»: модели GPT по подписке ChatGPT через Codex app-server, без ключа API
+(jarvis.ai.chatgpt). login — нужен вход в аккаунт, component — нужен скачиваемый компонент (Codex).
 """
 
 from dataclasses import dataclass
@@ -25,6 +28,8 @@ class ProviderPreset:
     max_tokens_param: str = "max_tokens"
     send_temperature: bool = True
     key_url: str = ""  # где получить ключ
+    login: bool = False  # вход в аккаунт вместо ключа (ChatGPT)
+    component: bool = False  # нужен скачиваемый компонент (Codex для ChatGPT)
 
     def to_json(self, base_url: str | None = None) -> dict[str, Any]:
         return {
@@ -36,6 +41,8 @@ class ProviderPreset:
             "models": list(self.models),
             "local": self.local,
             "key_url": self.key_url,
+            "login": self.login,
+            "component": self.component,
         }
 
 
@@ -51,6 +58,26 @@ PRESETS: dict[str, ProviderPreset] = {
             models=("gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"),
             max_tokens_param="max_completion_tokens",
             key_url="https://platform.openai.com/api-keys",
+        ),
+        ProviderPreset(
+            "chatgpt",
+            "ChatGPT (подписка)",
+            "",
+            needs_key=False,
+            # каталог моделей Codex 0.163.0 (model/list); настоящий список и умолчание — у Codex
+            default_model="gpt-6.1-sol",
+            models=(
+                "gpt-6.1-sol",
+                "gpt-6-astra",
+                "gpt-6-sol",
+                "gpt-6-luna",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+            ),
+            login=True,
+            component=True,
         ),
         ProviderPreset(
             "openrouter",

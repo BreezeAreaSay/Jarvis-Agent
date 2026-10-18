@@ -228,10 +228,15 @@ label, placeholder?, options?, required}], description}`.
 
 | Маршрут | Тело | Ответ |
 |---|---|---|
-| `GET /api/ai/providers` | — | `{items: [{id, title, base_url, needs_key, local, key_url, default_model, models}]}` |
-| `GET /api/ai/models` | — | `{items: [string]}` (с провайдера; ошибка — пресеты) |
-| `POST /api/ai/test` | — | `{ok, error?, latency_ms}` |
+| `GET /api/ai/providers` | — | `{items: [{id, title, base_url, needs_key, local, key_url, default_model, models, login, component}]}` — `login`: вход в аккаунт вместо ключа, `component`: нужен скачиваемый компонент (у `chatgpt` оба `true`) |
+| `GET /api/ai/models` | — | `{items: [string]}` (с провайдера; у `chatgpt` — каталог Codex; ошибка — пресеты) |
+| `POST /api/ai/test` | — | `{ok, error?, latency_ms, model}` (у `chatgpt` — крошечный ход Codex) |
 | `GET /api/ai/usage` | — | `{month: {requests, prompt_tokens, completion_tokens, cost, since}, budget}` |
+| `GET /api/ai/chatgpt` | — | `ChatGptState` (запускает Codex, если компонент есть) |
+| `POST /api/ai/chatgpt/install` | — | `{ok, installing: true}` — скачивание в фоне (события `ai.chatgpt`), или `{ok, installed: true}` |
+| `POST /api/ai/chatgpt/login` | `{device?: bool}` | `{ok, logged_in, opened?, auth_url?}` — ядро само открывает браузер (вход OAuth ChatGPT); `device: true` — `{verification_url, user_code}` для входа с другого устройства; итог — событием `ai.chatgpt`; 400 — нет компонента или вход не начался |
+| `POST /api/ai/chatgpt/login/cancel` | — | `{ok}` |
+| `POST /api/ai/chatgpt/logout` | — | `{ok}` |
 | `GET /api/chats` | — | `{items: Chat[]}` |
 | `POST /api/chats` | `{title?, mode?}` | `Chat` |
 | `GET /api/chats/{id}` | — | `{chat: Chat, messages: UiMessage[]}` |
@@ -258,6 +263,9 @@ label, placeholder?, options?, required}], description}`.
 `UiMessage = {id, chat_id, role: user|assistant, content, created, meta: {sources?: [{title, url}],
 actions?: [{title, ok, detail?}], memory?: [string], images?: [string], error?, usage?, stopped?,
 agent?: {run_id, status, steps, plan}}}` — `stopped` — ответ оборван «Стопом», `agent` — итог запуска агента.
+`ChatGptState = {installed, installing, logged_in, account, error, version, login_pending?, auth_url?,
+verification_url?, user_code?}` — `account`: «email (ChatGPT Plus)»; `error` — почему компонент не скачался или Codex
+не запустился (текст для человека); `login_pending` и ссылки — пока ждём входа в браузере.
 `McpServer = {id, name, transport: stdio|http, command, args, env, url, headers, enabled, status: connected|connecting|
 error|disabled, error, tools: [{name, description}]}` — секретные `env`/`headers` приходят замаскированными; маска,
 вернувшаяся при сохранении, оставляет прежнее значение.
@@ -280,9 +288,22 @@ error|disabled, error, tools: [{name, description}]}` — секретные `en
 | `agent.step` | `{run_id, index, title, status: running\|ok\|error}` |
 | `mcp.status` | `{server_id, status, error?, tools_count}` |
 | `ai.configured` | `{configured}` — изменилось «ИИ настроен» (ключ, провайдер, адрес, вход в ChatGPT) |
+| `ai.chatgpt` | `{state: installing\|installed\|login\|device\|logged_in\|logged_out\|error, error?, version?, account?, auth_url?, verification_url?, user_code?, opened?}` — компонент и вход ChatGPT |
 
 Подтверждения агента — общий механизм `ctx.confirmations.request(..., kind="agent")` (события `confirm.*`).
 Фраза «агент, …» отправляет задачу агенту в любом режиме чата; «стоп» останавливает и ответ ИИ, и агента.
+
+Провайдер `chatgpt` — «ChatGPT (подписка)» (`jarvis/ai/chatgpt`): модели GPT по подписке ChatGPT через Codex
+app-server (SDK `openai-codex==0.163.0` с бинарём Codex, ≈150 МБ, скачивается в `<data>/pylib` по кнопке; extra
+`chatgpt` в pyproject). Вход — `<data>/codex-home` (CODEX_HOME; вход прежнего Jarvis там же и подхватывается сам),
+рабочая папка Codex — пустая `<data>/chatgpt`. «Настроено» = компонент есть и вход выполнен. Один процесс Codex на
+ядро (без окна консоли), тред Codex на чат Jarvis (`kv` `chatgpt:thread:<chat_id>`, переживает перезапуск; не
+продолжился — новый тред с пересказом переписки; удаление чата удаляет тред). Инструменты Jarvis — `dynamicTools`
+треда: Codex присылает `item/tool/call`, ядро выполняет инструмент так же, как у провайдеров по ключу (те же
+`chat.tool`, подтверждения, источники, память, режим «Чат»). Shell, правки файлов, под-агенты Codex — запрещены
+(отказ на запросы разрешений, ход с под-агентом прерывается). Агент с этим провайдером — ход Codex с действиями
+агента как инструментами. `complete()` — временный тред, JSON — `outputSchema`. Ошибки — по-русски: регион/VPN,
+лимит подписки, «Войдите в ChatGPT в настройках Jarvis AI», нет связи (повторы Codex обрываются через 30 с).
 
 ## 5. Виджеты, столы, плагины, пульт (`jarvis/widgets`, `jarvis/desks`, `jarvis/plugins`, `jarvis/remote`)
 

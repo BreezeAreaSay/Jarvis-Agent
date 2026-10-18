@@ -9,6 +9,9 @@
 ctx.confirmations.request(kind="agent"): карточка «Нажать «Отправить» в «Почта»? Будет отправлено: «Отчёт
 готов…»». С настройкой ai.agent_confirm = "always" спрашивает перед каждым действием, которое что-то меняет.
 Отказ — модель узнаёт «пользователь отклонил» и заканчивает работу или ищет разрешённый путь.
+
+С провайдером «ChatGPT (подписка)» план — одиночный запрос Codex, а работа — один ход Codex, где действия
+агента — инструменты треда (jarvis.ai.chatgpt); подтверждения, лимит шагов и события agent.* — те же, из _act.
 """
 
 import asyncio
@@ -228,6 +231,11 @@ class Agent(BaseService):
             raise UserFacingError("Jarvis AI недоступен")
         return llm
 
+    def _chatgpt(self) -> Any:
+        """Провайдер «ChatGPT (подписка)», если выбран он (агент работает ходом Codex), иначе None."""
+        chatgpt = getattr(self.ctx.ai, "chatgpt", None)
+        return chatgpt if chatgpt is not None and chatgpt.selected else None
+
     async def run(
         self,
         task: str,
@@ -244,7 +252,8 @@ class Agent(BaseService):
             raise UserFacingError("Опишите задачу для агента")
         if self._run is not None and not self._run.finished:
             raise UserFacingError("Агент уже работает — дождитесь окончания или нажмите «Стоп»")
-        problem = self._llm().problem()
+        chatgpt = self._chatgpt()
+        problem = chatgpt.problem() if chatgpt is not None else self._llm().problem()
         if problem:
             raise UserFacingError(problem)
         if self.chats.get(chat_id) is None:
@@ -430,12 +439,17 @@ class Agent(BaseService):
             {"role": "system", "content": PLAN_PROMPT},
             {"role": "user", "content": f"Задача: {run.task}\n\nОткрытые окна:\n{windows}"},
         ]
+        chatgpt = self._chatgpt()
         try:
-            response = await self._llm().chat(messages, json_schema=schema, stream=False)
+            if chatgpt is not None:
+                parsed = await chatgpt.complete(messages, json_schema=schema, usage=run.usage)
+            else:
+                response = await self._llm().chat(messages, json_schema=schema, stream=False)
+                run.usage.add(response.usage)
+                parsed = response.parsed
         except LlmFormatError:
             return []
-        run.usage.add(response.usage)
-        steps = response.parsed.get("steps") if isinstance(response.parsed, dict) else None
+        steps = parsed.get("steps") if isinstance(parsed, dict) else None
         if not isinstance(steps, list):
             return []
         return [one_line(str(s), 90) for s in steps if str(s).strip()][:8]
@@ -457,7 +471,8 @@ class Agent(BaseService):
         return "\n\n".join(parts)
 
     async def _loop(self, run: AgentRun, windows: str) -> str:
-        llm = self._llm()
+        chatgpt = self._chatgpt()
+        llm = self._llm() if chatgpt is None else None
         settings = self.ctx.settings.value
         limit = settings.ai.max_agent_steps
         specs = [a.spec() for a in self._actions.values() if a.name != "screenshot" or settings.ai.vision]
@@ -466,6 +481,10 @@ class Agent(BaseService):
             f"Обращайся к пользователю «{address}»." if address else "Обращайся к пользователю на «вы»."
         )
         system = AGENT_PROMPT.format(now=now_text(), address_rule=address_rule)
+        if chatgpt is not None:
+            first = await self._first_message(run, windows)
+            return str(await chatgpt.run_agent(self, run, system=system, first=first, specs=specs))
+        assert llm is not None
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system},
             {"role": "user", "content": await self._first_message(run, windows)},

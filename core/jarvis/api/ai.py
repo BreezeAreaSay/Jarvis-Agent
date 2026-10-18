@@ -1,5 +1,5 @@
-"""Маршруты API: Jarvis AI — провайдеры, модели, проверка связи, расходы, чаты, агент (docs/CONTRACTS.md,
-раздел 4).
+"""Маршруты API: Jarvis AI — провайдеры, модели, проверка связи, расходы, ChatGPT по подписке, чаты, агент
+(docs/CONTRACTS.md, раздел 4).
 """
 
 from typing import Any, Literal
@@ -40,17 +40,49 @@ async def providers(ctx: Ctx) -> dict[str, Any]:
 
 @router.get("/api/ai/models")
 async def models(ctx: Ctx) -> dict[str, Any]:
-    return {"items": await _ai(ctx).llm.list_models()}
+    return {"items": await _ai(ctx).list_models()}
 
 
 @router.post("/api/ai/test")
 async def test(ctx: Ctx) -> dict[str, Any]:
-    return await _ai(ctx).llm.test()
+    return await _ai(ctx).test_connection()
 
 
 @router.get("/api/ai/usage")
 async def usage(ctx: Ctx) -> dict[str, Any]:
     return _ai(ctx).usage()
+
+
+# --- ChatGPT по подписке (Codex): компонент и вход ----------------------------------------------------------
+
+
+class ChatGptLoginIn(BaseModel):
+    device: bool = False  # вход кодом на другом устройстве (без браузера на этом ПК)
+
+
+@router.get("/api/ai/chatgpt")
+async def chatgpt_status(ctx: Ctx) -> dict[str, Any]:
+    return await _ai(ctx).chatgpt.status()
+
+
+@router.post("/api/ai/chatgpt/install")
+async def chatgpt_install(ctx: Ctx) -> dict[str, Any]:
+    return await _ai(ctx).chatgpt.install()
+
+
+@router.post("/api/ai/chatgpt/login")
+async def chatgpt_login(ctx: Ctx, body: ChatGptLoginIn | None = None) -> dict[str, Any]:
+    return await _ai(ctx).chatgpt.login(device=bool(body and body.device))
+
+
+@router.post("/api/ai/chatgpt/login/cancel")
+async def chatgpt_login_cancel(ctx: Ctx) -> dict[str, Any]:
+    return await _ai(ctx).chatgpt.cancel_login()
+
+
+@router.post("/api/ai/chatgpt/logout")
+async def chatgpt_logout(ctx: Ctx) -> dict[str, Any]:
+    return await _ai(ctx).chatgpt.logout()
 
 
 # --- чаты -------------------------------------------------------------------------------------------------

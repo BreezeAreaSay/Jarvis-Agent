@@ -13,7 +13,17 @@ from mcp import types
 from jarvis.context import AppContext
 from jarvis.mcp.catalog import map_catalog
 from jarvis.mcp.client import result_text
-from jarvis.mcp.config import MASK, McpServerConfig, normalize, slug, split_command
+from jarvis.mcp.config import (
+    KV_KEY,
+    MASK,
+    McpServerConfig,
+    is_secret,
+    load,
+    normalize,
+    save,
+    slug,
+    split_command,
+)
 from jarvis.mcp.service import Mcp, tool_name
 from jarvis.services import UserFacingError
 from tests.conftest import EventLog
@@ -146,6 +156,21 @@ def test_config_normalize_and_secrets() -> None:
     )
     assert updated.headers == {"Authorization": "Bearer real"}
     assert split_command('uvx "my server" --port 1') == ["uvx", "my server", "--port", "1"]
+
+
+def test_secrets_are_encrypted_in_db_and_old_plaintext_migrates(ctx: AppContext) -> None:
+    assert is_secret("TELEGRAM_API_HASH") and is_secret("SESSION_STRING") and not is_secret("TELEGRAM_API_ID")
+    # прежние версии хранили значения открытыми — при чтении они шифруются
+    old = McpServerConfig(
+        id="tg", name="Telegram", command="uvx", env={"TELEGRAM_API_HASH": "abc123", "ID": "42"}
+    )
+    ctx.db.kv_set(KV_KEY, [old.model_dump(mode="json")])
+    loaded = load(ctx.db)
+    assert loaded[0].env == {"TELEGRAM_API_HASH": "abc123", "ID": "42"}
+    raw = ctx.db.kv_get(KV_KEY)
+    assert all(v.startswith("enc:") for v in raw[0]["env"].values()) and "abc123" not in str(raw)
+    save(ctx.db, loaded)
+    assert load(ctx.db)[0].env == loaded[0].env
 
 
 def test_tool_names_are_sanitized_and_unique() -> None:
@@ -309,12 +334,14 @@ def test_mcp_api(client: TestClient) -> None:
     assert created["id"].startswith("github-") and created["tools"] == []
     assert client.get("/api/mcp/servers").json()["items"][0]["id"] == created["id"]
     stored = client.ctx.db.kv_get("mcp:servers")  # type: ignore[attr-defined]
-    assert stored[0]["headers"] == {"Authorization": "Bearer secret-token"}
+    # в базе секрет зашифрован, наружу — маска, серверу — настоящее значение
+    assert stored[0]["headers"]["Authorization"].startswith("enc:") and "secret-token" not in str(stored)
+    assert load(client.ctx.db)[0].headers == {"Authorization": "Bearer secret-token"}  # type: ignore[attr-defined]
 
     payload = {**created, "name": "GitHub 2", "headers": {"Authorization": MASK}}
     updated = client.put(f"/api/mcp/servers/{created['id']}", json=payload).json()
     assert updated["name"] == "GitHub 2"
-    assert client.ctx.db.kv_get("mcp:servers")[0]["headers"]["Authorization"] == "Bearer secret-token"  # type: ignore[attr-defined]
+    assert load(client.ctx.db)[0].headers["Authorization"] == "Bearer secret-token"  # type: ignore[attr-defined]
     assert client.post(f"/api/mcp/servers/{created['id']}/reconnect").json()["status"] == "disabled"
 
     bad = client.post("/api/mcp/servers", json={"name": "Без команды", "transport": "stdio"})

@@ -90,6 +90,7 @@ export function ControlWidget() {
 
 // --- история команд --------------------------------------------------------------------------------------
 function statusText(h: HistoryItem): { text: string; ok: boolean | null } {
+  if (h.kind === "confirm") return { text: h.detail.split(" · ")[0] || "Подтверждение", ok: h.status === "ok" };
   if (h.status === "pending") return { text: "Выполняется…", ok: null };
   if (h.status === "ok") return { text: h.kind === "ai" ? "Ответ Jarvis AI" : "Выполнено", ok: true };
   if (h.status === "cancelled") return { text: "Отменено", ok: false };

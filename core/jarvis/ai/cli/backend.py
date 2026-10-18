@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 import time
 import uuid
@@ -722,8 +723,36 @@ class CliBackend:
         return saved
 
     def forget_chat(self, chat_id: str) -> None:
-        """Чат удалён: забыть его сессию."""
+        """Чат удалён: забыть его сессию — и у Jarvis, и файлы переписки, которые хранит сама программа."""
+        saved = self.ctx.db.kv_get(self._session_key(chat_id))
         self.ctx.db.delete("kv", self._session_key(chat_id), key="key")
+        session_id = str(saved.get("id") or "") if isinstance(saved, dict) else ""
+        if not session_id:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            self.forget_session(session_id)
+            return
+        self.ctx.spawn(self.ctx.run_io(self.forget_session, session_id), f"cli-forget-{self.id}")
+
+    def forget_session(self, session_id: str) -> int:
+        """Удалить файлы сессии у самой программы (переписка, история правок). Вернёт, сколько удалено."""
+        removed = 0
+        for path in session_files(self.id, session_id):
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+                removed += 1
+            except OSError as e:
+                log.warning("файл сессии %s не удалён: %s", path.name, e)
+        for log_file in session_logs(self.id):
+            removed += int(_drop_session_entries(log_file, session_id))
+        if removed:
+            log.info("%s: забыта сессия удалённого чата (%d)", self.id, removed)
+        return removed
 
     def _history(self, turn: "Turn") -> str:
         try:
@@ -1126,3 +1155,84 @@ def _complete_input(messages: list[dict[str, Any]]) -> tuple[str, str, list[str]
         last = text_of(dialog[-1].get("content")) if dialog else ""
         text = ("Предыдущие сообщения:\n" + "\n".join(lines) + "\n\n" + last) if lines else last
     return "\n\n".join(system) or "Отвечай по-русски, кратко и по делу.", text, images
+
+
+# --- файлы сессий программ (удаление вместе с чатом) -------------------------------------------------------
+
+_SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,80}$")
+
+
+def _home() -> Path:
+    return Path(os.environ.get("USERPROFILE") or os.environ.get("HOME") or Path.home())
+
+
+def program_dir(provider: str) -> Path | None:
+    """Папка, где программа-провайдер хранит свои сессии и журналы."""
+    if provider == "claude_code":
+        return Path(os.environ.get("CLAUDE_CONFIG_DIR") or _home() / ".claude")
+    if provider == "gemini_cli":
+        return Path(os.environ.get("GEMINI_CLI_HOME") or _home()) / ".gemini"
+    if provider == "qwen_code":
+        return _home() / ".qwen"
+    return None
+
+
+def _mentions(path: Path, text: str) -> bool:
+    try:
+        with open(path, "rb") as f:
+            return text.encode() in f.read(65536)
+    except OSError:
+        return False
+
+
+def session_files(provider: str, session_id: str) -> list[Path]:
+    """Файлы и папки сессии у программы: с её id в имени (Claude Code) или внутри (Gemini CLI, Qwen Code)."""
+    root = program_dir(provider)
+    if root is None or not root.is_dir() or not _SESSION_ID.match(session_id):
+        return []
+    sid = session_id
+    if provider == "claude_code":
+        patterns = (
+            f"projects/*/{sid}.jsonl",
+            f"projects/*/{sid}",
+            f"todos/{sid}*.json",
+            f"file-history/{sid}",
+            f"session-env/{sid}",
+            f"debug/{sid}.txt",
+        )
+        return [p for pattern in patterns for p in root.glob(pattern)]
+    # Gemini CLI и Qwen Code: chats/session-<время>-<начало id>.json(l) — полный id ищем внутри файла
+    found: list[Path] = []
+    for pattern in ("tmp/*/chats/*", "projects/*/chats/*"):
+        for path in root.glob(pattern):
+            if not path.is_file() or sid[:8] not in path.name:
+                continue
+            if sid in path.name or _mentions(path, sid):
+                found.append(path)
+    return found
+
+
+def session_logs(provider: str) -> list[Path]:
+    """Журналы запросов Gemini CLI и Qwen Code (tmp/<проект>/logs.json): там сообщения всех сессий проекта."""
+    root = program_dir(provider)
+    if provider not in ("gemini_cli", "qwen_code") or root is None or not root.is_dir():
+        return []
+    return [p for p in root.glob("tmp/*/logs.json") if p.is_file()]
+
+
+def _drop_session_entries(path: Path, session_id: str) -> bool:
+    """Убрать из журнала программы записи одной сессии. True — что-то убрано."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, list):
+        return False
+    kept = [e for e in data if not (isinstance(e, dict) and e.get("sessionId") == session_id)]
+    if len(kept) == len(data):
+        return False
+    try:
+        path.write_text(json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        return False
+    return True

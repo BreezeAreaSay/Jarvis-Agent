@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from jarvis.mcp import clients
-from jarvis.mcp.config import MASK
+from jarvis.mcp.config import MASK, load
 
 LINUX_ENV: dict[str, str] = {}  # без XDG_CONFIG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME
 
@@ -120,8 +120,10 @@ def test_import_api(client: TestClient, home: Path) -> None:
     result = client.post("/api/mcp/import", json={"keys": keys}).json()
     assert [s["name"] for s in result["items"]] == ["github"]
     assert result["skipped"] == [{"key": by_name["old"]["key"], "reason": by_name["old"]["problem"]}]
-    stored = client.ctx.db.kv_get("mcp:servers")  # type: ignore[attr-defined]
-    assert stored[0]["env"] == {"GITHUB_TOKEN": "secret"}  # ключ перенесён как есть, наружу — маска
+    stored = load(client.ctx.db)  # type: ignore[attr-defined]
+    assert stored[0].env == {
+        "GITHUB_TOKEN": "secret"
+    }  # ключ перенесён как есть (в базе — зашифрован), наружу — маска
 
     again = client.post("/api/mcp/import", json={"keys": keys[:1]}).json()
     assert again["items"] == [] and again["skipped"][0]["reason"] == "уже подключён"

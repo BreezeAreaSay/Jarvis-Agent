@@ -168,6 +168,8 @@ def test_run_now(client: TestClient) -> None:
     assert item["runs"] == 1 and item["last_ok"] is True and item["last_trigger"] == "manual"
     history = client.get("/api/history").json()["items"][0]
     assert history["title"] == "Сценарий «Режим работы»" and history["source"] == "scenario"
+    assert client.post(f"/api/scenarios/{sid}/stop").json() == {"ok": True, "stopped": False}
+    assert client.post("/api/scenarios/nope/stop").status_code == 404
 
 
 def test_briefing_action_in_catalog(client: TestClient) -> None:

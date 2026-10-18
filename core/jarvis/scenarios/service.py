@@ -11,7 +11,8 @@
 событие scenario.run, запись в истории, тост «Сценарий «…»» и голос (кроме тихого режима). Фразу,
 сказанную человеку, в историю и тост записывает диспетчер, как у любой команды. Один сценарий не выполняется
 дважды одновременно. Расписание, пропущенное, пока компьютер спал или Jarvis был выключен, срабатывает один
-раз, если опоздание меньше 10 минут, иначе пропускается.
+раз, если опоздание меньше 10 минут, иначе пропускается. Идущий сценарий можно остановить: stop_run(id) или
+stop_all() («Стоп») — итог «Остановлено» (data.cancelled).
 """
 
 import asyncio
@@ -96,6 +97,8 @@ class Scenarios(BaseService):
         self._task: asyncio.Task[None] | None = None
         self._runs: set[asyncio.Task[Any]] = set()
         self._busy: dict[str, object] = {}  # сценарии, которые сейчас выполняются (id → метка запуска)
+        self._actions: dict[str, asyncio.Future[Any]] = {}  # их действия: «Стоп» отменяет их
+        self._stopping: set[str] = set()  # остановлены до начала действий
         self._offs: list[Callable[[], None]] = []
         self._started_at: float | None = None
         self._last_tick: float | None = None
@@ -474,6 +477,22 @@ class Scenarios(BaseService):
         if self._busy.get(scenario_id) is token:
             del self._busy[scenario_id]
 
+    def stop_run(self, scenario_id: str) -> bool:
+        """Остановить идущий сценарий (его действия отменяются). False — он сейчас не выполняется."""
+        task = self._actions.get(scenario_id)
+        if task is not None and not task.done():
+            task.cancel()
+        elif scenario_id in self._busy:
+            self._stopping.add(scenario_id)  # запущен, но до действий ещё не дошёл — не начнёт их
+        else:
+            return False
+        log.info("сценарий %s остановлен", scenario_id)
+        return True
+
+    def stop_all(self) -> int:
+        """«Стоп»: остановить все идущие сценарии. Вернёт, сколько остановлено."""
+        return sum(self.stop_run(scenario_id) for scenario_id in {*self._actions, *self._busy})
+
     async def run(self, scenario_id: str, *, source: Source = "ui") -> ExecResult:
         """Запустить сейчас (кнопка «Запустить»): условия не проверяются, выключенный тоже выполняется."""
         with self._lock:
@@ -528,14 +547,28 @@ class Scenarios(BaseService):
     ) -> ExecResult:
         sid = rec["id"]
         title, icon = _title(rec["name"]), toast_icon(rec["icon"])
+        stopped = ExecResult(False, title, "Остановлено", icon=icon, data={"cancelled": True})
+        # действия — отдельной задачей: stop_run() отменяет только их, итог («Остановлено») получает вызвавший
+        actions: asyncio.Future[ExecResult] | None = None
         try:
-            result = await self._run_actions(rec, slots, source, icon)
+            if sid in self._stopping:
+                result = stopped
+            else:
+                actions = asyncio.ensure_future(self._run_actions(rec, slots, source, icon))
+                self._actions[sid] = actions
+                result = await actions
         except asyncio.CancelledError:
-            raise
+            current = asyncio.current_task()
+            if actions is None or not actions.cancelled() or (current is not None and current.cancelling()):
+                raise  # отменили сам запуск (выход ядра) — не только действия
+            result = stopped
         except Exception as e:
             log.exception("сценарий «%s» упал", rec["name"])
             result = ExecResult(False, title, f"Ошибка: {e}", icon="error")
         finally:
+            if actions is not None and self._actions.get(sid) is actions:
+                del self._actions[sid]
+            self._stopping.discard(sid)
             self._release(sid, token)
         after = fill_address(rec["say"], self._address()) if rec["say"] else ""
         if result.ok:

@@ -139,7 +139,7 @@ export default function ProfilePage() {
   if (!settings) return null;
   const p = settings.profile;
   const since = startOfToday();
-  const today = (history.data?.items ?? []).filter((h) => h.ts >= since && h.source !== "system");
+  const today = (history.data?.items ?? []).filter((h) => h.ts >= since && h.source !== "system" && h.kind !== "confirm");
   const commands = today.filter((h) => h.kind === "command");
   const ok = today.filter((h) => h.status === "ok").length;
   const rate = today.length ? Math.round((ok / today.length) * 100) : null;

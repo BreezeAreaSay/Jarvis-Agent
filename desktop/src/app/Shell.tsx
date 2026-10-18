@@ -5,6 +5,8 @@ import { LogoMark, Orb } from "@/components/Orb";
 import { bridge, isElectron } from "@/lib/bridge";
 import { navigate, useRoute } from "@/lib/router";
 import { useApp } from "@/store/app";
+import { CoreDown } from "@/components/CoreDown";
+import { useUpdates } from "@/lib/updates";
 import { cx, Notices } from "@/ui";
 
 const HomePage = lazy(() => import("@/pages/home/HomePage"));
@@ -26,6 +28,7 @@ const NAV: { id: string; label: string; icon: ReactNode }[] = [
 /** locked — идёт первая настройка: разделы откроются после неё. */
 function Sidebar({ page, locked }: { page: string; locked: boolean }) {
   const pendingConfirm = useApp((s) => s.confirmations.length > 0);
+  const updateReady = useUpdates((s) => s.status === "available" || s.status === "downloaded");
   return (
     <aside className={cx("sidebar", locked && "locked")} inert={locked}>
       <button className="logo" onClick={() => navigate("home")} aria-label="Jarvis">
@@ -40,6 +43,7 @@ function Sidebar({ page, locked }: { page: string; locked: boolean }) {
         >
           {n.icon}
           {n.id === "ai" && pendingConfirm && <span className="nav-dot" />}
+          {n.id === "settings" && updateReady && <span className="nav-dot" title="Доступно обновление" />}
           <span className="nav-tip">{n.label}</span>
         </button>
       ))}
@@ -127,6 +131,7 @@ export function Shell() {
         <Suspense fallback={null}>{ready && (onboarded ? content : <Onboarding />)}</Suspense>
       </main>
       {!ready && <Splash />}
+      <CoreDown />
       <Notices />
     </div>
   );

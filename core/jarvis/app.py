@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from jarvis import paths
+from jarvis import crashguard, paths
 from jarvis.bus import EventBus
 from jarvis.confirm import Confirmations
 from jarvis.context import AppContext
@@ -93,3 +93,4 @@ async def stop_services(ctx: AppContext) -> None:
             log.exception("сервис %s не остановился", name)
     await ctx.shutdown_pools()
     ctx.db.close()
+    crashguard.forget_process()  # штатный выход — оборванные им загрузки моделей не считаются вылетом

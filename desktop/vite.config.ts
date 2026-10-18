@@ -1,6 +1,9 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import { readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
+
+const VERSION: string = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 
 // Политика безопасности — только в сборке: в разработке React Refresh вставляет встроенный скрипт.
 const CSP =
@@ -22,6 +25,7 @@ export default defineConfig({
   base: "./",
   plugins: [react(), csp()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
+  define: { __APP_VERSION__: JSON.stringify(VERSION) }, // версия для браузерного режима (в приложении — от Electron)
   server: { port: 5173, strictPort: true, host: "127.0.0.1" },
   build: { outDir: "dist", emptyOutDir: true, target: "chrome130", chunkSizeWarningLimit: 2000 },
 });

@@ -10,6 +10,10 @@ export interface JarvisBridge {
   fileIcon: (path: string) => Promise<string | null>;
   /** Выбрать точку на экране (пиксели экрана); null — отмена. Только в приложении. */
   pickPoint?: () => Promise<{ x: number; y: number } | null>;
+  /** Почему ядро не запускается (null — работает или ещё пробуем). */
+  coreFailure?: () => Promise<{ code: number | null; reason: string; tail: string[]; at: number } | null>;
+  /** Состояние обновлений (lib/updates.ts). */
+  updateState?: () => Promise<import("./updates").UpdateState>;
   on: (channel: string, listener: (...args: unknown[]) => void) => () => void;
   send: (channel: string, ...args: unknown[]) => void;
   platform: string;
@@ -39,5 +43,5 @@ export const bridge: JarvisBridge = window.jarvis ?? {
   on: () => () => undefined,
   send: () => undefined,
   platform: "web",
-  version: "2.0.0",
+  version: __APP_VERSION__,
 };

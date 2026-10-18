@@ -165,6 +165,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     server = uvicorn.Server(config)
 
+    def request_exit() -> None:
+        server.should_exit = True
+
+    ctx.request_exit = request_exit
+
     info = {"port": port, "token": token, "pid": os.getpid(), "version": __version__}
     (paths.data_dir() / "core.json").write_text(json.dumps(info), encoding="utf-8")
 

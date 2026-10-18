@@ -152,7 +152,14 @@ function createMain() {
       mainWin?.hide();
     }
   });
-  mainWin.on("closed", () => (mainWin = null));
+  mainWin.on("focus", sendMainFocus);
+  mainWin.on("blur", sendMainFocus);
+  mainWin.on("hide", sendMainFocus);
+  mainWin.on("minimize", sendMainFocus);
+  mainWin.on("closed", () => {
+    mainWin = null;
+    sendMainFocus();
+  });
 }
 
 function showMain(route?: string) {
@@ -220,9 +227,40 @@ function createOverlay() {
   loadRoute(overlayWin, "overlay");
   overlayWin.webContents.on("did-finish-load", () => {
     overlayWin?.webContents.send("overlay:bounds", overlayBounds());
+    overlayWin?.webContents.send("overlay:main-focus", !!mainWin?.isFocused());
     syncOverlay();
   });
   overlayWin.on("closed", () => (overlayWin = null));
+  trackOverlayPointer();
+}
+
+// Оверлей сквозной для мыши и ловит её, только когда указатель над его кнопкой (clickthrough.ts). Где указатель,
+// он узнаёт двумя путями: от пересылки движений Electron (forward) и опросом отсюда. Пересылка держится на
+// глобальном хуке мыши, а Windows молча снимает такой хук, если главный поток хоть раз задумался дольше
+// таймаута, — и кнопки оверлея («Разрешить», «Стоп») перестают нажиматься. Опрос от хука не зависит.
+let overlayPointerTimer: NodeJS.Timeout | null = null;
+let overlayPointer = "";
+
+function trackOverlayPointer() {
+  if (overlayPointerTimer) return;
+  overlayPointerTimer = setInterval(() => {
+    const win = overlayWin;
+    if (!win || win.isDestroyed() || !win.isVisible()) return;
+    const p = screen.getCursorScreenPoint();
+    const b = win.getBounds();
+    const inside = p.x >= b.x && p.y >= b.y && p.x < b.x + b.width && p.y < b.y + b.height;
+    const key = inside ? `${p.x}:${p.y}` : "out";
+    if (key === overlayPointer) return;
+    overlayPointer = key;
+    win.webContents.send("overlay:pointer", inside ? p.x - b.x : -1, inside ? p.y - b.y : -1);
+  }, 40);
+}
+
+/** Главное окно в фокусе — подтверждения из него показывает оно само, оверлей их прячет (без дублей). */
+function sendMainFocus() {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  const focused = !!mainWin && !mainWin.isDestroyed() && mainWin.isVisible() && mainWin.isFocused();
+  overlayWin.webContents.send("overlay:main-focus", focused);
 }
 
 function syncOverlay() {

@@ -1,11 +1,24 @@
 // «Система»: автозапуск, горячие клавиши, оверлей, обновления, папка данных, экспорт/импорт, о программе.
-import { CircleArrowUp, Download, FolderOpen, Info, Keyboard, RefreshCw, RotateCcw, Rocket, Trash2, Upload, Wand } from "lucide-react";
+import {
+  CircleArrowUp,
+  Download,
+  ExternalLink,
+  FolderOpen,
+  Info,
+  Keyboard,
+  RefreshCw,
+  RotateCcw,
+  Rocket,
+  Trash2,
+  Upload,
+  Wand,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import { api } from "@/api/client";
 import type { DeepPartial, Settings } from "@/api/types";
 import { LogoMark } from "@/components/Orb";
 import { bridge, isElectron } from "@/lib/bridge";
-import { type UpdateState, updates, useUpdates } from "@/lib/updates";
+import { RELEASES_URL, type UpdateState, updates, useUpdates } from "@/lib/updates";
 import { useApp } from "@/store/app";
 import { Button, Card, Modal, notify, notifyError, Setting, Toggle } from "@/ui";
 import { CopyButton, KeyCapture, ProgressBar, useApi, useSettingsPatch } from "../kit";
@@ -304,7 +317,22 @@ function UpdatesCard({
       );
       break;
     default:
-      line = `У вас последняя версия${u.checkedAt ? ` · ${whenChecked(u.checkedAt)}` : ""}`;
+      if (u.status === "none" && u.published === false) {
+        // на GitHub нет ни одного выпуска: честно говорим, что сравнивать не с чем
+        line = (
+          <span>
+            На GitHub пока нет опубликованных версий — обновляться не на что
+            {u.checkedAt ? ` · ${whenChecked(u.checkedAt)}` : ""}
+          </span>
+        );
+        action = (
+          <Button size="sm" variant="ghost" icon={<ExternalLink />} onClick={() => bridge.openExternal(RELEASES_URL)}>
+            Выпуски
+          </Button>
+        );
+      } else {
+        line = `У вас последняя версия${u.checkedAt ? ` · ${whenChecked(u.checkedAt)}` : ""}`;
+      }
   }
   const canCheck = u.status === "idle" || u.status === "none"; // в остальных состояниях своя кнопка в рамке
   return (

@@ -20,6 +20,8 @@ export interface UpdateState {
   speed?: number;
   error?: string;
   checkedAt?: number;
+  /** false — на GitHub ещё нет ни одного выпуска: сравнивать не с чем (не «у вас последняя»). */
+  published?: boolean;
 }
 
 /** Текст релиза (HTML с GitHub или список версий) → обычный текст для окна «Что нового». */
@@ -41,7 +43,7 @@ function plainNotes(notes: UpdateInfo["releaseNotes"]): string {
 
 const OFFLINE = /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ECONNRESET|net::ERR|getaddrinfo|socket hang up/i;
 
-/** На GitHub ещё нет ни одного релиза — для человека это «обновлений нет», а не ошибка. */
+/** На GitHub ещё нет ни одного релиза — это не ошибка, но и не «у вас последняя версия». */
 function nothingPublished(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e);
   return !OFFLINE.test(msg) && /No published versions|Unable to find latest version/i.test(msg);
@@ -86,7 +88,7 @@ export class Updater {
         checkedAt: Date.now(),
       }),
     );
-    autoUpdater.on("update-not-available", () => this.set({ status: "none", checkedAt: Date.now() }));
+    autoUpdater.on("update-not-available", () => this.set({ status: "none", published: true, checkedAt: Date.now() }));
     autoUpdater.on("download-progress", (p: ProgressInfo) =>
       this.set({ status: "downloading", percent: p.percent, transferred: p.transferred, total: p.total, speed: p.bytesPerSecond }),
     );
@@ -102,7 +104,7 @@ export class Updater {
   /** Ошибка приходит дважды: событием error и отказом промиса — разбор одинаковый. */
   private fail(e: unknown) {
     if (this.state.status !== "downloading" && nothingPublished(e)) {
-      this.set({ status: "none", error: undefined, checkedAt: Date.now() });
+      this.set({ status: "none", published: false, error: undefined, checkedAt: Date.now() });
     } else {
       this.set({ status: "error", error: humanError(e) });
     }

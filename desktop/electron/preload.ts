@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 
 const LISTEN = new Set([
   "overlay:bounds",
+  "overlay:pointer",
+  "overlay:main-focus",
   "window:material",
   "window:focus",
   "core:restarting",

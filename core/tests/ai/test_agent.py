@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -26,16 +27,18 @@ def ui(ctx: AppContext) -> FakeUi:
     agent.ui = fake
     agent.settle_s = 0.0
     agent.launch_settle_s = 0.0
+    agent.pointer_delay_s = 0.0
     return fake
 
 
-def _answer_confirmations(ctx: AppContext, allow: bool) -> list[tuple[str, str]]:
+def _answer_confirmations(ctx: AppContext, allow: bool | Callable[[str], bool]) -> list[tuple[str, str]]:
     asked: list[tuple[str, str]] = []
 
     def answer(event: Any) -> None:
         asked.append((event.data["title"], event.data["detail"]))
         assert event.data["kind"] == "agent"
-        ctx.confirmations.resolve(event.data["id"], allow)
+        decided = allow(event.data["title"]) if callable(allow) else allow
+        ctx.confirmations.resolve(event.data["id"], decided)
 
     ctx.bus.on("confirm.request", answer)
     return asked
@@ -57,6 +60,7 @@ def _mail_script(llm: ScriptedLlm, final: str) -> None:
 async def test_agent_sends_mail_after_approval(
     ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, events: EventLog
 ) -> None:
+    ctx.settings.patch({"ai": {"vision": "off"}})  # модель без зрения: только элементы окна
     asked = _answer_confirmations(ctx, True)
     _mail_script(llm, "Письмо Ивану отправлено.")
     run_id = await ctx.agent.run(TASK, "text")
@@ -233,7 +237,7 @@ async def test_agent_other_actions(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
 
     ctx.commands.run_text = run_text  # type: ignore[method-assign]
     ctx.settings.patch({"ai": {"vision": True}})
-    asked = _answer_confirmations(ctx, False)
+    asked = _answer_confirmations(ctx, lambda title: "PowerShell" not in title)
     llm.add(
         PLAN,
         calls(("focus_window", {"title": "spotify"}), ("launch_app", {"name": "PowerShell"})),
@@ -249,7 +253,12 @@ async def test_agent_other_actions(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
     platform_calls = ctx.platform.calls  # type: ignore[attr-defined]
     assert ("window_action", ("focus", 103)) in platform_calls  # окно Spotify
     assert not any(name == "launch" for name, _ in platform_calls)  # PowerShell не разрешили
-    assert asked == [("Запустить «PowerShell»?", "Командная строка может изменить систему")]
+    # после отказа агент спрашивает перед каждым действием, которое что-то меняет: обойти запрет нельзя
+    assert asked == [
+        ("Запустить «PowerShell»?", "Командная строка может изменить систему"),
+        ("Открыть mail.example.com?", "Адрес: https://mail.example.com"),
+        ("Выполнить команду «сверни все окна»?", ""),
+    ]
     assert ("open_url", ("https://mail.example.com",)) in platform_calls
     titles = [a["title"] for a in result.actions]
     assert titles == [

@@ -18,7 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from jarvis.bus import EventBus
 
@@ -132,13 +132,24 @@ class AiSettings(_Model):
     web_search: bool = True
     memory: bool = True  # запоминать факты о пользователе
     mode: Literal["chat", "all", "agent"] = "all"  # режим по умолчанию: чат / всё вместе / агент
-    vision: bool = False  # модель понимает картинки (снимки экрана для агента)
+    # модель понимает картинки (снимки окон для агента, картинки в чате): auto — по провайдеру и модели
+    vision: Literal["auto", "on", "off"] = "auto"
     agent_confirm: Literal["risky", "always"] = "risky"
     max_agent_steps: int = Field(25, ge=3, le=100)
     monthly_budget: float = Field(0.0, ge=0.0)  # лимит расходов в месяц, $; 0 — без лимита
     folder_id: str = ""  # ID каталога Yandex Cloud (для YandexGPT)
     # разрешения инструментов ИИ по имени: allow / ask / deny; auto или нет записи — по риску (ai/policy.py)
     tool_policy: dict[str, Literal["auto", "allow", "ask", "deny"]] = Field(default_factory=dict)
+
+    @field_validator("vision", mode="before")
+    @classmethod
+    def _vision(cls, value: Any) -> Any:
+        # до 2.1 был флажок (по умолчанию выключен): включённый — «on», остальное — «auto»
+        if value is True:
+            return "on"
+        if value is False or value is None:
+            return "auto"
+        return value
 
 
 class AvatarSettings(_Model):

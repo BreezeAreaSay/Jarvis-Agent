@@ -95,3 +95,99 @@ RISK_TITLES: dict[Risk, str] = {
     "act": "Выполняет действия",
     "risky": "Рискованное — спрашивает",
 }
+
+
+# --- клавиши, окна и текст: общие правила для агента, инструментов чата и команд от ИИ -------------------
+
+_KEY_ALIASES = {
+    "control": "ctrl",
+    "ctl": "ctrl",
+    "return": "enter",
+    "del": "delete",
+    "esc": "escape",
+    "windows": "win",
+    "cmd": "win",
+    "super": "win",
+    "option": "alt",
+}
+RISKY_KEYS = frozenset(
+    {"shift+delete", "ctrl+shift+delete", "win+r", "win+x", "ctrl+enter", "alt+s", "ctrl+alt+delete"}
+)
+SEND_KEYS = frozenset({"enter", "ctrl+enter", "alt+s"})
+CLOSE_KEYS = frozenset({"alt+f4", "ctrl+w", "ctrl+f4", "ctrl+q"})
+
+SHELL_EXES = frozenset(
+    {"cmd.exe", "powershell.exe", "pwsh.exe", "windowsterminal.exe", "wt.exe", "openconsole.exe",
+     "conhost.exe", "bash.exe", "wsl.exe", "mintty.exe", "regedit.exe", "mmc.exe"}
+)  # fmt: skip
+SHELL_TITLE = re.compile(
+    r"командная строка|command prompt|powershell|windows terminal|терминал|\bterminal\b|"
+    r"^выполнить$|^run$|редактор реестра|registry editor",
+    re.I,
+)
+MESSENGER_EXES = frozenset(
+    {"telegram.exe", "ayugram.exe", "discord.exe", "whatsapp.exe", "whatsapp.root.exe", "slack.exe",
+     "viber.exe", "skype.exe", "ms-teams.exe", "teams.exe", "signal.exe", "element.exe", "zoom.exe",
+     "hxoutlook.exe", "outlook.exe", "olk.exe", "thunderbird.exe", "vk messenger.exe", "max.exe"}
+)  # fmt: skip
+MESSENGER_TITLE = re.compile(
+    r"telegram|whatsapp|discord|slack|viber|skype|teams|signal|messenger|вконтакте|\bvk\b|gmail|outlook|"
+    r"почта|\bmail\b|instagram|facebook|twitter|\bx\.com\b|одноклассники",
+    re.I,
+)
+CARD_RE = re.compile(r"(?<![\d])(?:\d[ -]?){12,18}\d(?![\d])")
+
+
+def normalize_combo(combo: str) -> str:
+    """«Ctrl + Shift + Del» → «ctrl+shift+delete»."""
+    parts = [p.strip().casefold() for p in (combo or "").replace(" ", "").split("+") if p.strip()]
+    return "+".join(_KEY_ALIASES.get(p, p) for p in parts)
+
+
+def _luhn(digits: str) -> bool:
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        n = int(ch)
+        if i % 2:
+            n = n * 2 - 9 if n > 4 else n * 2
+        total += n
+    return total % 10 == 0
+
+
+def has_card_number(text: str) -> bool:
+    """В тексте номер банковской карты (13–19 цифр, проходит проверку Луна)."""
+    for match in CARD_RE.finditer(text or ""):
+        digits = re.sub(r"\D", "", match.group())
+        if 13 <= len(digits) <= 19 and _luhn(digits):
+            return True
+    return False
+
+
+def is_shell_window(title: str, exe: str = "") -> bool:
+    """Окно, где набранный текст выполняется как команда: терминал, «Выполнить», редактор реестра."""
+    return (exe or "").casefold() in SHELL_EXES or bool(SHELL_TITLE.search((title or "").strip()))
+
+
+def is_messenger(title: str, exe: str = "") -> bool:
+    """Окно, где Enter отправляет написанное людям: мессенджеры и почта (и их веб-версии в браузере)."""
+    return (exe or "").casefold() in MESSENGER_EXES or bool(MESSENGER_TITLE.search(title or ""))
+
+
+_HOTKEY_RE = re.compile(r"^(?:(?:ctrl|alt|shift|win|cmd|control|super)\+)+[^+\s]+$", re.I)
+
+
+def jarvis_hotkeys(settings: Any) -> frozenset[str]:
+    """Горячие клавиши самого Jarvis (окно, «слушать», микрофон, плагины): ИИ их не нажимает."""
+    out: set[str] = set()
+    system = getattr(settings, "system", None)
+    for name in ("hotkey_show", "hotkey_listen", "hotkey_mic"):
+        value = str(getattr(system, name, "") or "")
+        if value:
+            out.add(normalize_combo(value))
+    plugins = getattr(settings, "plugins", None) or {}
+    for state in plugins.values() if isinstance(plugins, dict) else []:
+        config = state.get("config") if isinstance(state, dict) else getattr(state, "config", None)
+        for value in config.values() if isinstance(config, dict) else []:
+            if isinstance(value, str) and _HOTKEY_RE.match(value.replace(" ", "")):
+                out.add(normalize_combo(value))
+    return frozenset(out)

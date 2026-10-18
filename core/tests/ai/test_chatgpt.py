@@ -14,6 +14,7 @@ from jarvis.ai.chatgpt import backend, component, errors
 from jarvis.ai.chatgpt.component import SdkInfo
 from jarvis.ai.chatgpt.runtime import RuntimeGone
 from jarvis.ai.llm import LlmError, LlmFormatError
+from jarvis.ai.vision import Shot
 from jarvis.context import AppContext
 from jarvis.services import ExecResult, UserFacingError
 from tests.ai.chatgpt_fakes import ACCOUNT, Codexes, FakeTurnScript, answer, installed_sdk, text_of
@@ -584,6 +585,8 @@ def ui(ctx: AppContext) -> FakeUi:
 async def test_agent_works_as_a_codex_turn(
     ctx: AppContext, codex: Codexes, ui: FakeUi, events: EventLog
 ) -> None:
+    ctx.settings.patch({"ai": {"vision": "off"}})
+
     def work(t: FakeTurnScript) -> None:
         clicked = t.call("ui_click", {"id": "e1", "step": 1})
         assert "«Написать»: нажато" in text_of(clicked) and "[Снимок окна]" in text_of(clicked)
@@ -616,12 +619,17 @@ async def test_agent_step_limit_and_screenshot(
 ) -> None:
     ctx.settings.patch({"ai": {"max_agent_steps": 3, "vision": True}})
 
-    ctx.platform.screenshot = lambda: b"png"  # type: ignore[method-assign]
-    monkeypatch.setattr("jarvis.ai.agent._screenshot_url", lambda png: "data:image/jpeg;base64,QUJD")
+    ctx.platform.screenshot = lambda window=None: b"png"  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "jarvis.ai.vision.render",
+        lambda png, rect, **kw: Shot("data:image/jpeg;base64,QUJD", 100, 70, rect, kw.get("hwnd", 0)),
+    )
 
     def work(t: FakeTurnScript) -> None:
         shot = t.call("screenshot", {})
-        assert shot["contentItems"] == [{"type": "inputImage", "imageUrl": "data:image/jpeg;base64,QUJD"}]
+        # картинка окна — в том же ответе инструмента, вместе с подписью и снимком элементов
+        assert {"type": "inputImage", "imageUrl": "data:image/jpeg;base64,QUJD"} in shot["contentItems"]
+        assert shot["contentItems"][0]["text"].startswith("Снимок окна приложен")
         t.call("ui_snapshot", {})
         t.call("ui_snapshot", {})
         refused = t.call("ui_snapshot", {})

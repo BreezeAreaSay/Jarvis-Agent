@@ -1,9 +1,12 @@
 """Элементы окон для агента: UI Automation на Windows (библиотека uiautomation), заглушка на других системах.
 
 Бэкенд синхронный и вызывается только из потока платформы (ctx.run_platform): там уже инициализирован COM.
-Снимок — интерактивные элементы активного окна (кнопки, поля, ссылки, пункты меню, вкладки, флажки…) с
-короткими id e1…eN, именами, типами и прямоугольниками; id действуют до следующего снимка. Окна, клавиши, мышь
-и запуск программ агент делает через jarvis.platform — их бэкенд не дублирует.
+Снимок — интерактивные элементы окна (кнопки, поля, ссылки, пункты меню, вкладки, флажки…) с короткими id
+e1…eN, именами, типами и прямоугольниками; id действуют до следующего снимка. Окно агент передаёт сам (hwnd
+из platform.foreground_window — оно никогда не окно Jarvis): иначе, если задачу дали из окна Jarvis, агент
+видел бы и нажимал интерфейс самого Jarvis. Нажатие — шаблонами UI Automation, без мыши («в фоне»); мышь —
+только если элемент их не умеет и под точкой окно той же программы, а курсор человека потом возвращается на
+место. Окна, клавиши и запуск программ агент делает через jarvis.platform — их бэкенд не дублирует.
 """
 
 import logging
@@ -68,15 +71,21 @@ class UiSnapshot:
     app: str = ""
     elements: list[UiElement] = field(default_factory=list)
     truncated: bool = False
+    hwnd: int = 0
+    pid: int = 0
+    rect: tuple[int, int, int, int] = (0, 0, 0, 0)  # окно на экране, физические точки
+    mouse: bool = False  # последнее нажатие — настоящей мышью (у элемента нет шаблонов UIA)
 
     def find(self, element_id: str) -> UiElement | None:
         return next((e for e in self.elements if e.id == element_id), None)
 
 
 class UiBackend(Protocol):
-    def snapshot(self, limit: int = SNAPSHOT_LIMIT) -> UiSnapshot: ...
+    def snapshot(self, limit: int = SNAPSHOT_LIMIT, hwnd: int | None = None) -> UiSnapshot: ...
     def click(self, element_id: str) -> str: ...
     def set_text(self, element_id: str, text: str) -> str: ...
+    def element_at(self, x: int, y: int) -> tuple[str, str]: ...  # (имя, тип) элемента под точкой экрана
+    def owner_at(self, x: int, y: int) -> tuple[int, str]: ...  # (pid, заголовок окна) под точкой экрана
 
 
 def format_snapshot(snapshot: UiSnapshot) -> str:
@@ -110,7 +119,7 @@ class UnsupportedUi:
 
     MESSAGE = "Управление элементами окон работает только в Windows (UI Automation)"
 
-    def snapshot(self, limit: int = SNAPSHOT_LIMIT) -> UiSnapshot:
+    def snapshot(self, limit: int = SNAPSHOT_LIMIT, hwnd: int | None = None) -> UiSnapshot:
         raise UiError(self.MESSAGE)
 
     def click(self, element_id: str) -> str:
@@ -118,6 +127,12 @@ class UnsupportedUi:
 
     def set_text(self, element_id: str, text: str) -> str:
         raise UiError(self.MESSAGE)
+
+    def element_at(self, x: int, y: int) -> tuple[str, str]:
+        return "", ""
+
+    def owner_at(self, x: int, y: int) -> tuple[int, str]:
+        return 0, ""
 
 
 class WindowsUi:
@@ -127,6 +142,7 @@ class WindowsUi:
         self.platform = platform
         self._controls: dict[str, Any] = {}
         self._elements: dict[str, UiElement] = {}
+        self._pid = 0  # процесс окна последнего снимка: мышь жмёт, только если под точкой оно
 
     @staticmethod
     def _auto() -> Any:
@@ -135,23 +151,34 @@ class WindowsUi:
         auto.SetGlobalSearchTimeout(1.0)
         return auto
 
-    def snapshot(self, limit: int = SNAPSHOT_LIMIT) -> UiSnapshot:
+    def snapshot(self, limit: int = SNAPSHOT_LIMIT, hwnd: int | None = None) -> UiSnapshot:
         auto = self._auto()
-        control = auto.GetForegroundControl()
-        if control is None:
-            raise UiError("Нет активного окна")
-        try:
-            top = control.GetTopLevelControl() or control
-        except Exception:
-            top = control
+        if hwnd:
+            top = auto.ControlFromHandle(int(hwnd))
+            if top is None:
+                raise UiError("Окно закрылось — сделай ui_snapshot ещё раз")
+        else:
+            control = auto.GetForegroundControl()
+            if control is None:
+                raise UiError("Нет активного окна")
+            try:
+                top = control.GetTopLevelControl() or control
+            except Exception:
+                top = control
         window = (top.Name or "").strip()
-        app = ""
+        app, pid = "", 0
         try:
             import psutil
 
-            app = psutil.Process(top.ProcessId).name()
+            pid = int(top.ProcessId)
+            app = psutil.Process(pid).name()
         except Exception:
             app = ""
+        try:
+            box = top.BoundingRectangle
+            frame = (box.left, box.top, box.right, box.bottom)
+        except Exception:
+            frame = (0, 0, 0, 0)
         found: list[
             tuple[int, Any, UiElement, bool]
         ] = []  # (порядок в дереве, элемент UIA, описание, текст?)
@@ -193,14 +220,68 @@ class WindowsUi:
         chosen = interactive[:limit]
         chosen += texts[: max(0, limit - len(chosen))]
         chosen.sort(key=lambda f: f[0])
-        self._controls, self._elements = {}, {}
+        self._controls, self._elements, self._pid = {}, {}, pid
         elements = []
         for number, (_, node, element, _) in enumerate(chosen, start=1):
             element.id = f"e{number}"
             self._controls[element.id] = node
             self._elements[element.id] = element
             elements.append(element)
-        return UiSnapshot(window, app, elements, truncated)
+        return UiSnapshot(window, app, elements, truncated, hwnd=int(hwnd or 0), pid=pid, rect=frame)
+
+    def element_at(self, x: int, y: int) -> tuple[str, str]:
+        """Имя и тип элемента под точкой (для проверки клика по картинке: не «Отправить» ли это)."""
+        try:
+            auto = self._auto()
+            node = auto.ControlFromPoint(int(x), int(y))
+            for _ in range(4):  # у значка в кнопке имени нет — берём ближайшего предка с именем
+                if node is None:
+                    break
+                name = (node.Name or "").strip()
+                if name:
+                    type_name = str(node.ControlTypeName)
+                    kind = INTERACTIVE.get(type_name) or type_name.replace("Control", "")
+                    return name[:120], kind
+                node = node.GetParentControl()
+        except Exception:
+            log.debug("элемент под точкой не определён", exc_info=True)
+        return "", ""
+
+    def owner_at(self, x: int, y: int) -> tuple[int, str]:
+        """(pid, заголовок окна) того, что под точкой экрана; (0, "") — не узнать."""
+        try:
+            auto = self._auto()
+            node = auto.ControlFromPoint(int(x), int(y))
+            if node is None:
+                return 0, ""
+            pid = int(node.ProcessId)
+            try:
+                top = node.GetTopLevelControl() or node
+                title = (top.Name or "").strip()
+            except Exception:
+                title = ""
+            return pid, title
+        except Exception:
+            log.debug("окно под точкой не определено", exc_info=True)
+            return 0, ""
+
+    def _mouse_click(self, x: int, y: int) -> None:
+        """Клик настоящей мышью — и курсор человека обратно. Элемент закрыт чужим окном — клика нет."""
+        pid, title = self.owner_at(x, y)
+        if self._pid and pid and pid != self._pid:
+            raise UiError(f"Элемент закрыт другим окном («{title or 'без названия'}») — клик не сделан")
+        saved: tuple[int, int] | None = None
+        try:
+            saved = self.platform.cursor_pos()
+        except Exception:
+            saved = None
+        self.platform.mouse_click(x, y)
+        if saved is not None:
+            time.sleep(0.05)
+            try:
+                self.platform.mouse_move(*saved)
+            except Exception:
+                log.debug("курсор не вернулся на место", exc_info=True)
 
     @staticmethod
     def _value(auto: Any, node: Any) -> str:
@@ -255,7 +336,7 @@ class WindowsUi:
                     pattern.Expand()
                     return "список раскрыт"
             x, y = element.center
-            self.platform.mouse_click(x, y)
+            self._mouse_click(x, y)
             return "клик мышью"
         except PlatformError:
             raise
@@ -278,7 +359,7 @@ class WindowsUi:
                 node.SetFocus()
             except Exception:
                 x, y = element.center
-                self.platform.mouse_click(x, y)
+                self._mouse_click(x, y)
             self.platform.press_keys("ctrl+a")
             if "\n" in text or len(text) > 300:
                 self.platform.paste_text(text)  # Enter в тексте не отправит сообщение раньше времени

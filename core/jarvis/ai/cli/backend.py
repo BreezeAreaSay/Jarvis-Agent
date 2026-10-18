@@ -942,8 +942,7 @@ class CliBackend:
         async def act(name: str, args: dict[str, Any]) -> McpResult:
             call = ToolCall("call_" + new_id(), name, json.dumps(args, ensure_ascii=False))
             if name == "finish":
-                summary = str(args.get("summary") or "").strip()
-                finish["summary"] = summary or "Готово."
+                finish["summary"] = agent.finish_summary(run, args)
                 return McpResult("ok")
             if finish["summary"] is not None:
                 return McpResult("Пропущено: работа уже завершена", is_error=True)
@@ -1001,7 +1000,7 @@ class CliBackend:
             return str(finish["summary"])
         if out.ok:
             self._succeeded()
-            return out.final or "Готово."
+            return out.final or "Агент закончил без итога — проверьте результат на экране."
         raise UserFacingError(self._failure(out, model)[1])
 
 

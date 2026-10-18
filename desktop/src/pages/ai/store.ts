@@ -374,9 +374,16 @@ export const useAi = create<AiState>((set, get) => {
 
     async loadAgent() {
       try {
-        const d = await api.get<{ run_id: string; task: string; status: string; step: number; total: number; text: string }>(
-          "/api/agent",
-        );
+        const d = await api.get<{
+          run_id: string;
+          task: string;
+          status: string;
+          step: number;
+          total: number;
+          text: string;
+          plan?: string[];
+          outcome?: AgentRun["outcome"];
+        }>("/api/agent");
         if (!d?.run_id || !["planning", "running", "waiting"].includes(d.status)) return;
         const cur = get().agent;
         if (cur?.runId === d.run_id) return;
@@ -389,6 +396,8 @@ export const useAi = create<AiState>((set, get) => {
             total: d.total,
             text: d.text,
             steps: [],
+            plan: d.plan ?? [],
+            outcome: d.outcome ?? "",
             startedAt: Date.now(),
           },
         });
@@ -619,7 +628,16 @@ export function bindAiEvents() {
     patch(key, (t) => (t.pending && !t.pending.memory.includes(text) ? { pending: { ...t.pending, memory: [...t.pending.memory, text] } } : {}));
   });
 
-  onEvent<{ run_id: string; task: string; status: AgentStatus | "idle"; step: number; total: number; text: string }>(
+  onEvent<{
+    run_id: string;
+    task: string;
+    status: AgentStatus | "idle";
+    step: number;
+    total: number;
+    text: string;
+    plan?: string[];
+    outcome?: AgentRun["outcome"];
+  }>(
     "agent.state",
     (e) => {
       const d = e.data;
@@ -628,7 +646,18 @@ export function bindAiEvents() {
       const base: AgentRun =
         a && a.runId === d.run_id
           ? a
-          : { runId: d.run_id, task: d.task ?? "", status: d.status, step: 0, total: 0, text: "", steps: [], startedAt: Date.now() };
+          : {
+              runId: d.run_id,
+              task: d.task ?? "",
+              status: d.status,
+              step: 0,
+              total: 0,
+              text: "",
+              steps: [],
+              plan: [],
+              outcome: "",
+              startedAt: Date.now(),
+            };
       const run: AgentRun = {
         ...base,
         task: d.task || base.task,
@@ -636,6 +665,8 @@ export function bindAiEvents() {
         step: d.step ?? base.step,
         total: d.total ?? base.total,
         text: d.text ?? base.text,
+        plan: d.plan ?? base.plan,
+        outcome: d.outcome ?? base.outcome,
       };
       if (isTerminal(d.status)) {
         run.endedAt = base.endedAt ?? Date.now();
@@ -650,7 +681,18 @@ export function bindAiEvents() {
     let a = st.getState().agent;
     if (!a || a.runId !== d.run_id) {
       if (a && !isTerminal(a.status)) return;
-      a = { runId: d.run_id, task: "", status: "running", step: 0, total: 0, text: d.title, steps: [], startedAt: Date.now() };
+      a = {
+        runId: d.run_id,
+        task: "",
+        status: "running",
+        step: 0,
+        total: 0,
+        text: d.title,
+        steps: [],
+        plan: [],
+        outcome: "",
+        startedAt: Date.now(),
+      };
     }
     const row: AgentStep = { index: d.index, title: d.title, status: d.status };
     const steps = a.steps.some((s) => s.index === d.index)

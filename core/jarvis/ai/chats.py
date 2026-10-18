@@ -9,6 +9,7 @@
 from typing import TYPE_CHECKING, Any
 
 from jarvis.db import dumps, loads, new_id, now
+from jarvis.redact import redact
 from jarvis.services import UserFacingError
 
 if TYPE_CHECKING:
@@ -55,6 +56,16 @@ def ui_message(row: dict[str, Any]) -> dict[str, Any]:
         "created": row["created"],
         "meta": {k: v for k, v in meta.items() if k not in _INTERNAL_META and v not in (None, [], "")},
     }
+
+
+def _redact_calls(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    for call in calls:
+        fn = call.get("function")
+        if isinstance(fn, dict) and isinstance(fn.get("arguments"), str):
+            call = {**call, "function": {**fn, "arguments": redact(fn["arguments"])}}
+        out.append(call)
+    return out
 
 
 class ChatStore:
@@ -143,8 +154,9 @@ class ChatStore:
             "id": message_id or new_id(),
             "chat_id": chat_id,
             "role": role,
-            "content": content or "",
-            "tool_calls": dumps(tool_calls) if tool_calls else None,
+            # секреты (номер карты, пароль, ключ API) на диск не попадают: модель видит их только в этом ходе
+            "content": redact(content or ""),
+            "tool_calls": dumps(_redact_calls(tool_calls)) if tool_calls else None,
             "tool_call_id": tool_call_id,
             "name": name,
             "meta": dumps(meta) if meta else None,

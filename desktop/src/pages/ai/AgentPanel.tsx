@@ -1,7 +1,9 @@
 // Карточка агента над полем ввода: «● Агент Jarvis · Шаг 2 из 4 · ■ Стоп», текущее действие, шаги и
 // «Жду вашего разрешения» (подтверждения kind = "agent" из общего хранилища).
 import {
+  Check,
   ChevronDown,
+  CircleAlert,
   CircleCheck,
   CircleStop,
   CircleX,
@@ -98,6 +100,13 @@ export function AgentPanel() {
   const running = !!agent && !terminal;
   const now = agent ? agent.text || STATUS_TEXT[agent.status] : "";
   const steps = agent?.steps ?? [];
+  const plan = agent?.plan ?? [];
+  const current = agent ? Math.max(1, Math.min(agent.step || 1, plan.length)) : 1;
+  // итог: «Готово» только если агент сам подтвердил успех; «Требует внимания» — сделано не всё
+  const outcome = agent?.outcome ?? "";
+  const finalKind =
+    agent?.status === "done" ? (outcome === "failed" ? "error" : outcome === "partial" ? "partial" : "done") : (agent?.status ?? "");
+  const finalText = finalKind === "partial" ? "Требует внимания" : STATUS_TEXT[finalKind] ?? "";
 
   return (
     <section className={cx("agent-card pop-in", terminal && `ended ${agent?.status}`)} aria-live="polite">
@@ -138,19 +147,36 @@ export function AgentPanel() {
         agent && (
           <div className={cx("agent-now", terminal && "final")}>
             {terminal ? (
-              agent.status === "done" ? (
+              finalKind === "done" ? (
                 <CircleCheck className="ok" />
-              ) : agent.status === "stopped" ? (
+              ) : finalKind === "stopped" ? (
                 <CircleStop className="muted-icon" />
+              ) : finalKind === "partial" ? (
+                <CircleAlert className="warn" />
               ) : (
                 <CircleX className="err" />
               )
             ) : (
               actionIcon(now)
             )}
-            <span>{terminal ? STATUS_TEXT[agent.status] : now}</span>
+            <span>{terminal ? finalText : now}</span>
           </div>
         )
+      )}
+
+      {running && plan.length > 0 && approvals.length === 0 && (
+        <ol className="agent-plan">
+          {plan.map((title, i) => {
+            const n = i + 1;
+            const state = n < current ? "done" : n === current ? "now" : "next";
+            return (
+              <li key={n} className={state}>
+                <span className="agent-plan-mark">{state === "done" ? <Check /> : n}</span>
+                <span className="ellipsis">{title}</span>
+              </li>
+            );
+          })}
+        </ol>
       )}
 
       {steps.length > 0 && (

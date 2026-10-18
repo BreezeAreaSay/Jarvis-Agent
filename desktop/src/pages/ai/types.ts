@@ -80,6 +80,9 @@ export interface AgentRun {
   total: number;
   text: string;
   steps: AgentStep[];
+  /** План шагов (agent.state plan) и оценка итога самим агентом. */
+  plan: string[];
+  outcome: "" | "done" | "partial" | "failed";
   startedAt: number;
   endedAt?: number;
 }

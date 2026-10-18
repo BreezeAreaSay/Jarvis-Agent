@@ -146,6 +146,49 @@ export function startDemo(scene: string, windowRect: () => DOMRect | null, bound
     });
   }
 
+  // агент работает в окне мессенджера своим курсором (agent.pointer — физические точки экрана)
+  if (scene === "agentwork") {
+    const plan = ["Открыть Telegram", "Найти чат «Мама»", "Написать сообщение", "Отправить"];
+    const state = (step: number, text: string, status = "running") =>
+      emitOverlay("agent.state", {
+        run_id: "demo-work",
+        task: "Напиши маме в Telegram, что буду в 7",
+        status,
+        step,
+        total: plan.length,
+        text,
+        plan,
+        outcome: "",
+      });
+    const point = (kind: string, fx: number, fy: number, label: string, box?: [number, number, number, number]) => {
+      const b = bounds();
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const phys = (x: number, y: number) => [Math.round((b.x + x * w) * b.scale), Math.round((b.y + y * h) * b.scale)];
+      const [x, y] = phys(fx, fy);
+      const rect = box ? [...phys(box[0], box[1]), ...phys(box[2], box[3])] : undefined;
+      emitOverlay("agent.pointer", { run_id: "demo-work", kind, x, y, label, rect, ts: Date.now() / 1000 });
+    };
+    at(200, () => state(1, "Открываю «Telegram»"));
+    at(700, () => point("focus", 0.5, 0.5, "Telegram", [0.18, 0.12, 0.82, 0.88]));
+    at(1700, () => {
+      state(2, "Нажимаю поле поиска");
+      point("click", 0.27, 0.19, "Поиск", [0.19, 0.16, 0.36, 0.22]);
+    });
+    at(2700, () => {
+      state(2, "Печатаю текст");
+      point("type", 0.29, 0.19, "Мама");
+    });
+    at(3700, () => {
+      state(2, "Нажимаю чат «Мама»");
+      point("click", 0.28, 0.3, "Чат «Мама»", [0.19, 0.26, 0.36, 0.34]);
+    });
+    at(4900, () => {
+      state(3, "Печатаю текст");
+      point("type", 0.6, 0.83, "Буду в 7", [0.38, 0.8, 0.81, 0.86]);
+    });
+  }
+
   if (has("plugins")) {
     every(4000, () =>
       emitOverlay("plugin.subtitles.text", { id: 7, text: "Welcome back, everyone!", translation: "С возвращением, друзья!", lang: "en", pending: false }),
@@ -218,6 +261,29 @@ export function DemoBackdrop({ scene, windowRef }: { scene: string; windowRef: R
         </div>
       )}
       {scene.startsWith("clipboard") && <ClipboardDemoDoc />}
+      {scene === "agentwork" && <MessengerDemo />}
+    </div>
+  );
+}
+
+/** Окно мессенджера для сцены «агент работает»: список чатов с поиском и открытый чат. */
+function MessengerDemo() {
+  return (
+    <div className="ov-demo-messenger">
+      <div className="ov-demo-msg-list">
+        <div className="ov-demo-msg-search">Поиск</div>
+        {["Мама", "Работа", "Дима", "Избранное"].map((name) => (
+          <div key={name} className="ov-demo-msg-chat">
+            <i />
+            {name}
+          </div>
+        ))}
+      </div>
+      <div className="ov-demo-msg-pane">
+        <div className="ov-demo-msg-head">Мама</div>
+        <div className="ov-demo-msg-bubble">Ты во сколько будешь?</div>
+        <div className="ov-demo-msg-input">Написать сообщение…</div>
+      </div>
     </div>
   );
 }

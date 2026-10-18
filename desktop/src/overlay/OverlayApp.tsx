@@ -6,6 +6,7 @@ import { useRef } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useApp } from "@/store/app";
 import { cx } from "@/ui";
+import { AgentCursor } from "./AgentCursor";
 import { AgentPanel } from "./AgentPanel";
 import { ClipboardOverlay } from "./ClipboardOverlay";
 import { useClickThrough } from "./clickthrough";
@@ -93,6 +94,9 @@ export default function OverlayApp() {
       </div>
       <ErrorBoundary silent area="оверлей: умный буфер">
         <ClipboardOverlay />
+      </ErrorBoundary>
+      <ErrorBoundary silent area="оверлей: курсор агента">
+        <AgentCursor />
       </ErrorBoundary>
     </div>
   );

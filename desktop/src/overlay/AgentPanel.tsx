@@ -30,6 +30,9 @@ interface AgentState {
   step: number;
   total: number;
   text: string;
+  plan?: string[];
+  /** Как оценил итог сам агент: done — сделано, partial — требует внимания, failed — не получилось. */
+  outcome?: "" | "done" | "partial" | "failed";
 }
 
 interface AgentStep {
@@ -112,6 +115,12 @@ export function AgentPanel({ hidden }: { hidden: boolean }) {
   const status = run?.status ?? "waiting";
   const stepLabel = run && run.total > 0 ? `Шаг ${Math.max(1, Math.min(run.step || 1, run.total))} из ${run.total}` : "";
   const recent = steps.slice(-3);
+  const plan = run?.plan ?? [];
+  const current = run ? Math.max(1, Math.min(run.step || 1, plan.length)) : 1;
+  const outcome = run?.outcome ?? "";
+  const finalKind = status === "done" ? (outcome === "failed" ? "error" : outcome === "partial" ? "partial" : "done") : status;
+  const finalTitle =
+    finalKind === "done" ? "Готово" : finalKind === "partial" ? "Требует внимания" : finalKind === "error" ? "Не получилось" : "Остановлено";
 
   return (
     <Slot show={show}>
@@ -139,12 +148,12 @@ export function AgentPanel({ hidden }: { hidden: boolean }) {
             <Countdown c={approval} />
           </>
         ) : finished ? (
-          <div className={cx("ov-agent-final", `is-${status}`)}>
-            <span className="ov-agent-final-ico">{status === "done" ? <Check /> : status === "error" ? <CircleAlert /> : <Square />}</span>
+          <div className={cx("ov-agent-final", `is-${finalKind}`)}>
+            <span className="ov-agent-final-ico">
+              {finalKind === "done" ? <Check /> : finalKind === "stopped" ? <Square /> : <CircleAlert />}
+            </span>
             <div className="grow">
-              <div className="ov-agent-final-title">
-                {status === "done" ? "Готово" : status === "error" ? "Не получилось" : "Остановлено"}
-              </div>
+              <div className="ov-agent-final-title">{finalTitle}</div>
               {run?.text && <div className="ov-agent-final-text">{run.text}</div>}
             </div>
           </div>
@@ -154,15 +163,30 @@ export function AgentPanel({ hidden }: { hidden: boolean }) {
               <span className="ov-agent-action-ico">{actionIcon(run?.text ?? "", status)}</span>
               <span className="ov-agent-action-text">{run?.text || "Составляю план…"}</span>
             </div>
-            {recent.length > 0 && (
-              <ol className="ov-agent-steps">
-                {recent.map((s) => (
-                  <li key={s.index} className={cx(`is-${s.status}`)}>
-                    <StepIcon status={s.status} />
-                    <span className="ellipsis">{s.title}</span>
-                  </li>
-                ))}
+            {plan.length > 0 ? (
+              <ol className="ov-agent-plan">
+                {plan.map((title, i) => {
+                  const n = i + 1;
+                  const state = n < current ? "done" : n === current ? "now" : "next";
+                  return (
+                    <li key={n} className={cx(`is-${state}`)}>
+                      <span className="ov-plan-mark">{state === "done" ? <Check /> : n}</span>
+                      <span className="ellipsis">{title}</span>
+                    </li>
+                  );
+                })}
               </ol>
+            ) : (
+              recent.length > 0 && (
+                <ol className="ov-agent-steps">
+                  {recent.map((s) => (
+                    <li key={s.index} className={cx(`is-${s.status}`)}>
+                      <StepIcon status={s.status} />
+                      <span className="ellipsis">{s.title}</span>
+                    </li>
+                  ))}
+                </ol>
+              )
             )}
           </>
         )}

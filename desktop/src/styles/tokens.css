@@ -65,7 +65,7 @@
   --t-slow: 420ms;
 
   --sidebar-w: 68px;
-  --titlebar-h: 40px;
+  --titlebar-h: 20px; /* = отступ .page сверху: полоса перетаскивания не заходит на заголовок */
 }
 
 :root[data-anim="off"] {

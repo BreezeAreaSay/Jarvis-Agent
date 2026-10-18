@@ -2,6 +2,7 @@
 import { Plus, Settings2, X } from "lucide-react";
 import { type PointerEvent as ReactPointerEvent, useMemo, useRef, useState } from "react";
 import type { WidgetPlacement } from "@/api/types";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { cx } from "@/ui";
 import { WIDGET_BY_TYPE } from "@/widgets/registry";
 
@@ -150,14 +151,16 @@ export function DeskGrid({
             style={{ gridColumn: `${w.x + 1} / span ${w.w}`, gridRow: `${w.y + 1} / span ${w.h}` }}
           >
             {Comp ? (
-              <Comp
-                id={w.id}
-                w={w.w}
-                h={w.h}
-                config={w.config ?? {}}
-                editing={editing}
-                setConfig={(config) => onChange(widgets.map((x) => (x.id === w.id ? { ...x, config } : x)))}
-              />
+              <ErrorBoundary compact area={`виджет «${def.title}»`}>
+                <Comp
+                  id={w.id}
+                  w={w.w}
+                  h={w.h}
+                  config={w.config ?? {}}
+                  editing={editing}
+                  setConfig={(config) => onChange(widgets.map((x) => (x.id === w.id ? { ...x, config } : x)))}
+                />
+              </ErrorBoundary>
             ) : (
               <div className="widget center faint" style={{ flexDirection: "column", gap: 6, textAlign: "center" }}>
                 {def?.icon}

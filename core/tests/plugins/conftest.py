@@ -66,6 +66,10 @@ class FakeVoice:
         self.on_capture: Callable[[float], None] | None = None
         self.transcribed: list[tuple[int, int, str]] = []
         self.transcribe_fn: Callable[[np.ndarray, int, str], str] | None = None
+        self.multilingual = True  # скачан ли Whisper
+
+    def has_multilingual(self) -> bool:
+        return self.multilingual
 
     async def capture_text(self, timeout: float = 15.0, *, punct: bool = True) -> str:
         self.captures.append(timeout)

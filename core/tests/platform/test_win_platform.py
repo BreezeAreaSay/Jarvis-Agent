@@ -394,6 +394,43 @@ def test_launch_dispatch(platform: WindowsPlatform, monkeypatch: pytest.MonkeyPa
         platform.launch("Spotify.exe")
 
 
+def test_launch_by_desktop_app_id(
+    platform: WindowsPlatform, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """AppID программ Microsoft без «!» (из меню «Пуск», так их хранит виджет «Программы») — запускаются."""
+    platform._apps = appmod.AppInventory(
+        lambda: tmp_path / "apps.json",
+        lambda: [
+            AppInfo(
+                "Excel",
+                "Microsoft.Office.EXCEL.EXE.15",
+                r"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE",
+            ),
+            AppInfo(
+                "Word",
+                "Microsoft.Office.WINWORD.EXE.15",
+                r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE",
+            ),
+            AppInfo(
+                "Visual Studio Code",
+                "Microsoft.VisualStudioCode",
+                r"C:\Users\u\AppData\Local\Programs\VS Code\Code.exe",
+            ),
+        ],
+    )
+    calls = Launches(platform, monkeypatch, missing={"Microsoft.Office.POWERPNT.EXE.15.exe"}).calls
+    platform.launch("Microsoft.Office.EXCEL.EXE.15")
+    platform.launch("microsoft.visualstudiocode")
+    platform.launch("Word")
+    assert calls == [
+        ("explorer", r"shell:AppsFolder\Microsoft.Office.EXCEL.EXE.15"),
+        ("explorer", r"shell:AppsFolder\Microsoft.VisualStudioCode"),
+        ("explorer", r"shell:AppsFolder\Microsoft.Office.WINWORD.EXE.15"),
+    ]
+    with pytest.raises(PlatformError, match="не найдена"):
+        platform.launch("Microsoft.Office.POWERPNT.EXE.15")
+
+
 def test_open_url_and_path(
     platform: WindowsPlatform, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

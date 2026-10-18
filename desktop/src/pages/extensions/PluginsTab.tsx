@@ -83,6 +83,9 @@ function PluginHero({ plugin, offline }: { plugin: Plugin; offline: boolean }) {
   const error = typeof plugin.status?.error === "string" ? plugin.status.error : "";
   const hint = typeof plugin.status?.hint === "string" ? plugin.status.hint : "";
   const examples = (plugin.examples ?? []).filter(Boolean);
+  // у плагинов с сеансом (status.active) — только уместная кнопка: «Запустить» или «Остановить»
+  const running = typeof plugin.status?.active === "boolean" ? plugin.status.active : null;
+  const actions = (plugin.actions ?? []).filter((a) => running === null || (a.id === "start" ? !running : a.id === "stop" ? running : true));
 
   const setEnabled = async (v: boolean) => {
     try {
@@ -114,7 +117,7 @@ function PluginHero({ plugin, offline }: { plugin: Plugin; offline: boolean }) {
           <h2 className="pl-title">{plugin.name}</h2>
           <p className="pl-desc">{plugin.description}</p>
           <div className={cx("pl-state", health)}>
-            <span className={cx("status-dot", health === "on" && "ok", health === "error" && "err", health === "starting" && "busy")} />
+            <span className={cx("status-dot", health === "on" && "ok", health === "error" && "err", health === "starting" && "busy", health === "ready" && "ready")} />
             {offline ? "Нет связи с ядром" : HEALTH_TEXT[health]}
           </div>
         </div>
@@ -143,9 +146,9 @@ function PluginHero({ plugin, offline }: { plugin: Plugin; offline: boolean }) {
 
       <StatusFacts plugin={plugin} />
 
-      {(plugin.actions?.length ?? 0) > 0 && (
+      {actions.length > 0 && (
         <div className="pl-actions">
-          {plugin.actions.map((a, i) => (
+          {actions.map((a, i) => (
             <Button
               key={a.id}
               size="sm"

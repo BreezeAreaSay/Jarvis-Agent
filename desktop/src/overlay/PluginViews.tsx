@@ -16,7 +16,8 @@ interface SubtitleItem {
   pending?: boolean;
 }
 
-export function Subtitles({ hidden }: { hidden: boolean }) {
+/** Над полноэкранным видео тоже: субтитры для того и запускают (остальное в полноэкранном режиме прячется). */
+export function Subtitles() {
   const [item, setItem] = useState<SubtitleItem | null>(null);
   const [show, setShow] = useState(false);
   const timer = useRef(0);
@@ -40,7 +41,7 @@ export function Subtitles({ hidden }: { hidden: boolean }) {
   const original = item?.text?.trim() ?? "";
   const two = !!translation && translation.toLowerCase() !== original.toLowerCase();
   return (
-    <Fade show={show && !hidden && !!item}>
+    <Fade show={show && !!item}>
       {(leaving) => (
         <div className={cx("ov-subs ov-anim-up", leaving && "leaving")} aria-live="polite">
           {two && <div className="ov-subs-orig">{tail(original, 140)}</div>}

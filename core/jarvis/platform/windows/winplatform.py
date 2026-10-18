@@ -471,7 +471,11 @@ class WindowsPlatform:
                         raise
             self._launch_app(app, args)
             return
-        app = self._apps.resolve(t)
+        # AppID обычной программы — без «!»: «Microsoft.Office.EXCEL.EXE.15», «Microsoft.VisualStudioCode»
+        # (так их отдаёт меню «Пуск» и запоминают виджеты) — сперва точное совпадение, потом имя
+        app = appmod.find_by_app_id(t, self._apps.peek()) or self._apps.resolve(t)
+        if app is None:  # resolve мог обновить инвентарь — AppID могло в нём появиться
+            app = appmod.find_by_app_id(t, self._apps.peek())
         if app is not None:
             self._launch_app(app, args)
             return

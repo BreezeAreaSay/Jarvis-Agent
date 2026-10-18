@@ -11,6 +11,7 @@ import {
   Pause,
   Play,
   ShieldCheck,
+  Square,
   UserRound,
   Volume2,
 } from "lucide-react";
@@ -96,20 +97,39 @@ function DictationLive({ plugin }: { plugin: Plugin }) {
 }
 
 // --- субтитры ----------------------------------------------------------------------------------------
-function SubtitlesLive({ plugin }: { plugin: Plugin }) {
+/** Кадр «видео» с подписью: ▶ запускает субтитры (плагин включён — ещё не значит, что они идут), ■ — останавливает. */
+function SubtitlesLive({ plugin, onAction }: { plugin: Plugin; onAction: (id: string) => void }) {
   const live = useLive(plugin.id);
   const ev = (live?.text?.data ?? {}) as Dict;
   const last = (plugin.status?.last ?? {}) as Dict;
+  const state = live?.state && (!live.text || live.state.ts >= live.text.ts) ? (live.state.data as Dict) : null;
+  const active = typeof state?.active === "boolean" ? state.active : !!plugin.status?.active;
   const noTranslate = plugin.config?.target_lang === "none";
   const text = str(ev.text || last.text || plugin.status?.text || "");
   const translation = noTranslate ? "" : str(ev.translation || last.translation || plugin.status?.translation || "");
   const fresh = live?.text ? Date.now() - live.text.ts < 15000 : false;
+  const placeholder = !plugin.enabled
+    ? "Включите плагин переключателем справа вверху"
+    : active
+      ? "Слушаю звук компьютера — подпись появится здесь и внизу экрана"
+      : "Нажмите ▶ — и Jarvis начнёт подписывать то, что звучит в колонках";
   return (
-    <div className="lv lv-subtitles">
+    <div className={cx("lv lv-subtitles", active && "active")}>
       <div className="lv-video">
-        <span className="lv-play">
-          <Play />
-        </span>
+        {active && (
+          <span className="lv-onair">
+            <i /> Субтитры идут
+          </span>
+        )}
+        <button
+          className={cx("lv-play", active && "on")}
+          disabled={!plugin.enabled}
+          onClick={() => onAction(active ? "stop" : "start")}
+          aria-label={active ? "Остановить субтитры" : "Запустить субтитры"}
+          title={active ? "Остановить субтитры" : "Запустить субтитры"}
+        >
+          {active ? <Square /> : <Play />}
+        </button>
         <div className={cx("lv-caption", !(text || translation) && "empty", fresh && "fresh")}>
           {text || translation ? (
             <>
@@ -117,7 +137,7 @@ function SubtitlesLive({ plugin }: { plugin: Plugin }) {
               <div className="tr">{translation || text}</div>
             </>
           ) : (
-            <div className="tr faint">Субтитры появятся здесь, как только что-то зазвучит</div>
+            <div className="tr faint">{placeholder}</div>
           )}
         </div>
       </div>
@@ -471,7 +491,7 @@ export function PluginLive({ plugin, onAction }: { plugin: Plugin; onAction: (id
     case "dictation":
       return <DictationLive plugin={plugin} />;
     case "subtitles":
-      return <SubtitlesLive plugin={plugin} />;
+      return <SubtitlesLive plugin={plugin} onAction={onAction} />;
     case "summary":
       return <SummaryLive plugin={plugin} />;
     case "reader":

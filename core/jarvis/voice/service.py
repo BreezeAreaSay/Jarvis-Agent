@@ -191,6 +191,10 @@ class Voice(BaseService):
             return False
         return any(self.models.installed(i) for i in (*m.ASR_IDS, m.STREAM_ID))
 
+    def has_multilingual(self) -> bool:
+        """Скачан Whisper — распознаются языки кроме русского (субтитры, голосовые на других языках)."""
+        return any(self.models.installed(i) for i in m.WHISPER_IDS)
+
     def listening_ids(self, settings: Settings | None = None) -> list[str]:
         s = settings or self.ctx.settings.value
         return [i for i in self.models.required_ids(s) if not i.startswith("piper-")]

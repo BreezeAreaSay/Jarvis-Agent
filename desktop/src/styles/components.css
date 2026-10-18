@@ -942,6 +942,12 @@
   animation: pulse-dot 1s infinite;
 }
 
+/* включено, но не запущено — кольцо вместо точки */
+.status-dot.ready {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--ok);
+}
+
 .app-tile {
   display: flex;
   align-items: center;

@@ -373,9 +373,11 @@ Claude Code — только официальным установщиком (`i
 timer, stopwatch, focus, rates, crypto, stocks, news, system, apps, quick, recent, volume, smarthome, pet, ai, worldclock,
 countdown, network, battery, sticky, plugins, desk_links`.
 
-`Plugin = {id, name, description, icon, color: [от, до], enabled, config, schema, status: {running, error?, …},
-actions: [{id, title}], examples: [фраза]}`. Плагины: `smart_home, dictation, subtitles, summary, reader, autolock,
-second_pc, notify_voice, pet, focus, clipboard, file_search`.
+`Plugin = {id, name, description, icon, color: [от, до], enabled, config, schema, status: {running, error?, hint?,
+active?, …}, actions: [{id, title}], examples: [фраза]}`. Плагины: `smart_home, dictation, subtitles, summary, reader,
+autolock, second_pc, notify_voice, pet, focus, clipboard, file_search`. `status.hint` — подсказка человеку (что
+настроить); `status.active` — у плагинов с сеансом (субтитры, диктовка): включённый плагин ещё не значит, что сеанс
+идёт, — интерфейс пишет «Готов к запуску» и показывает только уместное действие `start`/`stop`.
 
 Поле схемы: `{key, kind: text|number|bool|select|secret|hotkey|device|list, label, hint?, placeholder?, default?,
 options?: [{value, label}], min?, max?, step?, device?: input|output (список — из /api/voice/devices),

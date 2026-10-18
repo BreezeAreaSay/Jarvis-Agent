@@ -43,6 +43,12 @@ interface DesksState {
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
+/** Один стол — один раз: событие desks.changed и ответ на создание приходят в любом порядке. */
+function uniqueDesks(desks: Desk[]): Desk[] {
+  const seen = new Set<string>();
+  return desks.filter((d) => !seen.has(d.id) && (seen.add(d.id), true));
+}
+
 function persist(desks: Desk[]) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
@@ -61,7 +67,7 @@ export const useDesks = create<DesksState>((set, get) => ({
   async load() {
     try {
       const res = await api.get<{ items: Desk[] }>("/api/desks");
-      const desks = res.items?.length ? res.items : [DEFAULT_DESK];
+      const desks = res.items?.length ? uniqueDesks(res.items) : [DEFAULT_DESK];
       const current = desks.some((d) => d.id === get().current) ? get().current : desks[0].id;
       set({ desks, current, loaded: true, offline: false });
     } catch {
@@ -85,7 +91,9 @@ export const useDesks = create<DesksState>((set, get) => ({
 
   async createDesk(name, preset) {
     const desk = await api.post<Desk>("/api/desks", { name, preset });
-    set({ desks: [...get().desks, desk], current: desk.id });
+    // desks.changed с новым столом мог прийти раньше ответа — тогда стол уже в списке, второй раз не добавляем
+    const desks = get().desks.some((d) => d.id === desk.id) ? get().desks : [...get().desks, desk];
+    set({ desks, current: desk.id });
   },
 
   async renameDesk(id, name) {
@@ -115,7 +123,7 @@ export function bindDeskEvents() {
   if (bound) return;
   bound = true;
   onEvent<{ items: Desk[] }>("desks.changed", (e) => {
-    if (e.data.items?.length) useDesks.setState({ desks: e.data.items });
+    if (e.data.items?.length) useDesks.setState({ desks: uniqueDesks(e.data.items) });
     else useDesks.getState().load();
   });
   onEvent<{ id: string }>("desk.open", (e) => {

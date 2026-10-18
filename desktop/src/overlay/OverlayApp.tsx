@@ -3,6 +3,7 @@
 // Окно сквозное для мыши: ловят её только интерактивные элементы (см. clickthrough.ts).
 import "@/styles/overlay.css";
 import { useRef } from "react";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useApp } from "@/store/app";
 import { cx } from "@/ui";
 import { AgentPanel } from "./AgentPanel";
@@ -52,22 +53,47 @@ export default function OverlayApp() {
   return (
     <div className={cx("ov-root", DEMO && "is-demo")}>
       {DEMO && <DemoBackdrop scene={DEMO} windowRef={windowRef} />}
+      {/* каждая часть — со своим предохранителем: упавшая исчезнет, остальные работают (причина — в ui.log) */}
       <div className="ov-bottom">
-        <Subtitles hidden={hidden} />
-        <DictationPill hidden={hidden} />
+        <ErrorBoundary silent area="оверлей: субтитры">
+          <Subtitles />
+        </ErrorBoundary>
+        <ErrorBoundary silent area="оверлей: диктовка">
+          <DictationPill hidden={hidden} />
+        </ErrorBoundary>
       </div>
-      <ReaderPlayer hidden={hidden} bottom={readerBottom} />
-      <Pet hidden={hidden} />
-      <SummaryBadge hidden={hidden} />
-      <FocusOverlay hidden={hidden} />
+      <ErrorBoundary silent area="оверлей: чтение вслух">
+        <ReaderPlayer hidden={hidden} bottom={readerBottom} />
+      </ErrorBoundary>
+      <ErrorBoundary silent area="оверлей: питомец">
+        <Pet hidden={hidden} />
+      </ErrorBoundary>
+      <ErrorBoundary silent area="оверлей: конспект">
+        <SummaryBadge hidden={hidden} />
+      </ErrorBoundary>
+      <ErrorBoundary silent area="оверлей: фокус">
+        <FocusOverlay hidden={hidden} />
+      </ErrorBoundary>
       <div className="ov-top">
-        <VoicePill hidden={hidden} />
-        <AgentPanel hidden={hidden} />
-        <FileSearchOverlay hidden={hidden} />
-        <Confirmations />
-        <Toasts hidden={hidden} />
+        <ErrorBoundary silent area="оверлей: строка голоса">
+          <VoicePill hidden={hidden} />
+        </ErrorBoundary>
+        <ErrorBoundary silent area="оверлей: агент">
+          <AgentPanel hidden={hidden} />
+        </ErrorBoundary>
+        <ErrorBoundary silent area="оверлей: поиск по ПК">
+          <FileSearchOverlay hidden={hidden} />
+        </ErrorBoundary>
+        <ErrorBoundary silent area="оверлей: подтверждения">
+          <Confirmations />
+        </ErrorBoundary>
+        <ErrorBoundary silent area="оверлей: уведомления">
+          <Toasts hidden={hidden} />
+        </ErrorBoundary>
       </div>
-      <ClipboardOverlay />
+      <ErrorBoundary silent area="оверлей: умный буфер">
+        <ClipboardOverlay />
+      </ErrorBoundary>
     </div>
   );
 }

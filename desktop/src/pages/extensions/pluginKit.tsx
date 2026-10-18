@@ -271,18 +271,21 @@ export function PluginTile({
 }
 
 // --- состояние ---------------------------------------------------------------------------------------
-export type PluginHealth = "off" | "starting" | "on" | "error";
+export type PluginHealth = "off" | "starting" | "ready" | "on" | "error";
 
+/** ready — плагин включён, но его сеанс не идёт (субтитры не запущены, диктовка ждёт клавишу). */
 export function pluginHealth(p: Plugin): PluginHealth {
   if (!p.enabled) return "off";
   if (p.status?.error) return "error";
   if (p.status && "running" in p.status && !p.status.running) return "starting";
+  if (p.status && "active" in p.status && !p.status.active) return "ready";
   return "on";
 }
 
 export const HEALTH_TEXT: Record<PluginHealth, string> = {
   off: "Выключен",
   starting: "Запускается…",
+  ready: "Готов к запуску",
   on: "Работает",
   error: "Ошибка",
 };

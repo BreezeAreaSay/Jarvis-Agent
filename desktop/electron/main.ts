@@ -79,7 +79,39 @@ function webPreferences(): Electron.WebPreferences {
   };
 }
 
-function guard(win: BrowserWindow) {
+// --- журнал интерфейса: ошибки окон и вылеты процессов отрисовки (logs/ui.log) ----------------------------
+const UI_LOG = path.join(LOGS_DIR, "ui.log");
+
+function uiLog(line: string) {
+  try {
+    fs.mkdirSync(LOGS_DIR, { recursive: true });
+    if (fs.existsSync(UI_LOG) && fs.statSync(UI_LOG).size > 2_000_000) fs.renameSync(UI_LOG, path.join(LOGS_DIR, "ui.old.log"));
+    fs.appendFileSync(UI_LOG, `${new Date().toISOString()} ${line}\n`);
+  } catch {
+    /* журнал — не повод падать */
+  }
+}
+
+app.on("child-process-gone", (_e, d) => {
+  if (d.reason !== "clean-exit") uiLog(`процесс ${d.type}${d.name ? ` (${d.name})` : ""} завершился: ${d.reason}, код ${d.exitCode}`);
+});
+
+function guard(win: BrowserWindow, kind: string) {
+  // ошибки интерфейса — в журнал; вылетел процесс отрисовки — перезагрузить окно, а не оставить пустым
+  const reloads: number[] = [];
+  win.webContents.on("console-message", (e) => {
+    if (e.level === "error") uiLog(`[${kind}] ${e.message.slice(0, 4000)}${e.sourceId ? ` (${path.basename(e.sourceId)}:${e.lineNumber})` : ""}`);
+  });
+  win.webContents.on("render-process-gone", (_e, d) => {
+    uiLog(`[${kind}] процесс отрисовки завершился: ${d.reason}, код ${d.exitCode}`);
+    if (quitting || d.reason === "clean-exit" || win.isDestroyed()) return;
+    const now = Date.now();
+    while (reloads.length && now - reloads[0] > 60_000) reloads.shift();
+    if (reloads.length >= 3) return; // падает снова и снова — не крутимся, в журнале уже есть причина
+    reloads.push(now);
+    setTimeout(() => !win.isDestroyed() && win.webContents.reload(), 800);
+  });
+  win.webContents.on("unresponsive", () => uiLog(`[${kind}] окно не отвечает`));
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: "deny" };
@@ -108,7 +140,7 @@ function createMain() {
     backgroundColor: material !== "none" && process.platform === "win32" ? "#00000000" : "#121419",
     webPreferences: webPreferences(),
   });
-  guard(mainWin);
+  guard(mainWin, "main");
   loadRoute(mainWin, "home");
   mainWin.once("ready-to-show", () => {
     applyMaterial();
@@ -128,7 +160,17 @@ function showMain(route?: string) {
   const win = mainWin!;
   if (win.isMinimized()) win.restore();
   win.show();
-  win.focus();
+  if (process.platform === "win32" && !win.isFocused()) {
+    // Windows не отдаёт передний план фоновой программе (щелчок по аватару, уведомление): без этого окно
+    // открывается под браузером — «ничего не произошло». На миг «поверх всех» — и окно наверху.
+    const pinned = win.isAlwaysOnTop();
+    win.setAlwaysOnTop(true);
+    win.moveTop();
+    win.focus();
+    if (!pinned) win.setAlwaysOnTop(false);
+  } else {
+    win.focus();
+  }
   if (route) win.webContents.send("navigate", route);
 }
 
@@ -171,7 +213,7 @@ function createOverlay() {
     alwaysOnTop: true,
     webPreferences: webPreferences(),
   });
-  guard(overlayWin);
+  guard(overlayWin, "overlay");
   overlayWin.setAlwaysOnTop(true, "screen-saver");
   overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   overlayWin.setIgnoreMouseEvents(true, { forward: true });
@@ -225,7 +267,7 @@ function createAvatar() {
     alwaysOnTop: settings?.avatar?.on_top ?? true,
     webPreferences: webPreferences(),
   });
-  guard(avatarWin);
+  guard(avatarWin, "avatar");
   loadRoute(avatarWin, "avatar");
   avatarWin.once("ready-to-show", () => syncAvatar());
   avatarWin.on("closed", () => (avatarWin = null));
@@ -262,6 +304,14 @@ function quickMenu(): MenuItemConstructorOptions[] {
   return [
     { label: "Открыть Jarvis", click: () => showMain() },
     { label: "Сказать команду", click: () => api("POST", "/api/voice/listen") },
+    {
+      label: "Музыка",
+      submenu: [
+        { label: "Пауза / продолжить", click: () => api("POST", "/api/media/play_pause") },
+        { label: "Следующий трек", click: () => api("POST", "/api/media/next") },
+        { label: "Предыдущий трек", click: () => api("POST", "/api/media/prev") },
+      ],
+    },
     { type: "separator" },
     {
       label: "Микрофон",

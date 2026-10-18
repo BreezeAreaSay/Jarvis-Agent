@@ -1,10 +1,12 @@
 """«Живые субтитры»: текст того, что звучит в колонках (видео, созвон, стрим), — с переводом.
 
-Системный звук (WASAPI loopback) читается в своём потоке с частотой 16 кГц; простой детектор речи режет его на
-фразы по 1–8 с; каждая распознаётся ctx.voice.transcribe(…, language=config.source_lang) и, если язык другой
-и ИИ настроен, переводится на config.target_lang. Интерфейс получает plugin.subtitles.text
-{id, text, translation, lang, pending}: сразу распознанный текст (pending: true, если ждём перевод),
-потом — то же id с переводом.
+Плагин включён — значит, доступны команды; сами субтитры идут, пока их не остановят (кнопка, «включи
+субтитры»). Системный звук (WASAPI loopback) читается в своём потоке с частотой 16 кГц; простой детектор речи
+режет его на фразы по 1–8 с; каждая распознаётся ctx.voice.transcribe(…, language=config.source_lang) и, если
+язык другой и ИИ настроен, переводится на config.target_lang. «Определять автоматически» без Whisper —
+русская модель (иначе первая же фраза останавливала бы субтитры ошибкой). Интерфейс получает
+plugin.subtitles.text {id, text, translation, lang, pending}: сразу распознанный текст (pending: true, если
+ждём перевод), потом — то же id с переводом.
 """
 
 import asyncio
@@ -117,7 +119,7 @@ class Subtitles(Plugin):
             hint="Колонки или наушники; пусто — устройство по умолчанию",
         ),
     )
-    actions = (PluginAction("start", "Включить"), PluginAction("stop", "Выключить"))
+    actions = (PluginAction("start", "Запустить"), PluginAction("stop", "Остановить"))
     examples = ("включи субтитры", "выключи субтитры")
 
     def __init__(self, ctx: Any, manager: Any) -> None:
@@ -143,13 +145,26 @@ class Subtitles(Plugin):
 
     def status(self) -> dict[str, Any]:
         config = self.config
-        return {
+        source = str(config.get("source_lang") or "auto")
+        target = str(config.get("target_lang") or "none")
+        data: dict[str, Any] = {
             "active": self.active,
-            "source_lang": config.get("source_lang"),
-            "target_lang": config.get("target_lang"),
+            "source_lang": source,
+            "target_lang": target,
             "last": self._last,
             "segments": self._seq,
         }
+        if source != "ru" and not self._multilingual():
+            data["hint"] = (
+                "Сейчас распознаю только русскую речь. Для видео на других языках скачайте модель Whisper: "
+                "«Настройки → Голос и распознавание → Модели»"
+            )
+        elif target != "none" and not self._ai_ready():
+            data["hint"] = (
+                "Перевод делает ИИ — подключите его в «Настройки → Jarvis AI». "
+                "Пока показываю текст без перевода"
+            )
+        return data
 
     # --- сеанс ----------------------------------------------------------------------------------------
     def _source(self) -> AudioSource:
@@ -226,8 +241,10 @@ class Subtitles(Plugin):
         config = self.config
         source = str(config.get("source_lang") or "auto")
         target = str(config.get("target_lang") or "none")
+        # без Whisper язык не определить — «автоматически» значит русский (модель, что есть всегда)
+        recognize = "ru" if source == "auto" and not self._multilingual() else source
         try:
-            heard = await self.ctx.voice.transcribe(segment, RATE, language=source)
+            heard = await self.ctx.voice.transcribe(segment, RATE, language=recognize)
         except UserFacingError as e:
             # нет модели для этого языка — дальше всё равно не распознать
             self.toast("Живые субтитры", str(e), status="error")
@@ -240,7 +257,7 @@ class Subtitles(Plugin):
         heard = textops.clean(heard or "")
         if not heard or is_noise_text(heard):
             return None
-        lang = source if source != "auto" else guess_lang(heard)
+        lang = recognize if recognize != "auto" else guess_lang(heard)
         need_translation = target != "none" and bool(lang) and lang != target and self._ai_ready()
         self._seq += 1
         item = {
@@ -266,6 +283,12 @@ class Subtitles(Plugin):
             return bool(self.ctx.ai.configured)
         except Exception:
             return False
+
+    def _multilingual(self) -> bool:
+        try:
+            return bool(self.ctx.voice.has_multilingual())
+        except Exception:
+            return True  # не знаем — пусть решает распознавание
 
     async def _translate_item(self, item: dict[str, Any], context: list[str], target: str) -> None:
         async with self._translate_slots:
@@ -302,11 +325,11 @@ class Subtitles(Plugin):
     # --- действия и команды ---------------------------------------------------------------------------
     async def act_start(self, args: dict[str, Any]) -> dict[str, Any]:
         await self.begin()
-        return {"active": True}
+        return {"active": True, "message": "Субтитры запущены — текст пойдёт внизу экрана"}
 
     async def act_stop(self, args: dict[str, Any]) -> dict[str, Any]:
         await self.end()
-        return {"active": False}
+        return {"active": False, "message": "Субтитры остановлены"}
 
     async def act_toggle(self, args: dict[str, Any]) -> dict[str, Any]:
         if self.active:

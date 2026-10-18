@@ -1530,3 +1530,91 @@
   height: 100%;
   pointer-events: none;
 }
+
+/* плеер под сферой аватара: появляется под указателем */
+.av-media {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  max-width: calc(100% - 12px);
+  cursor: default;
+  animation: av-media-in 0.18s var(--ease) both;
+}
+
+@keyframes av-media-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+}
+
+.av-media-title {
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(10, 12, 18, 0.72);
+}
+
+.av-media-pill {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(10, 12, 18, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+}
+
+.av-media-pill button {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.86);
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+.av-media-pill button:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.av-media-pill button:active {
+  transform: scale(0.92);
+}
+
+.av-media-pill button.main {
+  background: #fff;
+  color: #14161c;
+}
+
+.av-media-pill button.main:hover {
+  background: #fff;
+  transform: scale(1.06);
+}
+
+.av-media-pill svg {
+  width: 14px;
+  height: 14px;
+}
+
+.av-media-pill button.main svg {
+  fill: currentColor;
+}

@@ -1,9 +1,12 @@
 // Живой аватар на рабочем столе: сфера Jarvis во всё маленькое прозрачное окно и тонкое кольцо состояния
 // голоса (слушаю — ярче, думаю — бегущая дуга, говорю — пульсирует с речью). Перетаскивается мышью (окно
-// двигает главный процесс), щелчок открывает Jarvis, правый щелчок — меню.
+// двигает главный процесс), щелчок открывает Jarvis, правый щелчок — меню; под указателем — кнопки плеера.
 import "@/styles/overlay.css";
+import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { api } from "@/api/client";
 import { onEvent } from "@/api/events";
+import type { MediaInfo } from "@/api/types";
 import { Orb } from "@/components/Orb";
 import { bridge } from "@/lib/bridge";
 import { levels } from "@/lib/levels";
@@ -143,14 +146,56 @@ function StateRing() {
   return <canvas ref={ref} className="av-ring" aria-hidden />;
 }
 
+/** Плеер под сферой: назад, пауза/играть, вперёд — для того, что играет в Windows (Spotify, браузер, …). */
+function MediaControls({ media }: { media: MediaInfo | null }) {
+  const playing = media?.status === "playing";
+  const act = (action: string) => void api.post(`/api/media/${action}`).catch(() => undefined);
+  // кнопки не начинают перетаскивание и не открывают Jarvis
+  const stop = (e: React.PointerEvent) => e.stopPropagation();
+  const title = media?.title ? [media.title, media.artist].filter(Boolean).join(" — ") : "";
+  return (
+    <div className="av-media" onPointerDown={stop} onPointerUp={stop}>
+      {title && <div className="av-media-title">{title}</div>}
+      <div className="av-media-pill">
+        <button type="button" title="Предыдущий трек" aria-label="Предыдущий трек" onClick={() => act("prev")}>
+          <SkipBack />
+        </button>
+        <button
+          type="button"
+          className="main"
+          title={playing ? "Пауза" : "Играть"}
+          aria-label={playing ? "Пауза" : "Играть"}
+          onClick={() => act("play_pause")}
+        >
+          {playing ? <Pause /> : <Play />}
+        </button>
+        <button type="button" title="Следующий трек" aria-label="Следующий трек" onClick={() => act("next")}>
+          <SkipForward />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function AvatarApp() {
   const settings = useApp((s) => s.settings);
   const connected = useApp((s) => s.connected);
   const [fullscreen, setFullscreen] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [hover, setHover] = useState(false);
+  const [media, setMedia] = useState<MediaInfo | null>(null);
   const drag = useRef<{ x: number; y: number; id: number; moved: boolean; raf: number; last: [number, number] } | null>(null);
 
   useEffect(() => onEvent<{ fullscreen: boolean }>("fullscreen.changed", (e) => setFullscreen(!!e.data.fullscreen)), []);
+  useEffect(() => onEvent<MediaInfo>("media.changed", (e) => setMedia(e.data ?? null)), []);
+  // что играет сейчас — при подключении (дальше приходит media.changed)
+  useEffect(() => {
+    if (!connected) return;
+    api
+      .get<MediaInfo & { error?: string }>("/api/widgets/media")
+      .then((m) => !m?.error && setMedia(m))
+      .catch(() => undefined);
+  }, [connected]);
 
   const hidden = !!settings && (!settings.avatar.desktop || (fullscreen && settings.avatar.hide_fullscreen));
 
@@ -197,7 +242,9 @@ export default function AvatarApp() {
   return (
     <div
       className={cx("av-root", hidden && "av-hidden", !connected && "av-offline", dragging && "av-dragging")}
-      title={dragging ? undefined : "Jarvis — нажмите, чтобы открыть"}
+      title={dragging || hover ? undefined : "Jarvis — нажмите, чтобы открыть"}
+      onPointerEnter={() => setHover(true)}
+      onPointerLeave={() => setHover(false)}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={(e) => finish(e, false)}
@@ -213,6 +260,7 @@ export default function AvatarApp() {
             <Orb scale={ORB_SCALE} />
           </div>
           <StateRing />
+          {hover && !dragging && <MediaControls media={media} />}
         </>
       )}
     </div>

@@ -78,7 +78,8 @@ class SoundcardSource:
         try:
             import soundcard as sc
         except Exception as e:  # нет звуковой подсистемы (Linux без PulseAudio и т. п.)
-            raise RuntimeError(f"Звуковая система недоступна: {e}") from e
+            detail = str(e).strip()
+            raise RuntimeError("Звуковая система недоступна" + (f": {detail}" if detail else "")) from e
         try:
             device = self._open(sc)
         except Exception as e:

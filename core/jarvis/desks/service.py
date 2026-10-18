@@ -175,8 +175,8 @@ class Desks(BaseService):
                 if not isinstance(raw, dict):
                     raise UserFacingError("Неверный формат стола")
                 desk_id = str(raw.get("id") or "").strip()[:40]
-                if desk_id in seen_ids:
-                    desk_id = ""  # один id дважды — второй стол сохраняем как новый
+                if desk_id and desk_id in seen_ids:
+                    continue  # тот же стол второй раз (сбой списка в интерфейсе) — сохраняем один
                 old = current.get(desk_id)
                 name = _clean_name(raw.get("name") or (old["name"] if old else ""))
                 if name.casefold() in names:

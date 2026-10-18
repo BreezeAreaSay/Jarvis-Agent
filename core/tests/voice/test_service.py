@@ -273,6 +273,14 @@ async def test_transcribe(rig: Rig) -> None:
         await rig.voice.transcribe(samples, 48000, language="en")
 
 
+def test_has_multilingual_follows_whisper_models(ctx: AppContext) -> None:
+    models = InstalledModels(installed=False)
+    rig = Rig(ctx, models)
+    assert not rig.voice.has_multilingual()
+    models.is_installed = True
+    assert rig.voice.has_multilingual()
+
+
 async def test_mic_error_state(rig: Rig) -> None:
     await rig.voice.start()
     await until(lambda: rig.mics and rig.voice.state == "idle")

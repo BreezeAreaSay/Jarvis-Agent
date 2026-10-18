@@ -253,6 +253,13 @@
   animation: pulse-dot 1.2s infinite;
 }
 
+.pl-badge.ready {
+  background: rgba(24, 27, 35, 0.95);
+  box-shadow:
+    0 0 0 2.5px rgba(24, 27, 35, 0.95),
+    inset 0 0 0 2.5px var(--ok);
+}
+
 .pl-name {
   font-size: 12px;
   font-weight: 650;
@@ -326,6 +333,10 @@
 
 .pl-state.starting {
   color: var(--accent-text);
+}
+
+.pl-state.ready {
+  color: var(--text-2);
 }
 
 .pl-switch {
@@ -663,8 +674,23 @@
   border-radius: 50%;
   display: grid;
   place-items: center;
+  color: #fff;
   background: rgba(255, 255, 255, 0.12);
   border: 1px solid rgba(255, 255, 255, 0.12);
+  transition:
+    transform var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+button.lv-play:not(:disabled):hover {
+  transform: scale(1.06);
+  background: color-mix(in srgb, var(--c1) 55%, rgba(255, 255, 255, 0.12));
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--c1) 18%, transparent);
+}
+
+button.lv-play:disabled {
+  opacity: 0.55;
 }
 
 .lv-play svg {
@@ -672,6 +698,54 @@
   height: 22px;
   margin-left: 3px;
   fill: currentColor;
+}
+
+.lv-play.on {
+  background: color-mix(in srgb, var(--c2) 70%, transparent);
+  border-color: color-mix(in srgb, var(--c1) 60%, transparent);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--c1) 45%, transparent);
+  animation: lv-ring 2s var(--ease) infinite;
+}
+
+.lv-play.on svg {
+  width: 18px;
+  height: 18px;
+  margin-left: 0;
+}
+
+@keyframes lv-ring {
+  70% {
+    box-shadow: 0 0 0 14px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+/* «в эфире»: субтитры идут */
+.lv-onair {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: #fff;
+  background: rgba(8, 10, 16, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.lv-onair i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f87171;
+  box-shadow: 0 0 8px rgba(248, 113, 113, 0.8);
+  animation: pulse-dot 1.2s infinite;
 }
 
 .lv-caption {

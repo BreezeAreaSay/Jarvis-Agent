@@ -91,7 +91,8 @@ async def test_live_subtitles_with_translation(pctx: AppContext, pevents: EventL
         np.concatenate([silence(0.3), speech(1.5), silence(1.0)])
     )
     await enable(pctx, "subtitles")
-    assert await manager(pctx).action("subtitles", "start", {}) == {"ok": True, "active": True}
+    started = await manager(pctx).action("subtitles", "start", {})
+    assert started["ok"] is True and started["active"] is True and "внизу экрана" in started["message"]
     await wait_until(lambda: len(pevents.of("plugin.subtitles.text")) == 2)
     first, second = pevents.of("plugin.subtitles.text")
     assert first["text"] == "Hello world" and first["lang"] == "en"
@@ -103,7 +104,8 @@ async def test_live_subtitles_with_translation(pctx: AppContext, pevents: EventL
     prompt = pctx.ai.calls[0]["messages"]  # type: ignore[attr-defined]
     assert "русский" in prompt[0]["content"] and prompt[-1]["content"].endswith("Hello world")
     assert plugin.status()["last"]["translation"] == "Привет, мир"
-    assert await manager(pctx).action("subtitles", "stop", {}) == {"ok": True, "active": False}
+    stopped = await manager(pctx).action("subtitles", "stop", {})
+    assert stopped["ok"] is True and stopped["active"] is False
     assert plugin.status()["active"] is False
 
 
@@ -148,3 +150,33 @@ async def test_capture_failure_is_reported(pctx: AppContext) -> None:
     await manager(pctx).action("subtitles", "start", {})
     await wait_until(lambda: not plugin.active)
     assert plugin.error == "Звуковая система недоступна"
+
+
+async def test_auto_language_without_whisper_uses_russian_model(pctx: AppContext, pevents: EventLog) -> None:
+    """Whisper не скачан: «определять автоматически» распознаёт русский, а не падает на первой фразе."""
+    voice = voice_of(pctx)
+    voice.multilingual = False
+    voice.transcribe_fn = lambda samples, rate, language: "Всем привет, это Мармок"
+    pctx.ai = FakeAi(configured=True, reply="Hi")  # type: ignore[assignment]
+    plugin = plugin_of(pctx)
+    plugin.source_factory = lambda config: FakeSource(np.concatenate([speech(1.5), silence(1.0)]))
+    await enable(pctx, "subtitles")
+    assert "Whisper" in plugin.status()["hint"]
+    await manager(pctx).action("subtitles", "start", {})
+    await wait_until(lambda: len(pevents.of("plugin.subtitles.text")) == 1)
+    item = pevents.of("plugin.subtitles.text")[0]
+    assert voice.transcribed[0][2] == "ru" and item["lang"] == "ru" and item["pending"] is False
+    assert plugin.active and not plugin.error
+    await manager(pctx).action("subtitles", "stop", {})
+
+    voice.multilingual = True  # скачали Whisper — язык определяется сам
+    assert "hint" not in plugin.status()
+
+
+async def test_hint_without_ai_for_translation(pctx: AppContext) -> None:
+    pctx.ai = FakeAi(configured=False)  # type: ignore[assignment]
+    plugin = plugin_of(pctx)
+    await enable(pctx, "subtitles")
+    assert "Jarvis AI" in plugin.status()["hint"]
+    await manager(pctx).update("subtitles", config={"target_lang": "none"})
+    assert "hint" not in plugin.status()

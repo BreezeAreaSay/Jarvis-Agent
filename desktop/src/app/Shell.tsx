@@ -6,6 +6,7 @@ import { bridge, isElectron } from "@/lib/bridge";
 import { navigate, useRoute } from "@/lib/router";
 import { useApp } from "@/store/app";
 import { CoreDown } from "@/components/CoreDown";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useUpdates } from "@/lib/updates";
 import { cx, Notices } from "@/ui";
 
@@ -60,26 +61,28 @@ function Sidebar({ page, locked }: { page: string; locked: boolean }) {
   );
 }
 
+/** Полоса над заголовком страницы — за неё двигают окно; кнопки окна — отдельным блоком поверх (см. shell.css). */
 function TitleBar() {
   const connected = useApp((s) => s.connected);
   return (
-    <div className="titlebar">
+    <>
+      <div className="titlebar" />
       {!connected && (
         <span className="conn">
           <span className="status-dot busy" /> Подключаюсь к ядру…
         </span>
       )}
       {isElectron && (
-        <>
+        <div className="win-controls">
           <button className="win-btn" aria-label="Свернуть" onClick={() => bridge.windowControl("minimize")}>
             <Minus />
           </button>
           <button className="win-btn close" aria-label="Закрыть" onClick={() => bridge.windowControl("close")}>
             <X />
           </button>
-        </>
+        </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -96,6 +99,15 @@ function Splash() {
     </div>
   );
 }
+
+const PAGE_NAMES: Record<string, string> = {
+  home: "Главная",
+  commands: "Команды",
+  extensions: "Расширения",
+  ai: "Jarvis AI",
+  settings: "Настройки",
+  profile: "Профиль",
+};
 
 export function Shell() {
   const route = useRoute();
@@ -128,7 +140,10 @@ export function Shell() {
       <Sidebar page={page} locked={ready && !onboarded} />
       <main className="main">
         <TitleBar />
-        <Suspense fallback={null}>{ready && (onboarded ? content : <Onboarding />)}</Suspense>
+        {/* упал раздел — карточка с причиной, а боковая панель и остальной Jarvis живы */}
+        <ErrorBoundary key={onboarded ? page : "onboarding"} area={onboarded ? (PAGE_NAMES[page] ?? page) : "Знакомство"}>
+          <Suspense fallback={null}>{ready && (onboarded ? content : <Onboarding />)}</Suspense>
+        </ErrorBoundary>
       </main>
       {!ready && <Splash />}
       <CoreDown />

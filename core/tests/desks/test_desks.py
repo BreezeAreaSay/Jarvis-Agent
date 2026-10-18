@@ -294,6 +294,9 @@ def test_save_all_reorders_and_drops_missing(ctx: AppContext) -> None:
         desks.save_all([])
     with pytest.raises(UserFacingError, match="дважды"):
         desks.save_all([{"name": "А"}, {"name": "а"}])
+    # тот же стол дважды (интерфейс показал его два раза) — сохраняется один, без ошибки
+    once = desks.save_all([saved[0], saved[1], saved[0]])
+    assert [d["name"] for d in once] == ["Офис", "Главная"]
 
 
 @pytest.mark.parametrize("phrase", ["игры", "Игры", "стол игры", "игровой", "открой стол игры", "игр"])

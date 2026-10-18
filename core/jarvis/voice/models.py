@@ -358,12 +358,16 @@ class ModelManager:
         return self._errors.get(model_id, "")
 
     @staticmethod
-    def required_ids(settings: "Settings") -> list[str]:
-        """Что нужно голосу при текущих настройках: VAD, потоковая, модель команд, голос piper."""
+    def required_ids(settings: "Settings", installed: Callable[[str], bool] | None = None) -> list[str]:
+        """Что нужно голосу при текущих настройках: VAD, потоковая, модель команд, голос piper; команды не
+        по-русски — ещё Whisper (уже скачанный tiny годится — installed, иначе base: точнее)."""
         ids = [VAD_ID, STREAM_ID]
         asr = settings.voice.asr_model
         if asr in MODELS and asr not in ids:
             ids.append(asr)
+        if settings.voice.language != "ru":
+            have = [i for i in WHISPER_IDS if installed is not None and installed(i)]
+            ids.append(have[0] if have else WHISPER_IDS[0])
         ids.append(piper_id(settings.tts.piper_voice))
         return ids
 

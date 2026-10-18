@@ -3,8 +3,9 @@
 
 Поток: блок 512 отсчётов → VAD. Тишина — блок в кольцо (≈0,5 с до начала речи). Речь началась — фраза:
 кольцо + блоки, потоковая модель по ходу (voice.partial не чаще 5 раз в секунду; «Джарвис» в частичном тексте
-— сразу voice.wake, а если Jarvis говорит — замолчать: перебивание). Конец речи (VAD), предел длины или
-отпущенная клавиша — итоговый текст GigaAM по всей фразе (нет GigaAM — текст потоковой модели) →
+— сразу voice.wake, а если Jarvis говорит — замолчать: перебивание). Конец речи (VAD; фраза стихла на
+«открой…» или предлоге — ещё GRACE_S ждём продолжения), предел длины или отпущенная клавиша — итоговый текст
+GigaAM по всей фразе (нет GigaAM — текст потоковой модели; команды не по-русски — Whisper, без потоковой) →
 voice.final {text, wake, command} → решение:
 
 - просьба ждёт фразу (listen_now / ask_yes_no / capture_text / «Джарвис» без команды) — фраза её;
@@ -13,7 +14,8 @@ voice.final {text, wake, command} → решение:
 - без активатора — команда, только если prefix_mode выключен, идёт окно продолжения (follow_up после ответа)
   или фраза сказана с клавишей «держи и говори»; иначе это чужой разговор — его не показываем. Окон
   продолжения подряд — не больше MAX_FOLLOW_CHAIN: иначе фоновая речь (видео, чужой разговор) попадает в окно,
-  Jarvis отвечает, окно открывается снова — и он «слушает без остановки»;
+  Jarvis отвечает, окно открывается снова — и он «слушает без остановки»; ответы на уточняющие вопросы Jarvis
+  в этот счёт не входят, но всего окон подряд — не больше MAX_FOLLOW_TOTAL;
 - пока Jarvis говорит, без активатора ничего не принимается: в микрофон попадает его же голос (эхо).
 
 Управляющие вызовы (request, follow_up, ptt…) можно делать из любого потока: они встают в очередь и
@@ -46,6 +48,18 @@ HEAD_S = 2.5  # длинная непрошеная фраза: GigaAM снач�
 MIN_PTT_S = 0.3  # короче — случайное нажатие клавиши
 VAD_LAG_S = 0.3  # VAD узнаёт о речи с задержкой: фраза началась примерно на столько раньше
 MAX_FOLLOW_CHAIN = 2  # команд подряд из окна продолжения (без «Джарвис»); дальше — снова по активатору
+MAX_FOLLOW_TOTAL = 4  # вместе с ответами на уточняющие вопросы Jarvis — всё равно не больше
+GRACE_S = 0.5  # фраза стихла на «открой…» или предлоге — ждём продолжения ещё столько
+GRACE_FRAMES = max(1, round(GRACE_S * RATE / FRAME))
+# на этом фраза почти никогда не кончается: «открой… браузер», «поставь будильник на… семь»
+GRACE_WORDS = frozenset(
+    {
+        "в", "во", "на", "с", "со", "к", "ко", "по", "о", "об", "от", "до", "из", "за", "для", "про", "под",
+        "над", "у", "и", "а", "но", "или", "открой", "включи", "запусти", "найди", "поставь", "покажи",
+        "напиши", "набери", "позвони", "отправь", "напомни", "добавь", "переведи", "поищи", "загугли",
+        "перейди", "скажи", "громкость",
+    }
+)  # fmt: skip
 
 
 class Host(Protocol):
@@ -105,6 +119,8 @@ class Utterance:
     partial: str = ""
     wake_early: bool = False
     next_partial: int = 0  # номер блока, на котором снова спросить потоковую модель
+    grace: int = 0  # блоков тишины ещё ждём продолжения (фраза стихла на «открой…»); 0 — не ждём
+    graced: bool = False  # ожидание уже было — второй раз не ждём
 
     @property
     def seconds(self) -> float:
@@ -123,7 +139,6 @@ def find_wake_anywhere(text: str, wake_words: list[str]) -> tuple[bool, str]:
 
 LOOSE_EARLY = 52  # потоковая модель уже слышала «Джарвис»: первое слово итога — его искажение
 LOOSE = 64  # без подтверждения: начинается как активатор («дж…») или сказано одно слово
-WAKE_LETTERS = "джшчзj"
 
 
 def match_wake(text: str, wake_words: list[str], *, early: bool = False) -> tuple[bool, str]:
@@ -131,28 +146,38 @@ def match_wake(text: str, wake_words: list[str], *, early: bool = False) -> tupl
 
     Замер на синтезе ruslan: GigaAM слышит «Джарвис» и как «джарлес», «джарлиз», «джералис», «жарес» — строгий
     порог (72) их не берёт. Мягкий порог — только с подтверждением: потоковая модель уже услышала активатор
-    (early), или слово начинается как активатор, или во фразе одно это слово.
+    (early), или слово начинается как активатор, или во фразе одно это слово. Искажения своих слов («пятница»)
+    не замерены: для них мягкий порог — только с подтверждением потоковой моделью и не ниже LOOSE, иначе
+    «пятнадцать минут» звал бы Jarvis.
     """
     found, rest = textops.find_wake(text, wake_words)
     if found or not text.strip():
         return found, rest
     words = text.split()
-    for n in (1, 2):
+    heard = [textops.wake_form(w) for w in words]
+    targets = [parts for parts in textops.wake_parts(wake_words) if len("".join(parts)) >= 3]
+    longest = max((len(parts) for parts in targets), default=0) + 1
+    for n in range(1, longest + 1):
         if n > len(words):
             break
-        cand = textops.normalize("".join(words[:n]))
-        if not cand or cand[0] not in WAKE_LETTERS:
+        cand = "".join(h for h in heard[:n] if h)
+        if not cand:
             continue
-        for wake in wake_words:
-            target = textops.normalize(wake)
-            if len(target) < 3 or abs(len(cand) - len(target)) > 3:
+        for parts in targets:
+            target = "".join(parts)
+            if n > len(parts) + 1 or cand[0] not in textops.first_sounds(target):
+                continue
+            if abs(len(cand) - len(target)) > 3:
                 continue
             score = fuzz.ratio(cand, target)
+            measured = target.startswith("дж")  # искажения «Джарвис» (и «Jarvis») замерены
             if early:
-                ok = score >= LOOSE_EARLY
-            else:
+                ok = score >= (LOOSE_EARLY if measured else LOOSE)
+            elif measured:
                 alone = len(words) == n
                 ok = score >= LOOSE and (cand.startswith(target[:2]) or (alone and cand[:2] == target[1:3]))
+            else:
+                ok = False
             if ok:
                 return True, textops.clean(" ".join(words[n:]))
     return False, textops.clean(text)
@@ -187,7 +212,9 @@ class Listener:
         self.preroll = PreRoll()
         self.follow_until = 0.0
         self.follow_pending: float | None = None
-        self.follow_chain = 0  # сколько команд подряд пришло из окна продолжения
+        self.follow_chain = 0  # команд подряд из окна продолжения (без ответов на вопросы Jarvis)
+        self.follow_total = 0  # то же вместе с ответами на уточняющие вопросы
+        self.follow_question = False  # окно открыто после вопроса Jarvis
         self._cmds: queue.SimpleQueue[Callable[[float], None]] = queue.SimpleQueue()
         self._tts_last = -1e9
         self._was_speaking = False
@@ -238,17 +265,24 @@ class Listener:
 
         self.post(apply)
 
-    def follow_up(self, seconds: float) -> None:
-        """Окно продолжения: после ответа Jarvis (когда он договорит) фраза принимается без активатора."""
+    def follow_up(self, seconds: float, *, question: bool = False) -> None:
+        """Окно продолжения: после ответа Jarvis (когда он договорит) фраза принимается без активатора.
+
+        question — Jarvis задал уточняющий вопрос: ответ на него не считается в MAX_FOLLOW_CHAIN, но всего
+        окон подряд без «Джарвис» — не больше MAX_FOLLOW_TOTAL.
+        """
 
         def apply(now: float) -> None:
-            if seconds <= 0 or self.follow_chain >= MAX_FOLLOW_CHAIN:
+            chain_full = not question and self.follow_chain >= MAX_FOLLOW_CHAIN
+            if seconds <= 0 or chain_full or self.follow_total >= MAX_FOLLOW_TOTAL:
                 if seconds > 0:
                     log.info(
-                        "голос: %s ответа подряд без «Джарвис» — дальше жду активатор", self.follow_chain
+                        "голос: %s ответа подряд без «Джарвис» — дальше жду активатор", self.follow_total
                     )
                 self.follow_until, self.follow_pending = 0.0, None
-            elif self.host.tts_speaking():
+                return
+            self.follow_question = question
+            if self.host.tts_speaking():
                 self.follow_pending = seconds
             else:
                 self.follow_until = now + seconds
@@ -285,6 +319,8 @@ class Listener:
             return
         utt.frames.append(frame)
         utt.count += 1
+        if is_speech:
+            utt.grace = 0  # продолжил говорить — ждать больше нечего
         if speaking and not utt.manual:
             utt.echo = True
         self._feed(utt, frame, now)
@@ -293,7 +329,8 @@ class Listener:
             if utt.seconds >= limit:
                 self._finish(now)
         elif not is_speech:
-            self._finish(now)
+            if not self._hold_on(utt) or utt.seconds >= limit:
+                self._finish(now)
         elif utt.seconds >= limit:
             log.info("голос: фраза длиннее %d с — распознаю, что есть", limit)
             self._finish(now)
@@ -392,6 +429,21 @@ class Listener:
                 self.host.silence_tts()  # перебивание: «Джарвис, стоп» поверх речи Jarvis
         if self._addressed(utt, self.host.settings()):  # чужой разговор и эхо интерфейсу не показываем
             self.host.publish("voice.partial", {"text": text, "wake": utt.wake_early})
+
+    def _hold_on(self, utt: Utterance) -> bool:
+        """Речь стихла, но фраза, похоже, не кончилась («Джарвис, открой… браузер»): подождать GRACE_S — вдруг
+        человек договорит. Только для обращённой к Jarvis фразы и один раз за фразу."""
+        if utt.grace > 0:
+            utt.grace -= 1
+            return utt.grace > 0
+        if utt.graced or not utt.partial:
+            return False
+        words = textops.normalize(utt.partial).split()
+        if not words or words[-1] not in GRACE_WORDS or not self._addressed(utt, self.host.settings()):
+            return False
+        utt.graced = True
+        utt.grace = GRACE_FRAMES
+        return True
 
     def _wake(self, text: str, utt: Utterance) -> tuple[bool, str]:
         words = self.host.settings().wake_words
@@ -513,7 +565,8 @@ class Listener:
             if req.kind == "command":
                 self._publish_final(text, wake, value)
                 req.finish(value)
-                self.follow_chain = 0  # команду ждали (кнопка, хоткей, «Джарвис») — к нему обратились
+                # команду ждали (кнопка, хоткей, «Джарвис») — к нему обратились
+                self.follow_chain = self.follow_total = 0
                 self._dispatch(value)
             else:
                 if req.kind == "text":  # диктовка: точки и запятые модели сохраняем
@@ -541,7 +594,12 @@ class Listener:
             log.debug("голос: фраза не мне: %r", text)  # фоновый разговор — не показываем и не выполняем
             return
         self._publish_final(text, wake, command)
-        self.follow_chain = self.follow_chain + 1 if via_follow else 0
+        if via_follow:
+            self.follow_total += 1
+            if not self.follow_question:  # ответ на уточняющий вопрос Jarvis — не «разговор с фоном»
+                self.follow_chain += 1
+        else:
+            self.follow_chain = self.follow_total = 0
         self._dispatch(command)
 
     def _dispatch(self, command: str) -> None:

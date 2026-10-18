@@ -647,7 +647,15 @@ class Ai(BaseService):
         known = {s["url"] for s in turn.sources}
         for source in out.sources:
             if source.get("url") and source["url"] not in known and len(turn.sources) < MAX_SOURCES:
-                turn.sources.append({"title": source.get("title") or source["url"], "url": source["url"]})
+                turn.sources.append(
+                    {
+                        "title": source.get("title") or source["url"],
+                        "url": source["url"],
+                        # когда получены сведения: свежесть ответа видно рядом со ссылкой
+                        "fetched_at": source.get("fetched_at")
+                        or datetime.now().isoformat(timespec="seconds"),
+                    }
+                )
                 known.add(source["url"])
         turn.memory.extend(out.memory)
         content = out.content

@@ -178,10 +178,13 @@ async def test_web_search_collects_sources(ctx: AppContext, llm: ScriptedLlm, ev
     llm.routes["html.duckduckgo.com"] = lambda request: httpx.Response(200, text=DDG_HTML)
     llm.add(calls(("web_search", {"query": "новости"})), reply("Главное: что-то случилось."))
     result = await ctx.ai.ask("Что нового в мире?")
-    assert result.sources == [
+    assert [{"title": s["title"], "url": s["url"]} for s in result.sources] == [
         {"title": "Новость дня", "url": "https://news.example.ru/a?id=1"},
         {"title": "Вторая", "url": "https://example.org/b"},
     ]
+    assert all(
+        s["fetched_at"][:4].isdigit() and "T" in s["fetched_at"] for s in result.sources
+    )  # когда получено
     assert ("searching", "Ищу актуальную информацию…") in [
         (e["status"], e["text"]) for e in events.of("chat.status")
     ]

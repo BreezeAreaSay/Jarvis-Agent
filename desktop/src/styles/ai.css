@@ -2710,3 +2710,9 @@
 .agent-now .warn {
   color: var(--warn);
 }
+
+.ai-sources-time {
+  padding: 0 4px 6px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}

@@ -80,9 +80,21 @@ function SourcesChip({ count, open, onToggle }: { count: number; open: boolean; 
   );
 }
 
-function SourcesList({ sources }: { sources: { title: string; url: string }[] }) {
+/** «получено сегодня в 14:05» / «получено 18.10 в 14:05» — когда ИИ взял сведения из источника. */
+function fetchedText(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const time = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const today = new Date().toDateString() === d.toDateString();
+  return today ? `получено сегодня в ${time}` : `получено ${d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })} в ${time}`;
+}
+
+function SourcesList({ sources }: { sources: { title: string; url: string; fetched_at?: string }[] }) {
+  const fetched = fetchedText(sources.find((s) => s.fetched_at)?.fetched_at);
   return (
     <div className="ai-sources pop-in">
+      {fetched && <div className="ai-sources-time">Сведения {fetched}</div>}
       {sources.map((s, i) => (
         <a
           key={s.url + i}
@@ -165,7 +177,7 @@ function AnswerBody({
   streaming,
 }: {
   text: string;
-  sources?: { title: string; url: string }[];
+  sources?: { title: string; url: string; fetched_at?: string }[];
   streaming?: boolean;
 }) {
   const [open, setOpen] = useState(false);

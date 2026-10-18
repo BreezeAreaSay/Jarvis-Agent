@@ -571,7 +571,7 @@ export function bindAiEvents() {
     chat_id: string;
     message_id: string;
     text?: string;
-    sources?: { title: string; url: string }[];
+    sources?: { title: string; url: string; fetched_at?: string }[];
     actions?: { title: string; ok: boolean; detail?: string }[];
     usage?: Record<string, number>;
   }>("chat.done", (e) => {

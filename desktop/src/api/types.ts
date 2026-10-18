@@ -357,7 +357,7 @@ export interface UiMessage {
   content: string;
   created: number;
   meta: {
-    sources?: { title: string; url: string }[];
+    sources?: { title: string; url: string; fetched_at?: string }[];
     actions?: { title: string; ok: boolean; detail?: string }[];
     memory?: string[];
     images?: string[];

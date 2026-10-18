@@ -23,15 +23,46 @@ def test_providers_usage_and_test_without_key(client: TestClient) -> None:
     assert set(items) == {
         "openai",
         "chatgpt",
+        "claude_code",
+        "gemini_cli",
+        "qwen_code",
         "openrouter",
         "deepseek",
         "anthropic",
+        "gemini",
+        "xai",
+        "mistral",
         "groq",
+        "qwen",
+        "moonshot",
+        "zhipu",
+        "minimax",
+        "doubao",
+        "siliconflow",
+        "yandex",
         "ollama",
         "lmstudio",
         "custom",
     }
+    groups = {pid: p["group"] for pid, p in items.items()}
+    assert [pid for pid, g in groups.items() if g == "account"] == [
+        "chatgpt",
+        "claude_code",
+        "gemini_cli",
+        "qwen_code",
+    ]
+    assert {pid for pid, g in groups.items() if g == "local"} == {"ollama", "lmstudio"} and groups[
+        "custom"
+    ] == "custom"
+    claude = items["claude_code"]
+    assert claude["cli"] is True and claude["needs_key"] is False and claude["login"] is True
+    assert claude["default_model"] == "sonnet" and claude["regions"] == [] and claude["folder"] is False
+    qwen = items["qwen"]
+    assert qwen["country"] == "cn" and [r["id"] for r in qwen["regions"]] == ["intl", "cn", "us"]
+    assert qwen["base_url"] == qwen["regions"][0]["base_url"] and qwen["regions"][1]["key_url"]
+    assert items["yandex"]["folder"] is True and items["yandex"]["country"] == "ru"
     assert items["openai"]["default_model"] == "gpt-5.4-mini" and items["openai"]["needs_key"] is True
+    assert items["openai"]["cli"] is False and items["openai"]["group"] == "key"
     gpt = items["chatgpt"]
     assert gpt["needs_key"] is False and gpt["login"] is True and gpt["component"] is True
     assert gpt["local"] is False and gpt["key_url"] == "" and gpt["default_model"] in gpt["models"]

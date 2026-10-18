@@ -12,6 +12,7 @@ stream_options): известное описано в jarvis.ai.providers, ос�
 
 import asyncio
 import contextlib
+import hashlib
 import ipaddress
 import json
 import logging
@@ -51,6 +52,10 @@ NO_MODEL = "Укажите модель в настройках Jarvis AI"
 BAD_FORMAT = "Модель ответила не в нужном формате — попробуйте ещё раз или выберите другую модель"
 TOO_LONG = "Разговор слишком длинный для модели — начните новый чат"
 BAD_PROXY = "Неверный адрес прокси в настройках Jarvis AI"
+NO_FOLDER = "Укажите ID каталога Yandex Cloud в настройках Jarvis AI"
+# Gemini 3 требует подпись рассуждений у вызовов инструментов в истории; у вызовов других моделей её нет —
+# для них документация Gemini разрешает служебное значение-заглушку
+GEMINI_SKIP_SIGNATURE = "skip_thought_signature_validator"
 
 # модели не для чата в списке /models
 _NOT_CHAT = (
@@ -99,10 +104,18 @@ class LlmConfig:
     vision: bool
     enabled: bool
     local: bool  # сервер на этом ПК или в домашней сети: без ключа, без прокси, бесплатно
+    folder_id: str = ""  # каталог Yandex Cloud (YandexGPT)
 
     @property
     def chat_url(self) -> str:
         return self.base_url + "/chat/completions"
+
+    @property
+    def wire_model(self) -> str:
+        """Модель в запросе: у YandexGPT короткое имя («yandexgpt/latest») дополняется до gpt://<каталог>/…"""
+        if self.preset.folder and self.folder_id and "://" not in self.model:
+            return f"gpt://{self.folder_id}/{self.model}"
+        return self.model
 
     def problem(self) -> str | None:
         """Почему запрос сделать нельзя (текст для человека) или None."""
@@ -112,6 +125,8 @@ class LlmConfig:
             return NO_URL
         if self.preset.needs_key and not self.api_key:
             return NO_KEY
+        if self.preset.folder and not self.folder_id:
+            return NO_FOLDER
         if not self.model:
             return NO_MODEL
         return None
@@ -138,6 +153,8 @@ def resolve_config(settings: "AiSettings", secrets: "Secrets", model: str | None
     if not key and preset.id == "openai":
         key = secrets.get("openai_api_key")  # ключ OpenAI, заданный для голоса
     chosen = (model or "").strip() or settings.model.strip()
+    if chosen in preset.retired:
+        chosen = preset.default_model  # провайдер убрал модель — берём модель по умолчанию
     if not (model or "").strip() and preset.default_model and chosen not in preset.models:
         # сменили провайдера, а модель осталась от прежнего (по умолчанию) — берём модель нового провайдера
         other_defaults = {p.default_model for p in PRESETS.values() if p.id != preset.id}
@@ -155,6 +172,7 @@ def resolve_config(settings: "AiSettings", secrets: "Secrets", model: str | None
         vision=settings.vision,
         enabled=settings.enabled,
         local=local,
+        folder_id=settings.folder_id.strip() if preset.folder else "",
     )
 
 
@@ -166,6 +184,7 @@ class ToolCall:
     id: str
     name: str
     arguments: str = "{}"  # JSON-строка, как её прислала модель
+    extra: dict[str, Any] | None = None  # extra_content вызова (подпись рассуждений Gemini 3) — вернуть
 
     def parse_arguments(self) -> dict[str, Any]:
         raw = (self.arguments or "").strip()
@@ -182,11 +201,14 @@ class ToolCall:
         return value
 
     def to_message(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "id": self.id,
             "type": "function",
             "function": {"name": self.name, "arguments": self.arguments},
         }
+        if self.extra:
+            out["extra_content"] = self.extra
+        return out
 
 
 @dataclass
@@ -371,6 +393,7 @@ class _ToolDraft:
     id: str = ""
     name: str = ""
     arguments: str = ""
+    extra: dict[str, Any] | None = None
 
 
 class StreamAccumulator:
@@ -432,6 +455,8 @@ class StreamAccumulator:
         draft = self.calls.setdefault(index, _ToolDraft())
         if call_id and not draft.id:
             draft.id = call_id
+        if isinstance(call.get("extra_content"), dict):
+            draft.extra = call["extra_content"]
         function = call.get("function") if isinstance(call.get("function"), dict) else {}
         name = function.get("name")
         if isinstance(name, str) and name:
@@ -448,7 +473,7 @@ class StreamAccumulator:
 
     def result(self, model: str) -> LlmResponse:
         calls = [
-            ToolCall(d.id or _call_id(), d.name, d.arguments or "{}")
+            ToolCall(d.id or _call_id(), d.name, d.arguments or "{}", d.extra)
             for _, d in sorted(self.calls.items())
             if d.name
         ]
@@ -501,8 +526,9 @@ def _parse_completion(data: Any, model: str) -> LlmResponse:
         if isinstance(args, dict | list):
             args = json.dumps(args, ensure_ascii=False)
         name = str(function.get("name") or "")
+        extra = call.get("extra_content") if isinstance(call.get("extra_content"), dict) else None
         if name:
-            calls.append(ToolCall(str(call.get("id") or _call_id()), name, str(args or "{}")))
+            calls.append(ToolCall(str(call.get("id") or _call_id()), name, str(args or "{}"), extra))
     legacy = message.get("function_call")
     if not calls and isinstance(legacy, dict) and legacy.get("name"):
         calls.append(ToolCall(_call_id(), str(legacy["name"]), str(legacy.get("arguments") or "{}")))
@@ -596,6 +622,66 @@ def _parse_json_answer(text: str, schema: dict[str, Any]) -> Any:
     if _schema_body(schema).get("type", "object") == "object" and not isinstance(value, dict):
         return None
     return value
+
+
+# --- особенности провайдеров в запросе ------------------------------------------------------------------
+
+_SHORT_ID = re.compile(r"[A-Za-z0-9]{9}")
+
+
+def short_tool_id(value: str) -> str:
+    """id вызова инструмента для Mistral — ровно 9 латинских букв и цифр (для одного id — всегда тот же)."""
+    if _SHORT_ID.fullmatch(value or ""):
+        return value
+    return hashlib.sha1((value or "").encode("utf-8")).hexdigest()[:9]
+
+
+def adapt_messages(messages: list[dict[str, Any]], preset: ProviderPreset) -> list[dict[str, Any]]:
+    """История под провайдера: короткие id вызовов (Mistral), подписи рассуждений (Gemini 3) — свои
+    возвращаются как есть, у чужих вызовов — заглушка; другим провайдерам extra_content не отправляется."""
+    if not any(m.get("tool_calls") or m.get("role") == "tool" for m in messages):
+        return messages
+    out: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            calls = [dict(c) for c in message["tool_calls"] if isinstance(c, dict)]
+            signed = any(isinstance(c.get("extra_content"), dict) for c in calls)
+            for position, call in enumerate(calls):
+                if preset.short_tool_ids:
+                    call["id"] = short_tool_id(str(call.get("id") or ""))
+                if not preset.thought_signatures:
+                    call.pop("extra_content", None)
+                elif not signed and position == 0:
+                    call["extra_content"] = {"google": {"thought_signature": GEMINI_SKIP_SIGNATURE}}
+            message = {**message, "tool_calls": calls}
+        elif message.get("role") == "tool" and preset.short_tool_ids:
+            message = {**message, "tool_call_id": short_tool_id(str(message.get("tool_call_id") or ""))}
+        out.append(message)
+    return out
+
+
+def _strip_keys(node: Any, keys: frozenset[str]) -> Any:
+    if isinstance(node, dict):
+        return {k: _strip_keys(v, keys) for k, v in node.items() if k not in keys}
+    if isinstance(node, list):
+        return [_strip_keys(v, keys) for v in node]
+    return node
+
+
+def _drop_schema_keys(tools: list[dict[str, Any]], keys: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Убрать из схем параметров ключи, которых провайдер не принимает (Ark — ограничения длины)."""
+    if not keys:
+        return tools
+    wanted = frozenset(keys)
+    out = []
+    for tool in tools:
+        function = tool.get("function") if isinstance(tool.get("function"), dict) else None
+        if function is None or not isinstance(function.get("parameters"), dict):
+            out.append(tool)
+            continue
+        parameters = _strip_keys(function["parameters"], wanted)
+        out.append({**tool, "function": {**function, "parameters": parameters}})
+    return out
 
 
 # --- ошибки --------------------------------------------------------------------------------------------
@@ -870,7 +956,12 @@ class LlmClient:
             "User-Agent": f"Jarvis/{__version__}",
         }
         if cfg.api_key:
-            headers["Authorization"] = f"Bearer {cfg.api_key}"
+            scheme = cfg.preset.auth_scheme
+            if scheme == "Api-Key" and cfg.api_key.startswith("t1."):
+                scheme = "Bearer"  # IAM-токен Yandex Cloud вместо API-ключа
+            headers["Authorization"] = f"{scheme} {cfg.api_key}"
+        if cfg.preset.folder and cfg.folder_id:
+            headers["OpenAI-Project"] = cfg.folder_id  # каталог Yandex Cloud
         if cfg.provider == "openrouter":
             headers["X-Title"] = "Jarvis"
         return headers
@@ -902,11 +993,15 @@ class LlmClient:
         json_schema: dict[str, Any] | None,
         stream: bool,
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {"model": cfg.model, "messages": messages, "stream": stream}
+        body: dict[str, Any] = {
+            "model": cfg.wire_model,
+            "messages": adapt_messages(messages, cfg.preset),
+            "stream": stream,
+        }
         if stream and cfg.preset.stream_usage and "no_stream_options" not in quirks:
             body["stream_options"] = {"include_usage": True}
         if tools and "no_tools" not in quirks:
-            body["tools"] = tools
+            body["tools"] = _drop_schema_keys(tools, cfg.preset.drop_schema_keys)
             if tool_choice and "no_tool_choice" not in quirks:
                 body["tool_choice"] = tool_choice
         temp = cfg.temperature if temperature is None else temperature
@@ -1192,6 +1287,11 @@ class LlmClient:
         ids: set[str] = set()
         for item in items if isinstance(items, list) else []:
             model_id = item.get("id") or item.get("name") if isinstance(item, dict) else item
+            if isinstance(model_id, str) and cfg.preset.folder:
+                # YandexGPT: gpt://<каталог>/yandexgpt/latest → yandexgpt/latest (каталог клиент допишет сам)
+                if not model_id.startswith("gpt://"):
+                    continue
+                model_id = model_id.split("://", 1)[1].partition("/")[2]
             if isinstance(model_id, str) and model_id and not any(w in model_id.lower() for w in _NOT_CHAT):
                 ids.add(model_id)
         return sorted(ids) or fallback

@@ -4,10 +4,23 @@ export type VoiceState = "off" | "loading" | "idle" | "listening" | "processing"
 export type AiProvider =
   | "openai"
   | "chatgpt"
+  | "claude_code"
+  | "gemini_cli"
+  | "qwen_code"
   | "openrouter"
   | "deepseek"
   | "anthropic"
+  | "gemini"
+  | "xai"
+  | "mistral"
   | "groq"
+  | "qwen"
+  | "moonshot"
+  | "zhipu"
+  | "minimax"
+  | "doubao"
+  | "siliconflow"
+  | "yandex"
   | "ollama"
   | "lmstudio"
   | "custom";
@@ -63,6 +76,7 @@ export interface Settings {
     enabled: boolean;
     provider: AiProvider;
     base_url: string;
+    folder_id: string;
     model: string;
     temperature: number;
     proxy: string;
@@ -336,6 +350,17 @@ export interface UiMessage {
   };
 }
 
+/** Группа в выборе провайдера: по подписке (без ключа), по ключу API, на этом ПК, свой сервер. */
+export type ProviderGroup = "account" | "key" | "local" | "custom";
+
+/** Регион провайдера (Китай / международный): свой адрес API и свой кабинет для ключа. */
+export interface ProviderRegion {
+  id: string;
+  title: string;
+  base_url: string;
+  key_url: string;
+}
+
 export interface ProviderPreset {
   id: AiProvider;
   title: string;
@@ -347,6 +372,56 @@ export interface ProviderPreset {
   key_url?: string;
   login?: boolean;
   component?: boolean;
+  /** Работает через официальную программу человека (Claude Code, Gemini CLI, Qwen Code). */
+  cli?: boolean;
+  group?: ProviderGroup;
+  /** cn | ru — значок страны. */
+  country?: string;
+  /** Первый — по умолчанию; выбранный регион = settings.ai.base_url (пусто — первый). */
+  regions?: ProviderRegion[];
+  /** Нужен ID каталога Yandex Cloud (settings.ai.folder_id). */
+  folder?: boolean;
+}
+
+/** GET /api/ai/cli/{provider} — программа-провайдер на этом ПК. */
+export interface CliProviderState {
+  id: AiProvider;
+  name: string;
+  installed: boolean;
+  path: string;
+  version: string;
+  /** true / false / null — неизвестно (проверьте подключение). */
+  logged_in: boolean | null;
+  account: string;
+  installing: boolean;
+  install_error: string;
+  install_log: string;
+  can_install: boolean;
+  /** Пакет npm для кнопки «Установить» ("" — ставит сам человек официальным установщиком). */
+  npm: string;
+  /** Версия Node.js на ПК ("" — не найден). */
+  node: string;
+  node_required: number;
+  install_url: string;
+  install_command: string;
+  login_command: string;
+  login_hint: string;
+  note: string;
+  images: boolean;
+  agent: boolean;
+  tools: boolean;
+  error: string;
+}
+
+/** Событие ai.cli: установка программы-провайдера, терминал для входа, смена состояния входа. */
+export interface CliProviderEvent {
+  provider: AiProvider;
+  state: "installing" | "log" | "installed" | "error" | "login" | "auth";
+  line?: string;
+  version?: string;
+  error?: string;
+  opened?: boolean;
+  logged_in?: boolean | null;
 }
 
 export interface MemoryItem {

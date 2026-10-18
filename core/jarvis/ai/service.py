@@ -6,6 +6,10 @@ MCP.
 (итог) или chat.error. Модель может вызывать инструменты до восьми раундов подряд; результаты инструментов
 попадают в историю чата, поэтому следующий вопрос видит, что уже сделано.
 
+Провайдеры без ключа API — «ChatGPT (подписка)» (jarvis.ai.chatgpt) и программы человека Claude Code,
+Gemini CLI, Qwen Code (jarvis.ai.cli; инструменты — с сервера MCP ядра jarvis.mcp.server) — отвечают в тех же
+событиях.
+
 Режимы: «chat» — без действий на ПК (поиск, память и заметки можно), «all» — все инструменты, «agent» — задачу
 выполняет агент (jarvis.ai.agent). Голосовые запросы, Telegram и пульт пишутся в свой постоянный чат (kind
 voice): ответ для голоса — короткий, без markdown. Фраза «агент, …» отправляет задачу агенту в любом режиме.
@@ -23,6 +27,7 @@ from typing import Any
 
 from jarvis.ai.chatgpt import ChatGpt
 from jarvis.ai.chats import MODES, ChatStore, ui_message
+from jarvis.ai.cli import CliProviders
 from jarvis.ai.format import chat_title, speech_text
 from jarvis.ai.llm import LlmClient, LlmError, LlmResponse, ToolCall, Usage, user_content
 from jarvis.ai.prompts import system_prompt
@@ -30,6 +35,7 @@ from jarvis.ai.providers import PRESETS
 from jarvis.ai.tools import Tool, ToolEnv, ToolOutput, ToolRegistry
 from jarvis.ai.web import WebClient
 from jarvis.db import new_id
+from jarvis.mcp.server import JarvisMcpServer
 from jarvis.platform.base import PlatformError
 from jarvis.service_base import BaseService
 from jarvis.services import AskResult, Source, UserFacingError
@@ -198,6 +204,9 @@ class Ai(BaseService):
         self.chats = ChatStore(ctx)
         self.tools = ToolRegistry(ctx)
         self.chatgpt = ChatGpt(self)  # провайдер «ChatGPT (подписка)» через Codex
+        self.mcp_server = JarvisMcpServer(ctx)  # инструменты Jarvis для программ-провайдеров (/api/ai/mcp)
+        # «Claude (подписка)», «Gemini CLI», «Qwen Code» через программы человека
+        self.cli = CliProviders(self)
         self._locks: dict[str, asyncio.Lock] = {}
         self._tasks: dict[str, set[asyncio.Task[Any]]] = {}
         self._configured: bool | None = None
@@ -208,10 +217,17 @@ class Ai(BaseService):
         self.llm.transport = transport
         self.web.transport = transport
 
+    def account_backend(self) -> Any:
+        """Провайдер без ключа API (ChatGPT или программа человека), если выбран он, иначе None."""
+        if self.chatgpt.selected:
+            return self.chatgpt
+        return self.cli.selected()
+
     @property
     def configured(self) -> bool:
-        if self.chatgpt.selected:
-            return self.chatgpt.configured
+        backend = self.account_backend()
+        if backend is not None:
+            return bool(backend.configured)
         return self.llm.configured
 
     def refresh_configured(self) -> bool:
@@ -228,9 +244,15 @@ class Ai(BaseService):
             self.ctx.settings.on_change(self._on_settings),
             self.ctx.bus.on("secrets.changed", lambda _e: self.refresh_configured()),
         ]
+        await self.mcp_server.start()
         await self.chatgpt.start()
+        await self.cli.start()
 
     def _on_settings(self, old: Any, new: Any) -> None:
+        if old.ai.provider != new.ai.provider:
+            backend = self.cli.get(new.ai.provider)
+            if backend is not None and self.ctx.loop is not None and not self.ctx.loop.is_closed():
+                self.ctx.loop.call_soon_threadsafe(backend.on_selected)  # проверить вход в программу
         if old.ai != new.ai:
             self.refresh_configured()
 
@@ -244,24 +266,36 @@ class Ai(BaseService):
         if tasks:
             await asyncio.wait(tasks, timeout=3.0)
         await self.chatgpt.stop()
+        await self.cli.stop()
+        await self.mcp_server.stop()
         await self.llm.aclose()
 
     # --- провайдеры и расходы (для API) ---------------------------------------------------------------
     def providers(self) -> list[dict[str, Any]]:
         custom_url = self.ctx.settings.value.ai.base_url.strip()
         items = [p.to_json(custom_url if p.id == "custom" else None) for p in PRESETS.values()]
-        return [self.chatgpt.preset_json(p) if p["id"] == "chatgpt" else p for p in items]
+        out = []
+        for item in items:
+            backend = self.cli.get(item["id"])
+            if item["id"] == "chatgpt":
+                item = self.chatgpt.preset_json(item)
+            elif backend is not None:
+                item = backend.preset_json(item)
+            out.append(item)
+        return out
 
     async def list_models(self) -> list[str]:
-        """Модели выбранного провайдера (у ChatGPT — из каталога Codex)."""
-        if self.chatgpt.selected:
-            return await self.chatgpt.list_models()
+        """Модели выбранного провайдера (у ChatGPT — из каталога Codex, у программ — свой список)."""
+        backend = self.account_backend()
+        if backend is not None:
+            return list(await backend.list_models())
         return await self.llm.list_models()
 
     async def test_connection(self) -> dict[str, Any]:
         """Проверка связи с выбранным провайдером: {ok, error?, latency_ms, model}."""
-        if self.chatgpt.selected:
-            return await self.chatgpt.test()
+        backend = self.account_backend()
+        if backend is not None:
+            return dict(await backend.test())
         return await self.llm.test()
 
     def usage(self) -> dict[str, Any]:
@@ -279,6 +313,7 @@ class Ai(BaseService):
     def delete_chat(self, chat_id: str) -> bool:
         self.stop_chat(chat_id)
         self.chatgpt.forget_chat(chat_id)
+        self.cli.forget_chat(chat_id)
         return self.chats.delete(chat_id)
 
     def stop_chat(self, chat_id: str) -> bool:
@@ -332,8 +367,9 @@ class Ai(BaseService):
         max_tokens: int | None = None,
     ) -> Any:
         """Одиночный запрос без инструментов (сборщик команд, конспекты, перевод, диктовка)."""
-        if self.chatgpt.selected:
-            return await self.chatgpt.complete(
+        backend = self.account_backend()
+        if backend is not None:
+            return await backend.complete(
                 messages, json_schema=json_schema, temperature=temperature, max_tokens=max_tokens
             )
         response = await self.llm.chat(
@@ -444,8 +480,9 @@ class Ai(BaseService):
 
     # --- ответ модели с инструментами ---------------------------------------------------------------------
     async def _run_chat(self, turn: Turn) -> AskResult:
-        if self.chatgpt.selected:
-            return await self.chatgpt.run_chat(turn)
+        backend = self.account_backend()
+        if backend is not None:
+            return await backend.run_chat(turn)
         problem = self.llm.problem(turn.model or None)
         if problem:
             return self._finish(turn, error=problem)

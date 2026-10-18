@@ -12,6 +12,8 @@ ctx.confirmations.request(kind="agent"): карточка «Нажать «От�
 
 С провайдером «ChatGPT (подписка)» план — одиночный запрос Codex, а работа — один ход Codex, где действия
 агента — инструменты треда (jarvis.ai.chatgpt); подтверждения, лимит шагов и события agent.* — те же, из _act.
+С программами человека (Claude Code, Gemini CLI, Qwen Code — jarvis.ai.cli) так же: работа — один запуск
+программы, действия агента приходят к ней с сервера MCP ядра.
 """
 
 import asyncio
@@ -232,7 +234,11 @@ class Agent(BaseService):
         return llm
 
     def _chatgpt(self) -> Any:
-        """Провайдер «ChatGPT (подписка)», если выбран он (агент работает ходом Codex), иначе None."""
+        """Провайдер без ключа API, если выбран он: «ChatGPT (подписка)» (агент работает ходом Codex) или
+        программа человека — Claude Code, Gemini CLI, Qwen Code (одним запуском программы); иначе None."""
+        backend = getattr(self.ctx.ai, "account_backend", None)
+        if callable(backend):
+            return backend()
         chatgpt = getattr(self.ctx.ai, "chatgpt", None)
         return chatgpt if chatgpt is not None and chatgpt.selected else None
 

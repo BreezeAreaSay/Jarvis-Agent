@@ -1,0 +1,332 @@
+/* Jarvis AI: выбор провайдера по группам и панели программ-провайдеров (Claude Code, Gemini CLI, Qwen Code).
+   Карточки — .radio-card.provider-card из components.css/settings.css, панели — .gpt-panel из settings.css. */
+
+.prov-groups {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.prov-groups.compact {
+  gap: 14px;
+}
+
+.prov-group {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+
+.prov-group-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.prov-group-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.prov-group-hint {
+  font-size: 12px;
+  color: var(--text-4);
+}
+
+/* --- сетки ---------------------------------------------------------------------------------------- */
+.prov-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.prov-groups.compact .prov-grid {
+  gap: 8px;
+}
+
+.prov-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.prov-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* «На этом ПК» (две колонки) и «Свой сервер» (третья) — одной строкой, по той же сетке, что «По ключу API» */
+.prov-tail {
+  row-gap: 9px;
+}
+
+.prov-groups.compact .prov-tail {
+  row-gap: 9px;
+}
+
+.prov-tail-head.local {
+  grid-column: 1 / span 2;
+  grid-row: 1;
+}
+
+.prov-tail-head.custom {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.prov-tail-custom {
+  display: flex;
+  min-width: 0;
+}
+
+.prov-tail-custom > .provider-card {
+  flex: 1;
+  min-width: 0;
+}
+
+@container (max-width: 600px) {
+  .prov-grid-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* узко: название важнее значка «рекомендуем» */
+  .prov-title > .chip {
+    display: none;
+  }
+
+  .prov-tail-head.custom {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    margin-top: 8px;
+  }
+
+  .prov-tail-custom {
+    grid-column: 1;
+    grid-row: 4;
+  }
+}
+
+@container (max-width: 440px) {
+  .prov-grid-2,
+  .prov-grid-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .prov-tail-head.local {
+    grid-column: 1;
+  }
+
+  .prov-tail-head.custom {
+    grid-row: 4;
+  }
+
+  .prov-tail-custom {
+    grid-row: 5;
+  }
+}
+
+/* --- карточки ------------------------------------------------------------------------------------- */
+.prov-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.prov-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.prov-title > .ellipsis {
+  min-width: 0;
+}
+
+.prov-title > .chip {
+  flex: none;
+}
+
+.provider-card .sub {
+  display: block;
+}
+
+.provider-card.wide {
+  padding: 12px 16px 12px 12px;
+  align-items: center;
+}
+
+.provider-card.wide .title {
+  font-size: 14.5px;
+}
+
+.provider-card.wide .sub {
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.prov-groups.compact .provider-card.wide {
+  padding: 10px 14px 10px 10px;
+}
+
+.prov-flag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 5px;
+  font-size: 9.5px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+}
+
+.brand-tile.letters b {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+/* «Другие провайдеры…» в мастере первого запуска */
+.prov-more {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 11px 16px 11px 12px;
+  border-radius: 14px;
+  border: 1px dashed var(--line-strong);
+  background: transparent;
+  text-align: left;
+  color: var(--text-2);
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.prov-more:hover {
+  background: var(--row-hover);
+  border-color: rgba(var(--accent-rgb), 0.45);
+  color: var(--text);
+}
+
+.prov-more > svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--text-3);
+}
+
+.prov-more-icons {
+  display: flex;
+  flex: none;
+}
+
+.prov-more-icon {
+  display: inline-flex;
+  margin-left: -5px;
+  border-radius: 8px;
+  background: var(--panel-solid);
+  box-shadow: 0 0 0 2px var(--panel-solid);
+}
+
+.prov-more-icons > :first-child {
+  margin-left: 0;
+}
+
+.prov-more-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.prov-more-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* --- программы-провайдеры ------------------------------------------------------------------------------- */
+.cli-actions {
+  gap: 6px;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.cli-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 4px 4px 12px;
+  border-radius: 9px;
+  background: var(--field);
+  border: 1px solid var(--line);
+}
+
+.cli-cmd code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--text);
+  user-select: all;
+  scrollbar-width: none;
+}
+
+.cli-log {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.cli-note {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.gpt-panel.compact.cli-claude_code {
+  border-color: rgba(217, 119, 87, 0.42);
+}
+
+.gpt-panel.compact.cli-gemini_cli {
+  border-color: rgba(120, 140, 240, 0.42);
+}
+
+.gpt-panel.compact.cli-qwen_code {
+  border-color: rgba(139, 124, 248, 0.42);
+}
+
+.gpt-card.cli-card-claude_code {
+  border-color: rgba(217, 119, 87, 0.35);
+  background:
+    radial-gradient(380px 160px at 100% 0%, rgba(217, 119, 87, 0.15), transparent 70%),
+    var(--panel);
+}
+
+.gpt-card.cli-card-gemini_cli {
+  border-color: rgba(120, 140, 240, 0.35);
+  background:
+    radial-gradient(380px 160px at 100% 0%, rgba(110, 130, 245, 0.15), transparent 70%),
+    var(--panel);
+}
+
+.gpt-card.cli-card-qwen_code {
+  border-color: rgba(139, 124, 248, 0.35);
+  background:
+    radial-gradient(380px 160px at 100% 0%, rgba(139, 124, 248, 0.15), transparent 70%),
+    var(--panel);
+}

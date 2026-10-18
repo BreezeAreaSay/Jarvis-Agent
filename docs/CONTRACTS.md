@@ -229,7 +229,7 @@ label, placeholder?, options?, required}], description}`.
 
 | Маршрут | Тело | Ответ |
 |---|---|---|
-| `GET /api/ai/providers` | — | `{items: [{id, title, base_url, needs_key, local, key_url, default_model, models, login, component}]}` — `login`: вход в аккаунт вместо ключа, `component`: нужен скачиваемый компонент (у `chatgpt` оба `true`) |
+| `GET /api/ai/providers` | — | `{items: [{id, title, base_url, needs_key, local, key_url, default_model, models, login, component, cli, group, country, regions, folder}]}` — `login`: вход в аккаунт вместо ключа, `component`: нужен скачиваемый компонент (у `chatgpt` оба `true`), `cli`: работает через программу человека (`claude_code`, `gemini_cli`, `qwen_code`), `group`: `account\|key\|local\|custom`, `country`: `cn\|ru\|""`, `regions`: `[{id, title, base_url, key_url}]` (первый — по умолчанию; выбранный регион = `settings.ai.base_url`, пусто — первый), `folder`: нужен `settings.ai.folder_id` (YandexGPT) |
 | `GET /api/ai/models` | — | `{items: [string]}` (с провайдера; у `chatgpt` — каталог Codex; ошибка — пресеты) |
 | `POST /api/ai/test` | — | `{ok, error?, latency_ms, model}` (у `chatgpt` — крошечный ход Codex) |
 | `GET /api/ai/usage` | — | `{month: {requests, prompt_tokens, completion_tokens, cost, since}, budget}` |
@@ -238,6 +238,10 @@ label, placeholder?, options?, required}], description}`.
 | `POST /api/ai/chatgpt/login` | `{device?: bool}` | `{ok, logged_in, opened?, auth_url?}` — ядро само открывает браузер (вход OAuth ChatGPT); `device: true` — `{verification_url, user_code}` для входа с другого устройства; итог — событием `ai.chatgpt`; 400 — нет компонента или вход не начался |
 | `POST /api/ai/chatgpt/login/cancel` | — | `{ok}` |
 | `POST /api/ai/chatgpt/logout` | — | `{ok}` |
+| `GET /api/ai/cli/{provider}?refresh=` | — | `CliState` программы-провайдера (`claude_code`, `gemini_cli`, `qwen_code`; иначе 404); `refresh=true` — найти программу заново и перепроверить вход |
+| `POST /api/ai/cli/{provider}/install` | — | `{ok, installing: true}` — официальный пакет npm в фоне (события `ai.cli`), или `{ok, installed: true}`; 400 — Claude Code (ставит сам человек официальным установщиком), нет Node.js нужной версии или npm |
+| `POST /api/ai/cli/{provider}/login` | — | `{ok, opened, command, hint}` — окно терминала с самой программой: вход человек выполняет в ней (Jarvis не видит паролей и токенов); 400 — не установлена |
+| `GET\|POST\|DELETE /api/ai/mcp` | MCP | сервер MCP Jarvis (Streamable HTTP, без сессий, ответы JSON) для программ-провайдеров: кроме `X-Jarvis-Token` нужен `X-Jarvis-Turn` — токен одного хода ИИ (нет или чужой — 403) |
 | `GET /api/chats` | — | `{items: Chat[]}` |
 | `POST /api/chats` | `{title?, mode?}` | `Chat` |
 | `GET /api/chats/{id}` | — | `{chat: Chat, messages: UiMessage[]}` |
@@ -267,6 +271,11 @@ agent?: {run_id, status, steps, plan}}}` — `stopped` — ответ оборв
 `ChatGptState = {installed, installing, logged_in, account, error, version, login_pending?, auth_url?,
 verification_url?, user_code?}` — `account`: «email (ChatGPT Plus)»; `error` — почему компонент не скачался или Codex
 не запустился (текст для человека); `login_pending` и ссылки — пока ждём входа в браузере.
+`CliState = {id, name, installed, path, version, logged_in: true|false|null, account, installing, install_error,
+install_log, can_install, npm, node, node_required, install_url, install_command, login_command, login_hint, note,
+images, agent, tools, error}` — `logged_in: null` — неизвестно (проверьте подключение); `npm: ""` — кнопки «Установить»
+нет (Claude Code); `node` — версия Node.js на ПК; `note` — важное о тарифах и входе; `error` — почему последний ход
+не прошёл по входу (текст для человека).
 `McpServer = {id, name, transport: stdio|http, command, args, env, url, headers, enabled, status: connected|connecting|
 error|disabled, error, tools: [{name, description}]}` — секретные `env`/`headers` приходят замаскированными; маска,
 вернувшаяся при сохранении, оставляет прежнее значение.
@@ -288,7 +297,8 @@ error|disabled, error, tools: [{name, description}]}` — секретные `en
 | `agent.state` | `{run_id, task, status: planning\|running\|waiting\|done\|stopped\|error, step, total, text}` |
 | `agent.step` | `{run_id, index, title, status: running\|ok\|error}` |
 | `mcp.status` | `{server_id, status, error?, tools_count}` |
-| `ai.configured` | `{configured}` — изменилось «ИИ настроен» (ключ, провайдер, адрес, вход в ChatGPT) |
+| `ai.configured` | `{configured}` — изменилось «ИИ настроен» (ключ, провайдер, адрес, каталог, вход в ChatGPT или программу) |
+| `ai.cli` | `{provider, state: installing\|log\|installed\|error\|login\|auth, line?, version?, error?, opened?, logged_in?}` — установка программы-провайдера, окно терминала для входа, смена состояния входа |
 | `ai.chatgpt` | `{state: installing\|installed\|login\|device\|logged_in\|logged_out\|error, error?, version?, account?, auth_url?, verification_url?, user_code?, opened?}` — компонент и вход ChatGPT |
 
 Подтверждения агента — общий механизм `ctx.confirmations.request(..., kind="agent")` (события `confirm.*`).
@@ -306,6 +316,33 @@ app-server (SDK `openai-codex==0.163.0` с бинарём Codex, ≈150 МБ, с
 этим провайдером — ход Codex с действиями
 агента как инструментами. `complete()` — временный тред, JSON — `outputSchema`. Ошибки — по-русски: регион/VPN,
 лимит подписки, «Войдите в ChatGPT в настройках Jarvis AI», нет связи (повторы Codex обрываются через 30 с).
+
+Провайдеры-программы (`jarvis/ai/cli`): `claude_code` — «Claude (подписка)» через Claude Code, `gemini_cli` — Gemini
+CLI, `qwen_code` — Qwen Code. Jarvis не входит в аккаунты сам, не скачивает Claude Code и не читает чужие токены:
+находит программу человека (PATH ядра и из реестра, `%APPDATA%\npm`, `%USERPROFILE%\.local\bin`,
+`%LOCALAPPDATA%\qwen-code\bin`, WinGet, pnpm, Scoop, Volta; обёртки npm `.cmd` запускаются без cmd.exe — node.exe со
+скриптом) и запускает её в документированном режиме без окна: `claude -p --output-format stream-json …`,
+`gemini --output-format stream-json …`, `qwen --output-format stream-json …`. Вход проверяется самой программой
+(`claude auth status`) или по наличию её файлов (Gemini CLI, Qwen Code); вход — в окне терминала с программой
+(`POST /api/ai/cli/{provider}/login`). Gemini CLI и Qwen Code ставятся кнопкой (`npm install -g` официального пакета),
+Claude Code — только официальным установщиком (`irm https://claude.ai/install.ps1 | iex`). Программа работает в
+пустой папке `<data>/cli/<программа>`, её встроенные инструменты (оболочка, файлы, веб) выключены флагами и
+настройками, а инструменты Jarvis приходят с `/api/ai/mcp` (`--mcp-config` у Claude Code и Qwen Code,
+`.gemini/settings.json` рабочей папки у Gemini CLI — токены там только ссылками на переменные окружения). Вызовы
+идут тем же путём, что у провайдеров по ключу (карточки, подтверждения, источники, память, режим «Чат»). Текст
+человека — через stdin, системный промпт — файлом, контекст хода (время, профиль, память) — блоком `<jarvis>` в
+сообщении. Сессия программы на чат — `kv` `cli:<provider>:session:<chat_id>` (продолжение `--resume`; не
+продолжилась — новая с пересказом переписки). «Стоп» убивает процесс с потомками. Агент — один запуск программы
+с действиями агента как инструментами. Ошибки — по-русски (не установлена, нужен вход, лимит подписки со временем
+сброса, модель недоступна, регион, нет связи). Расход записывается с ценой 0 (подписка). `ANTHROPIC_API_KEY` в
+окружение Claude Code не передаётся (иначе он платит ключом, а не подпиской).
+
+Провайдеры по ключу — OpenAI-совместимый `/chat/completions` с особенностями пресета (`jarvis/ai/providers.py`):
+регионы (Qwen/Model Studio, Kimi, GLM, MiniMax, Doubao, SiliconFlow), YandexGPT — заголовки
+`Authorization: Api-Key <ключ>` (IAM-токен `t1.…` — `Bearer`) и `OpenAI-Project: <folder_id>`, модель
+`gpt://<folder_id>/<модель>` (`settings.ai.folder_id`); Mistral — id вызовов из 9 символов; Doubao — без ключей длины
+в схемах инструментов; Gemini — подписи рассуждений (`extra_content`) возвращаются вместе с вызовами; убранные
+провайдером модели (`deepseek-chat`, `deepseek-reasoner`) заменяются моделью по умолчанию.
 
 ## 5. Виджеты, столы, плагины, пульт (`jarvis/widgets`, `jarvis/desks`, `jarvis/plugins`, `jarvis/remote`)
 

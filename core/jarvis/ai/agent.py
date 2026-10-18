@@ -77,6 +77,7 @@ POOR_ELEMENTS = 6  # меньше интерактивных элементов 
 OPAQUE_EXES = frozenset({"telegram.exe", "ayugram.exe", "kotatogram.exe", "64gram.exe"})
 URL_SCHEMES = ("http://", "https://", "tg://", "ms-settings:", "spotify:", "mailto:")
 MAX_MCP_RESULT = 8000
+MAX_MCP_TOOLS = 64  # больше инструментов провайдеры не принимают (вместе с действиями агента)
 
 RISKY_NAME = re.compile(
     r"\b(send|submit|delete|remove|pay|buy|order|purchase|checkout|confirm|publish|post|transfer|uninstall|"
@@ -993,6 +994,9 @@ class Agent(BaseService):
         fg = await self._foreground()
         parts: list[str] = []
         if fg is not None:
+            previous = run.target
+            if previous is not None and previous.pid != fg.pid:
+                parts.append(f"Впереди теперь окно «{fg.title}» ({fg.exe}); было «{previous.title}».")
             run.target = fg
             hint = self._new_playbook(run, fg)
             if hint:
@@ -1030,7 +1034,9 @@ class Agent(BaseService):
             tool = mcp_tool(self.ctx, spec)
             if tool is not None and tool.name not in self._actions:
                 out.append(self._mcp_action(tool))
-        return out
+        if len(out) > MAX_MCP_TOOLS:
+            log.warning("у агента %d инструментов MCP — беру первые %d", len(out), MAX_MCP_TOOLS)
+        return out[:MAX_MCP_TOOLS]
 
     def _mcp_action(self, tool: Tool) -> Action:
         title = tool.title_for({})

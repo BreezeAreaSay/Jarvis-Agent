@@ -1,0 +1,45 @@
+# Установщик Windows: Electron + встроенный Python с ядром (resources/core, готовит scripts/build-core-win.sh).
+appId: com.breezeareasay.jarvis
+productName: Jarvis
+copyright: "© 2026 BreezeAreaSay"
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**
+  - dist-electron/**
+  - package.json
+asar: true
+extraResources:
+  - from: ../build/core-win
+    to: core
+    filter: ["**/*"]
+  - from: build/icon.png
+    to: icon.png
+  - from: build/tray.ico
+    to: tray.ico
+  - from: build/tray.png
+    to: tray.png
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  artifactName: Jarvis-Setup-${version}.exe
+  # подписи нет: без rcedit под Wine значок exe ставится через afterPack
+  signAndEditExecutable: true
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Jarvis
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerLanguages: [ru_RU]
+  language: "1049"
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+publish: null

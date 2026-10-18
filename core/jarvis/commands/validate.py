@@ -26,6 +26,7 @@ _CHOICES = {
     "Media.PlayPause": ("", "play", "pause"),
     "System.Screenshot": ("", "window"),
     "Jarvis.SilentMode": ("", "on", "off", "toggle"),
+    "Jarvis.Microphone": ("", "on", "off", "toggle"),
 }
 
 

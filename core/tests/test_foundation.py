@@ -136,6 +136,20 @@ async def test_dispatcher_runs_command_and_records_history(ctx: AppContext, even
     assert unknown["kind"] == "unknown"
 
 
+async def test_stop_phrase_stops_speech_and_listening(
+    ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    done: list[str] = []
+
+    async def stop_listening() -> None:
+        done.append("listening")
+
+    monkeypatch.setattr(ctx.voice, "stop_listening", stop_listening)
+    monkeypatch.setattr(ctx.tts, "silence", lambda: done.append("speech"))
+    assert (await ctx.dispatcher.handle("Стоп!", "voice"))["kind"] == "stop"
+    assert done == ["speech", "listening"]
+
+
 def test_api_requires_token(client: TestClient) -> None:
     assert client.get("/api/health").status_code == 200
     raw = TestClient(client.app)

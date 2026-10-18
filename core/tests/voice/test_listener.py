@@ -88,6 +88,24 @@ def test_follow_up_after_answer(rig: Rig) -> None:
     assert host.commands == ["а завтра"]
 
 
+def test_follow_up_chain_is_limited(rig: Rig) -> None:
+    """Фоновая речь (видео, чужой разговор) не держит Jarvis в разговоре без конца: без «Джарвис» подряд —
+    не больше MAX_FOLLOW_CHAIN команд, потом окно продолжения не открывается."""
+    listener, host, script, clock = rig
+    for i in range(lst.MAX_FOLLOW_CHAIN + 1):
+        listener.follow_up(4.0)  # Jarvis ответил — окно продолжения
+        feed(listener, script.silence(0.4), clock)
+        say(rig, f"фраза номер {i}")
+    assert host.commands == [f"фраза номер {i}" for i in range(lst.MAX_FOLLOW_CHAIN)]
+    assert listener.activity == "idle"
+    # к нему обратились — снова можно продолжать без активатора
+    say(rig, "джарвис какая погода")
+    listener.follow_up(4.0)
+    feed(listener, script.silence(0.4), clock)
+    say(rig, "а завтра")
+    assert host.commands[-2:] == ["какая погода", "а завтра"]
+
+
 def test_follow_up_window_expires(rig: Rig) -> None:
     listener, host, script, clock = rig
     listener.follow_up(2.0)

@@ -31,6 +31,23 @@ def test_listen_and_capture_need_models(client: TestClient) -> None:
     assert client.post("/api/voice/stop").json() == {"ok": True}
 
 
+def test_stop_and_listen_toggle(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    async def stop() -> None:
+        calls.append("stop")
+
+    monkeypatch.setattr(client.ctx.dispatcher, "stop", stop)  # type: ignore[attr-defined]
+    assert client.post("/api/stop").json() == {"ok": True}
+    # хоткей «Сказать команду», пока Jarvis слушает, — «стоп»
+    monkeypatch.setattr(client.ctx.voice, "state", "listening")  # type: ignore[attr-defined]
+    assert client.post("/api/voice/listen", json={"toggle": True}).json() == {"ok": True, "stopped": True}
+    assert calls == ["stop", "stop"]
+    # без toggle — как раньше: слушать (моделей нет — понятная ошибка)
+    r = client.post("/api/voice/listen")
+    assert r.status_code == 400 and "не скачаны" in r.json()["detail"]
+
+
 def test_capture_route(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[float, bool]] = []
 

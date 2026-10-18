@@ -1,8 +1,9 @@
 // Строка голоса (вверху по центру): кружок микрофона пульсирует от громкости, «Джарвис» — подсвеченный
 // чип, дальше живой текст фразы (voice.partial → voice.final), справа точки-волна. После выполнения команды
 // строка сворачивается в кружок и исчезает (~1,5 с); без текста в покое — через 4 с.
-import { Mic } from "lucide-react";
+import { Mic, Square } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { api } from "@/api/client";
 import type { VoiceState } from "@/api/types";
 import { levels } from "@/lib/levels";
 import { useApp } from "@/store/app";
@@ -246,6 +247,22 @@ export function VoicePill({ hidden }: { hidden: boolean }) {
           </span>
         </div>
         <canvas className="ov-pill-dots" ref={dotsRef} aria-hidden />
+        {(pill.phase === "listening" || pill.phase === "processing") && (
+          // «Стоп»: перестать слушать, замолчать, бросить ответ ИИ — то же, что сказать «Джарвис, стоп»
+          <button
+            type="button"
+            className="ov-pill-stop"
+            data-interactive
+            title="Стоп — перестать слушать и отвечать"
+            aria-label="Стоп"
+            onClick={() => {
+              hide();
+              void api.post("/api/stop").catch(() => undefined);
+            }}
+          >
+            <Square />
+          </button>
+        )}
       </div>
     </Slot>
   );

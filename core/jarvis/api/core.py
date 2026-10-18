@@ -28,6 +28,13 @@ async def shutdown(ctx: Ctx) -> dict[str, Any]:
     return {"ok": True}
 
 
+@router.post("/api/stop")
+async def stop_all(ctx: Ctx) -> dict[str, Any]:
+    """Кнопка «Стоп»: замолчать, бросить ответ ИИ и агента, перестать слушать."""
+    await ctx.dispatcher.stop()
+    return {"ok": True}
+
+
 @router.get("/api/status")
 async def status(ctx: Ctx) -> dict[str, Any]:
     return {

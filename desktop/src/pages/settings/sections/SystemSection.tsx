@@ -17,7 +17,7 @@ interface Status {
   uptime_s: number;
 }
 
-const DEFAULT_HOTKEYS = { hotkey_show: "Ctrl+Alt+J", hotkey_listen: "Ctrl+Alt+Space" };
+const DEFAULT_HOTKEYS = { hotkey_show: "Ctrl+Alt+J", hotkey_listen: "Ctrl+Alt+Space", hotkey_mic: "Ctrl+Alt+M" };
 
 /** Путь → file:///C:/… для bridge.openExternal. */
 export function fileUrl(path: string): string {
@@ -349,7 +349,10 @@ export default function SystemSection() {
   const [settings, patch] = useSettingsPatch();
   if (!settings) return null;
   const s = settings.system;
-  const changed = s.hotkey_show !== DEFAULT_HOTKEYS.hotkey_show || s.hotkey_listen !== DEFAULT_HOTKEYS.hotkey_listen;
+  const changed =
+    s.hotkey_show !== DEFAULT_HOTKEYS.hotkey_show ||
+    s.hotkey_listen !== DEFAULT_HOTKEYS.hotkey_listen ||
+    (s.hotkey_mic ?? DEFAULT_HOTKEYS.hotkey_mic) !== DEFAULT_HOTKEYS.hotkey_mic;
   return (
     <div className="stack">
       <Card icon={<Rocket />} title="Запуск и работа" sub="Как Jarvis живёт рядом с Windows">
@@ -383,8 +386,11 @@ export default function SystemSection() {
         <Setting name="Показать Jarvis" desc="Открыть или спрятать главное окно">
           <KeyCapture value={s.hotkey_show} clearable emptyText="Не задано" onChange={(v) => patch({ system: { hotkey_show: v } })} />
         </Setting>
-        <Setting name="Сказать команду" desc="Jarvis слушает без слова-активатора">
+        <Setting name="Сказать команду" desc="Jarvis слушает без слова-активатора; ещё раз — «стоп»">
           <KeyCapture value={s.hotkey_listen} clearable emptyText="Не задано" onChange={(v) => patch({ system: { hotkey_listen: v } })} />
+        </Setting>
+        <Setting name="Микрофон Jarvis" desc="Выключить или снова включить: пока выключен, Jarvis не слушает совсем">
+          <KeyCapture value={s.hotkey_mic ?? ""} clearable emptyText="Не задано" onChange={(v) => patch({ system: { hotkey_mic: v } })} />
         </Setting>
       </Card>
 

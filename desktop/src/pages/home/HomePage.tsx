@@ -18,7 +18,7 @@ import {
   Trash2,
   TrendingUp,
 } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/api/client";
 import type { WidgetPlacement } from "@/api/types";
 import { PageHeader } from "@/components/PageHeader";
@@ -246,6 +246,25 @@ export default function HomePage(_: { route: string[] }) {
 
   const desk = desks.find((d) => d.id === current) ?? desks[0];
   const tabs = desks.map((d) => ({ value: d.id, label: d.name }));
+  // столов бывает больше, чем помещается: вкладки прокручиваются (и колесом), справа — затухание, пока есть что листать
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const [tabsMore, setTabsMore] = useState(false);
+  const checkTabs = useCallback(() => {
+    const el = tabsRef.current;
+    if (el) setTabsMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+  }, []);
+  useEffect(() => {
+    const el = tabsRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(checkTabs);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [checkTabs]);
+  useEffect(() => {
+    // «открой стол Игры» голосом — выбранная вкладка не должна оказаться за краем
+    tabsRef.current?.querySelector<HTMLElement>(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    checkTabs();
+  }, [current, desks.length, checkTabs]);
 
   const addWidget = (type: string) => {
     if (!desk) return;
@@ -291,7 +310,14 @@ export default function HomePage(_: { route: string[] }) {
           </div>
         }
       >
-        <div className="tabs">
+        <div
+          className={cx("tabs desk-tabs", tabsMore && "more")}
+          ref={tabsRef}
+          onScroll={checkTabs}
+          onWheel={(e) => {
+            if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
+          }}
+        >
           {tabs.map((t) => (
             <button
               key={t.value}

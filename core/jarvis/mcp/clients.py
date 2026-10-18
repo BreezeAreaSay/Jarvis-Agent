@@ -1,7 +1,6 @@
 """Серверы MCP из других программ на этом ПК: Claude Code, Claude Desktop, Cursor, VS Code, Codex, Gemini CLI.
 
 Jarvis только читает их настройки: «Импорт» копирует выбранные серверы к себе, файлы программ не меняются.
-Места и формат записей — те же, что у `ai-dev clients` (AI Dev System), чтобы находить его запись «ai-dev».
 """
 
 import json

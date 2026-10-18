@@ -250,8 +250,6 @@ label, placeholder?, options?, required}], description}`.
 | `GET /api/mcp/servers` | — | `{items: McpServer[]}` |
 | `POST /api/mcp/servers`, `PUT/DELETE /api/mcp/servers/{id}` | `McpServerIn` | `McpServer` |
 | `POST /api/mcp/servers/{id}/reconnect` | — | `McpServer` |
-| `GET /api/mcp/aidev` | — | `{found, install: {source, label, command, args, root, version, docker} \| null, server: McpServer \| null, profiles: [{id, tools, description, enabled}], tools, github}` — AI Dev System на этом ПК |
-| `POST /api/mcp/aidev` | `{profiles?: string[], folder?: string}` | как `GET` — подключить AI Dev System (сервер `ai-dev`), сменить профили или указать папку клона |
 | `GET /api/mcp/import` | — | `{items: [{key, client, client_label, file, name, transport, command, args, env, url, headers, problem, added}]}` — серверы из Claude Code, Claude Desktop, Cursor, VS Code, Codex, Gemini CLI |
 | `POST /api/mcp/import` | `{keys: string[]}` | `{items: McpServer[], skipped: [{key, reason}]}` |
 | `GET /api/mcp/catalog?q=&cursor=` | — | `{items: [{name, title, description, version, repository, website, install, installs}], next_cursor, total}` (`install` может содержать `headers`) |

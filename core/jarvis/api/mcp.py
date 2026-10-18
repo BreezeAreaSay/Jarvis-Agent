@@ -63,23 +63,8 @@ async def reconnect_server(server_id: str, ctx: Ctx) -> dict[str, Any]:
         raise HTTPException(404, detail=str(e)) from e
 
 
-class AiDevIn(BaseModel):
-    profiles: list[str] | None = None
-    folder: str = ""
-
-
 class ImportIn(BaseModel):
     keys: list[str] = Field(default_factory=list)
-
-
-@router.get("/api/mcp/aidev")
-async def aidev_state(ctx: Ctx) -> dict[str, Any]:
-    return await _mcp(ctx).aidev_state()
-
-
-@router.post("/api/mcp/aidev")
-async def aidev_connect(body: AiDevIn, ctx: Ctx) -> dict[str, Any]:
-    return await _mcp(ctx).aidev_connect(body.profiles, body.folder)
 
 
 @router.get("/api/mcp/import")

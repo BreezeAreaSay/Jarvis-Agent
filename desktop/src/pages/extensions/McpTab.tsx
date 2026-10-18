@@ -21,7 +21,7 @@ import type { McpCatalogItem, McpServer } from "@/api/types";
 import { bridge } from "@/lib/bridge";
 import { navigate } from "@/lib/router";
 import { Button, cx, Empty, IconButton, Modal, notify, notifyError, Tabs, TextInput, Toggle } from "@/ui";
-import { ImportModal } from "./McpAiDev";
+import { ImportModal } from "./McpImport";
 import { CountUp, McpOrbit } from "./McpOrbit";
 import { GITHUB_PATH, MCP_STATUS, McpIcon, joinArgs, shortRepo } from "./mcpKit";
 import { McpServerModal } from "./McpServerModal";

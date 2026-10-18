@@ -1749,102 +1749,6 @@
   width: 210px;
 }
 
-/* --- AI Dev System: свой сервер MCP над списком ---------------------------------------------------------- */
-.aidev-card {
-  position: relative;
-  padding: 14px 16px;
-  border-radius: var(--r-lg);
-  background:
-    radial-gradient(120% 140% at 0% 0%, rgba(139, 92, 246, 0.16), transparent 55%),
-    radial-gradient(120% 140% at 100% 100%, rgba(59, 130, 246, 0.14), transparent 60%),
-    var(--panel);
-  backdrop-filter: blur(var(--glass-blur)) saturate(135%);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(135%);
-  border: 1px solid rgba(139, 92, 246, 0.32);
-  box-shadow: var(--shadow-1);
-}
-
-.aidev-card.skeleton {
-  height: 150px;
-}
-
-.aidev-card.connected {
-  border-color: rgba(139, 92, 246, 0.2);
-}
-
-.aidev-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.aidev-icon.mcp-icon {
-  background: linear-gradient(145deg, #a78bfa, #6d28d9);
-  color: #fff;
-  box-shadow: 0 6px 18px rgba(124, 58, 237, 0.35);
-}
-
-.aidev-title {
-  font-weight: 750;
-  font-size: 16px;
-}
-
-.aidev-sub {
-  margin-top: 2px;
-  font-size: 12.5px;
-  color: var(--text-3);
-}
-
-.aidev-where {
-  margin: 10px 0 0 58px;
-  font-size: 12.5px;
-  color: var(--text-2);
-  display: flex;
-  min-width: 0;
-}
-
-.aidev-where .ok-text {
-  color: var(--ok);
-  font-weight: 650;
-}
-
-.aidev-where .warn-icon {
-  width: 14px;
-  height: 14px;
-  vertical-align: -2px;
-  color: var(--warn, #fbbf24);
-}
-
-.aidev-profiles {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin: 10px 0 0 58px;
-}
-
-.aidev-label {
-  font-size: 12px;
-  color: var(--text-3);
-  margin-right: 4px;
-}
-
-.aidev-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 12px 0 0 58px;
-}
-
-@media (max-width: 1100px) {
-  .aidev-where,
-  .aidev-profiles,
-  .aidev-foot {
-    margin-left: 0;
-  }
-}
-
 /* --- импорт серверов из других программ ------------------------------------------------------------------- */
 .modal-foot .grow {
   align-self: center;
@@ -1866,6 +1770,11 @@
   font-size: 13px;
   margin-bottom: 6px;
   min-width: 0;
+}
+
+.mcp-import-label {
+  flex: none;
+  white-space: nowrap;
 }
 
 .mcp-import-row {

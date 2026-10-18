@@ -1,12 +1,16 @@
-"""Маршруты API: Jarvis AI — провайдеры, модели, проверка связи, расходы, ChatGPT по подписке, чаты, агент
+"""Маршруты API: Jarvis AI — провайдеры, модели, проверка связи, расходы, ChatGPT по подписке,
+программы-провайдеры (Claude Code, Gemini CLI, Qwen Code), сервер MCP Jarvis, чаты, агент
 (docs/CONTRACTS.md, раздел 4).
 """
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from starlette.responses import Response
+from starlette.types import Receive, Scope, Send
 
+from jarvis.ai.cli import CliBackend
 from jarvis.ai.service import Ai
 from jarvis.api.deps import Ctx
 from jarvis.context import AppContext
@@ -83,6 +87,51 @@ async def chatgpt_login_cancel(ctx: Ctx) -> dict[str, Any]:
 @router.post("/api/ai/chatgpt/logout")
 async def chatgpt_logout(ctx: Ctx) -> dict[str, Any]:
     return await _ai(ctx).chatgpt.logout()
+
+
+# --- программы-провайдеры: Claude Code, Gemini CLI, Qwen Code -----------------------------------------------
+
+
+def _cli(ctx: AppContext, provider: str) -> CliBackend:
+    backend = _ai(ctx).cli.get(provider)
+    if backend is None:
+        raise HTTPException(404, detail="Нет такой программы-провайдера")
+    return backend
+
+
+@router.get("/api/ai/cli/{provider}")
+async def cli_status(provider: str, ctx: Ctx, refresh: bool = False) -> dict[str, Any]:
+    return await _cli(ctx, provider).status(refresh=refresh)
+
+
+@router.post("/api/ai/cli/{provider}/install")
+async def cli_install(provider: str, ctx: Ctx) -> dict[str, Any]:
+    return await _cli(ctx, provider).install()
+
+
+@router.post("/api/ai/cli/{provider}/login")
+async def cli_login(provider: str, ctx: Ctx) -> dict[str, Any]:
+    return await _cli(ctx, provider).open_login()
+
+
+# --- сервер MCP Jarvis (инструменты для программ-провайдеров) -----------------------------------------------
+
+
+class _Asgi(Response):
+    """Ответ, который целиком отдаёт ASGI-обработчик (SDK MCP пишет ответ сам)."""
+
+    def __init__(self, handler: Any) -> None:
+        super().__init__()
+        self._handler = handler
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self._handler(scope, receive, send)
+
+
+@router.api_route("/api/ai/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
+async def mcp_endpoint(request: Request, ctx: Ctx) -> Response:
+    """Streamable HTTP MCP: токен ядра проверил middleware, токен хода (X-Jarvis-Turn) — сервер MCP."""
+    return _Asgi(_ai(ctx).mcp_server.handle)
 
 
 # --- чаты -------------------------------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 // «Jarvis AI»: провайдер и подключение, характер, возможности, агент, расходы.
 import { Bot, Brain, CircleDollarSign, Plug, Sparkles, Wand } from "lucide-react";
 import { Card, cx, Setting, Slider, Tabs, Toggle } from "@/ui";
-import { AiConnection, ChatGptPanel, ProviderCards, useAiConfigured } from "../ai";
+import { AccountPanel, AiConnection, isAccountProvider, ProviderCards, useAiConfigured } from "../ai";
 import { LazyText, NumberField, ProgressBar, useApi, useSettingsPatch } from "../kit";
 
 interface Usage {
@@ -82,16 +82,16 @@ export default function AiSection() {
         <ProviderCards />
       </Card>
 
-      {ai.provider === "chatgpt" && (
-        <Card className="gpt-card">
-          <ChatGptPanel />
+      {isAccountProvider(ai.provider) && (
+        <Card className={cx("gpt-card", ai.provider !== "chatgpt" && `cli-card cli-card-${ai.provider}`)}>
+          <AccountPanel />
         </Card>
       )}
 
       <Card
         icon={<Plug />}
         title="Подключение"
-        sub={ai.provider === "chatgpt" ? "Модель и проверка связи" : "Ключ хранится зашифрованным только на этом компьютере"}
+        sub={isAccountProvider(ai.provider) ? "Модель и проверка связи" : "Ключ хранится зашифрованным только на этом компьютере"}
       >
         <AiConnection />
         <Setting name="Прокси" desc="Для запросов к ИИ: http://… или socks5://… Пусто — напрямую" wide>

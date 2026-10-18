@@ -69,6 +69,9 @@ class AppContext:
         self._io_pool = ThreadPoolExecutor(4, thread_name_prefix="io", initializer=_com_init)
         self._tasks: set[asyncio.Task[Any]] = set()
         self.started = threading.Event()
+        # адрес и токен HTTP API ядра (заполняет jarvis.server) — для сервера MCP Jarvis (jarvis.mcp.server)
+        self.api_url = ""
+        self.api_token = ""
         # сервисы — заполняет jarvis.app.build_context
         self.confirmations: Confirmations
         self.commands: CommandService

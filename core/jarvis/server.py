@@ -54,6 +54,7 @@ def create_app(ctx: AppContext, token: str) -> FastAPI:
     app = FastAPI(title="Jarvis Core", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.ctx = ctx
     app.state.token = token
+    ctx.api_token = token  # сервер MCP Jarvis отдаёт его программам-провайдерам (jarvis.mcp.server)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -156,6 +157,8 @@ def main(argv: list[str] | None = None) -> None:
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((args.host, args.port))
     port = sock.getsockname()[1]
+    host = args.host if args.host not in ("", "0.0.0.0", "::") else "127.0.0.1"
+    ctx.api_url = f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
 
     config = uvicorn.Config(
         app, log_level="warning", access_log=False, ws_ping_interval=20, ws_ping_timeout=20

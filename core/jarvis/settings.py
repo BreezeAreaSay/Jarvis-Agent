@@ -85,9 +85,31 @@ class TtsSettings(_Model):
 
 
 AiProvider = Literal[
-    "openai", "chatgpt", "openrouter", "deepseek", "anthropic", "groq", "ollama", "lmstudio", "custom"
+    "openai",
+    "chatgpt",
+    "claude_code",
+    "gemini_cli",
+    "qwen_code",
+    "openrouter",
+    "deepseek",
+    "anthropic",
+    "gemini",
+    "xai",
+    "mistral",
+    "groq",
+    "qwen",
+    "moonshot",
+    "zhipu",
+    "minimax",
+    "doubao",
+    "siliconflow",
+    "yandex",
+    "ollama",
+    "lmstudio",
+    "custom",
 ]
-# chatgpt — подписка ChatGPT через Codex (вход в аккаунт, без ключа API; компонент скачивается по кнопке)
+# chatgpt — подписка ChatGPT через Codex (вход в аккаунт, без ключа API; компонент скачивается по кнопке);
+# claude_code, gemini_cli, qwen_code — через официальные программы человека (вход — в самой программе)
 
 
 class AiSettings(_Model):
@@ -106,6 +128,7 @@ class AiSettings(_Model):
     agent_confirm: Literal["risky", "always"] = "risky"
     max_agent_steps: int = Field(25, ge=3, le=100)
     monthly_budget: float = Field(0.0, ge=0.0)  # лимит расходов в месяц, $; 0 — без лимита
+    folder_id: str = ""  # ID каталога Yandex Cloud (для YandexGPT)
 
 
 class AvatarSettings(_Model):

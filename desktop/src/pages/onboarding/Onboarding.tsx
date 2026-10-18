@@ -22,7 +22,7 @@ import { onEvent } from "@/api/events";
 import { Orb } from "@/components/Orb";
 import { useApp } from "@/store/app";
 import { Button, cx, notifyError, Select, useDebounced } from "@/ui";
-import { AiConnection, ChatGptPanel, ProviderCards, useAiConfigured } from "../settings/ai";
+import { AccountPanel, AiConnection, isAccountProvider, ProviderCards, useAiConfigured } from "../settings/ai";
 import {
   cap,
   fmtMb,
@@ -350,9 +350,9 @@ export default function Onboarding() {
           {step === 3 ? (
             <>
               <ProviderCards compact />
-              {settings.ai.provider === "chatgpt" && (
+              {isAccountProvider(settings.ai.provider) && (
                 <div style={{ marginTop: 12 }}>
-                  <ChatGptPanel compact />
+                  <AccountPanel compact />
                 </div>
               )}
               <div style={{ marginTop: 12 }}>

@@ -104,6 +104,8 @@ class ConfigField:
             value = getattr(self, name)
             if value is not None:
                 data[name] = value
+        if self.integer:
+            data["integer"] = True
         if self.fields:
             data["fields"] = [f.to_json(None) for f in self.fields]
         return data

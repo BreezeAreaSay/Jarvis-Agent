@@ -1,0 +1,479 @@
+/* «Поиск по ПК»: живая панель на карточке плагина (.fs-live) и оверлей — карточка с номерами после голосового
+   поиска и быстрый поиск по горячей клавише (.fs-ov-*). Цвет типа файла — переменная --k у значка. */
+
+/* --- значок типа ------------------------------------------------------------------------------------- */
+.fs-kind {
+  --k: #94a3b8;
+  --s: 34px;
+  flex: none;
+  width: var(--s);
+  height: var(--s);
+  border-radius: calc(var(--s) * 0.3);
+  display: grid;
+  place-items: center;
+  color: color-mix(in srgb, var(--k) 82%, #fff);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--k) 26%, transparent), color-mix(in srgb, var(--k) 12%, transparent));
+  border: 1px solid color-mix(in srgb, var(--k) 30%, transparent);
+}
+
+.fs-kind svg {
+  width: 52%;
+  height: 52%;
+}
+
+/* --- живая панель ------------------------------------------------------------------------------------ */
+.fs-live {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fs-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.fs-field .input {
+  height: 42px;
+  padding-left: 38px;
+  padding-right: 40px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.fs-field-ico {
+  position: absolute;
+  left: 13px;
+  width: 17px;
+  height: 17px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.fs-field.busy .fs-field-ico {
+  color: var(--accent-text);
+}
+
+.fs-field-end {
+  position: absolute;
+  right: 7px;
+}
+
+.fs-field > .spinner.fs-field-end {
+  right: 13px;
+}
+
+.fs-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 560;
+  white-space: nowrap;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.fs-chip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.fs-chip:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.fs-chip.on {
+  background: var(--accent-soft);
+  border-color: rgba(var(--accent-rgb), 0.45);
+  color: var(--accent-text);
+}
+
+.fs-chip.ghost {
+  background: transparent;
+  border-style: dashed;
+  font-weight: 500;
+}
+
+.fs-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.fs-results {
+  min-height: 118px;
+  padding: 6px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line);
+}
+
+.fs-results > .lv-placeholder,
+.fs-results > .fs-error {
+  display: block;
+  padding: 10px 10px;
+}
+
+.fs-error {
+  color: #fecaca;
+  font-size: 13px;
+}
+
+.fs-hint {
+  padding: 10px;
+}
+
+.fs-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.fs-hotkey {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.fs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fs-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 11px;
+  transition: background var(--t-fast) var(--ease);
+}
+
+.fs-row:hover {
+  background: var(--row-hover);
+}
+
+.fs-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.fs-row-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.fs-name {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.fs-meta {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.fs-acts {
+  display: flex;
+  gap: 2px;
+  padding-right: 6px;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+.fs-row:hover .fs-acts,
+.fs-row:focus-within .fs-acts {
+  opacity: 1;
+}
+
+.fs-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.fs-status b {
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* --- оверлей: карточка с номерами и быстрый поиск -------------------------------------------------------- */
+.fs-ov {
+  --fs1: #93c5fd;
+  --fs2: #2563eb;
+  width: 520px;
+  max-width: 100%;
+  padding: 12px 12px 14px;
+  overflow: hidden;
+  background:
+    linear-gradient(160deg, rgba(37, 99, 235, 0.13), transparent 52%),
+    var(--ov-card);
+}
+
+.fs-ov-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 2px 10px;
+}
+
+.fs-ov-tile {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background:
+    radial-gradient(130% 85% at 28% -8%, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0) 58%),
+    linear-gradient(165deg, var(--fs1), var(--fs2));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 4px 12px rgba(37, 99, 235, 0.35);
+}
+
+.fs-ov-tile svg {
+  width: 60%;
+  height: 60%;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.2));
+}
+
+.fs-ov-title {
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.fs-ov-sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.fs-ov-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px;
+  border-radius: 13px;
+  background: rgba(10, 12, 18, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.fs-ov-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 6px 6px;
+  border-radius: 10px;
+  transition: background var(--t-fast) var(--ease);
+}
+
+.fs-ov-row:hover,
+.fs-ov-row.sel {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.fs-ov-row.sel {
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.45) inset;
+}
+
+.fs-ov-row.done {
+  background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.38), rgba(var(--accent-rgb), 0.18));
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.45) inset;
+}
+
+.fs-ov-num {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.fs-ov-row.done .fs-ov-num {
+  color: #fff;
+  background: var(--accent);
+}
+
+.fs-ov-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+}
+
+.fs-ov-reveal {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  opacity: 0;
+  transition:
+    opacity var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+
+.fs-ov-reveal svg {
+  width: 13px;
+  height: 13px;
+}
+
+.fs-ov-row:hover .fs-ov-reveal,
+.fs-ov-row.sel .fs-ov-reveal {
+  opacity: 1;
+}
+
+.fs-ov-reveal:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.fs-ov-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 4px 0;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.fs-ov-foot b {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.fs-ov-foot .kbd {
+  height: 19px;
+  padding: 0 5px;
+  font-size: 10.5px;
+}
+
+.fs-ov-countdown {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  overflow: hidden;
+}
+
+.fs-ov-countdown i {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.3), var(--accent));
+  transform-origin: left center;
+  animation: fs-countdown linear both;
+}
+
+@keyframes fs-countdown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+/* быстрый поиск */
+.fs-box-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.fs-box-field > svg {
+  position: absolute;
+  left: 13px;
+  width: 18px;
+  height: 18px;
+  color: var(--accent-text);
+  pointer-events: none;
+}
+
+.fs-box-input {
+  width: 100%;
+  height: 46px;
+  padding: 0 44px 0 40px;
+  border-radius: 13px;
+  border: 1px solid rgba(var(--accent-rgb), 0.5);
+  background: rgba(10, 12, 18, 0.45);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.14);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 560;
+  outline: none;
+}
+
+.fs-box-input::placeholder {
+  color: var(--text-4);
+  font-weight: 500;
+}
+
+.fs-box-field > .spinner,
+.fs-box-field > .ov-icon-btn {
+  position: absolute;
+  right: 9px;
+}
+
+.fs-box-field > .spinner {
+  right: 15px;
+}
+
+.fs-box-empty {
+  padding: 12px 10px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+:root[data-anim="off"] .fs-ov-countdown i {
+  animation: none;
+}

@@ -138,6 +138,9 @@ _SPECS = (
     ),
     WidgetSpec("stopwatch", "Секундомер", "Секундомер с кругами", "time", "timer", 1, 1, max_w=2, max_h=2),
     WidgetSpec(
+        "focus", "Фокус", "Помодоро: таймер фокуса и перерывов", "time", "timer", 1, 2, max_w=2, max_h=2
+    ),
+    WidgetSpec(
         "countdown",
         "Обратный отсчёт",
         "Сколько дней осталось до события",

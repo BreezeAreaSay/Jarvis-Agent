@@ -151,6 +151,7 @@ screenshots`; `Launch.Shell` — только в своих командах; `J
 `Jarvis.Plugin` — «плагин:действие» («dictation:toggle»), аргументы JSON после «|»; `Jarvis.SilentMode` — `on`,
 `off`, `toggle`; `Jarvis.ShowWindow` — `show`, `hide` или страница (`settings`, `commands`, `chat`);
 `Jarvis.Timer` — «5m»; `Jarvis.Reminder` — «10m | Позвонить маме».
+`Jarvis.Briefing` («Сводка дня», для сценариев) — `""` (утренняя сводка), `short`, `tasks`, `missed` — см. §6.
 
 ### Маршруты
 
@@ -331,12 +332,12 @@ app-server (SDK `openai-codex==0.163.0` с бинарём Codex, ≈150 МБ, с
 
 `Desk = {id, name, icon, preset, position, widgets: [{id, type, x, y, w, h, config}]}` (значки столов: `home, desk, sunrise, briefcase, book, clock, chart, music, gamepad, monitor, paw, avatar`) — сетка 4 колонки, высота строки
 задаёт интерфейс. Типы виджетов: `avatar, history, control, weather, media, tasks, notes, calendar, clock,
-timer, stopwatch, rates, crypto, stocks, news, system, apps, quick, recent, volume, smarthome, pet, ai, worldclock,
+timer, stopwatch, focus, rates, crypto, stocks, news, system, apps, quick, recent, volume, smarthome, pet, ai, worldclock,
 countdown, network, battery, sticky, plugins, desk_links`.
 
 `Plugin = {id, name, description, icon, color: [от, до], enabled, config, schema, status: {running, error?, …},
 actions: [{id, title}], examples: [фраза]}`. Плагины: `smart_home, dictation, subtitles, summary, reader, autolock,
-second_pc, notify_voice, pet`.
+second_pc, notify_voice, pet, focus, clipboard, file_search`.
 
 Поле схемы: `{key, kind: text|number|bool|select|secret|hotkey|device|list, label, hint?, placeholder?, default?,
 options?: [{value, label}], min?, max?, step?, device?: input|output (список — из /api/voice/devices),
@@ -354,6 +355,47 @@ fields?: [поля элемента списка] (kind list), secret?: имя, 
 | `second_pc` | `ping`, `dispatch {pc, text}` | `state` |
 | `notify_voice` | `test`, `request_access` | `state` |
 | `pet` | `feed`, `pet`, `eat {path}` | `state {playing, recycle_count, windows, fullscreen}`, `action {action}` |
+| `clipboard` | `list`, `paste {id\|text}`, `copy {id\|text}`, `pin {id, pinned?}`, `delete {id}`, `clear {all?}`, `ai {action, text?\|id?, card?}`, `palette` (`toggle`) | `items {items, total, pinned}`, `palette {items, actions, at, selection, selection_chars, target, ai, hotkey}`, `result {id, state: working\|done\|replaced\|error, action, title, source, text?, error?, at}` |
+| `focus` | `start {minutes?}`, `pause`, `resume`, `toggle`, `stop`, `break`, `skip_break`, `allow {key}`, `stats`, `state` | `state {phase: idle\|focus\|break\|paused, paused_from, reason: user\|idle, left_s, total_s, ends_at, cycle, next, waiting, today_min, today_sessions, streak, …}`, `alert {kind: focus_done\|break_done\|back\|distraction, title, text, …}` |
+| `file_search` | `search {text?, kinds?, date?, folder?, sort?, content?, limit?}`, `open {path\|index}`, `reveal {path\|index}`, `copy_path {path\|index}`, `toggle`, `box {open}`, `reindex` | `results {query, items, total, ttl}`, `box {open, query?}`, `opened {path, index, reveal?}` |
+
+«Фокус» (`focus`): `plugin.focus.state` приходит при каждом изменении и раз в минуту, пока идёт таймер, — секунды
+интерфейс отсчитывает сам от `left_s` (`ends_at` — unix-время конца, только пока таймер идёт); `waiting` — перерыв
+кончился, ждём следующий фокус серии (`next: focus`). `alert`: `focus_done {minutes, break_min, long}` — начался
+перерыв, `break_done {auto}`, `back` — человек вернулся после автопаузы по бездействию, `distraction {key, name,
+icon, site, closed}` — в активном окне отвлекающая программа или сайт (`allow {key}` — «Нужно по работе» до конца
+серии). `stats` → `{today: {date, min, sessions, distractions}, week: [{date, min, sessions}] (7 дней, старые
+первыми), streak, best: {date, min} | null, total_min, total_sessions}`; то же лежит в `status` плагина.
+
+«Умный буфер» (`clipboard`): история буфера (`ClipboardItem = {id, text (начало, до 400 знаков), chars, ts,
+pinned}`, новые сверху; копии с пометками менеджеров паролей «не запоминать» пропускаются — счётчик `status.skipped`),
+хранится в `kv` `clipboard:items`. `paste`/`copy` — запись по `id` целиком или текст карточки; вставка — в окно,
+активное при открытии палитры или взятии выделенного. `ai {action}`: `translate` (русский ↔ `config.target_lang`),
+`fix`, `shorten`, `polite`, `explain`, `reply` и `read` (вслух, без ИИ); с `text`/`id` — вернуть `{action, title,
+text, replaced: false}` (`card: true` — ещё и карточкой), без них — с выделенным текстом: итог встаёт на его место
+(`config.replace`; кроме `explain`/`reply`) или приходит карточкой `result`. ИИ не настроен — 400 «Подключите ИИ
+в настройках, сэр». Хоткей плагина (`toggle`) — палитра: `palette.at` — курсор в физических пикселях экрана,
+`selection` — выделенное (до 400 знаков), `target {title, exe}` — куда вставится; повтор хоткея быстрее 0,6 с
+не открывает палитру заново.
+
+«Поиск по ПК» (`file_search`): ищет через индекс Windows (OLE DB `Search.CollatorDSO`, `platform.search_index`), без
+него — по своему индексу «Загрузок», «Документов», «Рабочего стола», «Изображений», «Музыки», «Видео» и
+`config.include` (кэш — `cache/file_search_index.json`); `status {mode: index|own, index_available, files, scanning,
+indexed_at, truncated, index_error?}`. `search`: `text` — фраза по-русски («pdf в загрузках за неделю», «презентация
+про бюджет», «файлы со словом отчёт»), уточнения `kinds: [document|spreadsheet|presentation|image|video|audio|
+archive|pdf|folder]`, `date: today|yesterday|before_yesterday|week|last_week|7d|month|last_month|30d|year|
+last_year|365d`, `folder: downloads|documents|desktop|pictures|music|videos`, `sort: recent|relevance`, `content` —
+слова в тексте файлов; ответ `{query, items: FoundFile[], total, mode, content_skipped, parsed}`, `FoundFile = {path,
+name, kind (как в kinds или other), size, modified, folder, where}` (`where` — «Документы › Проекты»). `index` —
+номер в последних результатах (с 1). Голос: одно явное совпадение открывается сразу («Открываю …»; программу или
+сценарий — после подтверждения), несколько — карточка `results` и «Нашёл N — какой открыть?»: `ttl` секунд работают
+«открой второй», «номер три», «покажи первый в папке» (`plugin.file_search:pick:<n>` / `reveal:<n>`), ничего —
+«Не нашёл …». `box` — быстрый поиск в оверлее по хоткею (`toggle`), закрыть — `box {open: false}`. Jarvis AI:
+инструменты `find_files` и `open_file` (режим «Всё вместе»; путь не из `find_files` и программы — с подтверждением).
+
+Инструменты Jarvis AI от плагина: `ctx.ai.tools.register_provider(<id>, provider)` → отписка; `provider()` отдаёт
+список `Tool` (`jarvis.ai.tools`) и перечитывается при каждом ответе; встроенные инструменты не перекрываются, в
+режиме «Чат» берутся только `in_chat_mode`.
 
 Голосовые команды плагинов — динамические, id `plugin.<id>:<ключ>`; хоткей из `config.hotkey` регистрирует Electron
 и вызывает действие `toggle`.
@@ -367,3 +409,90 @@ fields?: [поля элемента списка] (kind list), secret?: имя, 
 | `plugin.<id>.<имя>` | события плагинов: `plugin.subtitles.text {text, translation}`, `plugin.dictation.state {state, text}`, `plugin.reader.progress {state, index, total, sentence}`, `plugin.summary.state {state, seconds}`, `plugin.pet.action {action}` … |
 | `fullscreen.changed` | `{fullscreen: bool}` — прятать оверлей и аватар над играми |
 | `remote.changed` | то же, что `GET /api/remote` |
+
+## 6. Сценарии (`jarvis/scenarios`, `jarvis/api/scenarios.py`)
+
+«Когда <триггер> [и <условия>] → сделать <действия>, сказать <фразу>». Хранятся в `kv` (`scenarios:item:<id>`,
+вместе со служебными `armed_at` и `marks`, которых API не отдаёт).
+
+```json
+{
+  "id": "3f9c0a1b2c3d4e5f",
+  "name": "Доброе утро",
+  "icon": "sunrise",
+  "enabled": true,
+  "triggers": [
+    {"type": "time", "at": "08:00", "weekdays": [0, 1, 2, 3, 4]},
+    {"type": "phrase", "phrases": ["доброе утро"]}
+  ],
+  "conditions": {"weekdays": [], "time_from": "", "time_to": ""},
+  "actions": [{"type": "Jarvis.Briefing", "value": ""}],
+  "say": "",
+  "template": "good_morning",
+  "last_run": 1792390800.0, "last_ok": true, "last_trigger": "time", "last_error": "",
+  "runs": 3, "created": 1792300000.0, "updated": 1792300000.0
+}
+```
+
+| Триггер `type` | Поля | Когда срабатывает |
+|---|---|---|
+| `time` | `at: "HH:MM"`, `weekdays: [0..6]` (0 — Пн; `[]` — каждый день) | в `at` по местному времени. Пропущенное, пока компьютер спал или Jarvis был выключен, — один раз, если опоздание меньше 10 минут, иначе пропуск. Новый или изменённый триггер (и снова включённый сценарий) прошлое не догоняет |
+| `interval` | `minutes: 1..1440`, `only_active: bool` | каждые N минут; после сна — один раз. `only_active` — считаются только минуты за компьютером (ввод не реже раза в 2 минуты), перерыв дольше 10 минут обнуляет счёт |
+| `phrase` | `phrases: string[]` (слоты как у команд: `{number}`, `{text}`…) | фраза — динамическая команда `scenarios:<id>` «Сценарий «…»» |
+| `jarvis_start` | — | при запуске ядра (по `core.ready`, один раз) |
+| `app_open` / `app_close` | `app` — название из «Пуска» или exe | программа открылась / закрылась (`platform.is_running` раз в ~3 с; открытая до запуска Jarvis — не событие) |
+| `idle_return` | `after_min: 1..1440` | человек вернулся после N минут без ввода (`platform.idle_seconds`) или после сна компьютера |
+| `battery_low` | `percent: 1..99` | заряд ≤ N% без зарядки (`system_stats`, раз в минуту); один раз за разрядку — снова после зарядки или подъёма на 3% |
+| `calendar_event` | `before_min: 0..1440` | за N минут до события календаря (кроме «весь день»); перенесённое событие — снова; опоздание больше 10 минут — пропуск |
+
+Условия (`conditions`) — дни недели и окно времени (`22:00`–`06:00` переходит через полночь; пусто — без
+ограничения); проверяются для всех триггеров, кроме ручного запуска. Сработавший триггер передаёт действиям слоты:
+`app_open`/`app_close` — `{app}`, `calendar_event` — `{text}` (название события) и `{number}` (минуты),
+`battery_low` — `{number}` (заряд), `idle_return` — `{number}` (минут отсутствия), фраза — свои слоты.
+
+Выполнение — исполнителем команд как своя команда человека (все действия, включая `Launch.Shell`; подтверждения
+вложенных `Jarvis.Command` — как обычно), затем `say` (`{address}` → обращение из профиля). Один сценарий не
+выполняется дважды одновременно: триггер во время выполнения пропускается, ручной запуск — 400 «Сценарий «…» уже
+выполняется». Итог — `scenario.run` и `scenarios.changed {op: "update"}` (`last_run`, `last_ok`, `runs`…). Сценарий,
+запущенный триггером или кнопкой, пишет `HistoryItem` (`source: "scenario"`, `text` — триггер: «Будни 8:00»,
+«Запуск вручную»; `command_id: "scenarios:<id>"`), тост `{title: "Сценарий «…»", message, status}` и говорит `say`
+(не в тихом режиме; ошибки не проговаривает). Фразу (голос, строка) записывает и озвучивает диспетчер, как любую
+команду.
+
+Голосом: фразы сценариев; «запусти / выполни сценарий {text}» (`scenarios:run` — вручную: без условий, и
+выключенный), «включи / выключи сценарий {text}» (`scenarios:enable` / `scenarios:disable`). Название ищется
+нечётко. Категория команд — `scenarios` («Сценарии»); пока сценариев нет, команд тоже нет.
+
+| Маршрут | Тело | Ответ |
+|---|---|---|
+| `GET /api/scenarios` | — | `{items: Scenario[]}` (по времени создания) |
+| `POST /api/scenarios` | `ScenarioIn` | `Scenario` |
+| `GET /api/scenarios/templates` | — | `{items: ScenarioTemplate[]}` |
+| `POST /api/scenarios/from-template` | `{template_id}` | `Scenario` (включённый; имя занято — «Доброе утро 2»); неизвестный шаблон — 404 |
+| `GET /api/scenarios/{id}` | — | `Scenario` |
+| `PATCH /api/scenarios/{id}` | часть `ScenarioIn` (`{enabled}` — включить/выключить) | `Scenario` |
+| `DELETE /api/scenarios/{id}` | — | `{ok}` |
+| `POST /api/scenarios/{id}/run` | — | `ExecResult` (`data.trigger: "manual"`); условия не проверяются |
+
+`ScenarioIn = {name, icon?, enabled? (true), triggers (1–10), conditions?, actions (до 60), say?, template?}` (`template` — id
+шаблона, если сценарий настроен из витрины; незнакомый не запоминается) — нужны действие
+или `say`; ошибка проверки — 400 с текстом («Триггер 2: время запуска пишется как «08:00»»), неизвестный id — 404,
+название — уникальное (без учёта регистра). `ScenarioTemplate = {id, name, icon, description, triggers,
+conditions, actions, say, added}` (`added` — сценарий из шаблона уже есть; `{address}` уже подставлен). Шаблоны:
+`good_morning` «Доброе утро», `leaving` «Ухожу», `game_mode` «Игровой режим», `end_of_day` «Конец рабочего дня»,
+`eye_break` «Перерыв для глаз», `welcome_back` «С возвращением».
+
+Значки сценариев (рисует интерфейс): `sparkles, sunrise, sunset, moon, door, gamepad, eye, wave, coffee, bolt,
+briefcase, battery, calendar, bell, music, home, rocket, heart, book, monitor` или ключ из §1 (`steam`…). В тостах
+и истории — ближайший ключ §1 (`sunrise` → `weather`, `door` → `lock`…).
+
+`Jarvis.Briefing` — «Сводка дня» без ИИ, `value`: `""` — приветствие по времени суток, дата, погода
+(`profile.city`), встречи и задачи на сегодня (с просроченными), курсы доллара и евро, 3 новости; `short` — без
+курсов и новостей; `tasks` — все незакрытые задачи; `missed` — «С возвращением» и напоминания (`reminder.fired`),
+сработавшие за время отсутствия (без известного ухода — за последний час). Текст — в `message` (тост), голосом —
+`say`; сбой сети — часть просто пропускается. Спросить ИИ — `Jarvis.Ask`, уведомление без голоса — `Notify`.
+
+| Событие | Данные |
+|---|---|
+| `scenarios.changed` | `{op: add\|update\|delete, item?, id?}` |
+| `scenario.run` | `{id, name, trigger: time\|interval\|phrase\|jarvis_start\|app_open\|app_close\|idle_return\|battery_low\|calendar_event\|manual, ok, error?, cancelled?}` |

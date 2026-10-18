@@ -26,6 +26,9 @@ IDS = [
     "second_pc",
     "notify_voice",
     "pet",
+    "focus",
+    "clipboard",
+    "file_search",
 ]
 PLUGIN_KEYS = {
     "id",
@@ -57,6 +60,9 @@ def test_list_describes_all_plugins(pctx: AppContext) -> None:
                 assert field["set"] is False and "default" not in field
         assert all({"id", "title"} == set(a) for a in item["actions"])
     json.dumps(items, ensure_ascii=False)  # всё сериализуется
+    autolock = next(i for i in items if i["id"] == "autolock")
+    away = next(f for f in autolock["schema"] if f["key"] == "away_seconds")
+    assert away["integer"] is True  # интерфейс показывает «20», а не «20,0»
     pet = next(i for i in items if i["id"] == "pet")
     assert pet["config"] == {
         "skin": "jelly",

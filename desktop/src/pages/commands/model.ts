@@ -24,6 +24,7 @@ import {
   Star,
   Timer,
   Volume2,
+  Workflow,
 } from "lucide-react";
 import type { ActionParam, ActionType, AppEntry, CommandAction, CommandInfo } from "@/api/types";
 
@@ -134,6 +135,7 @@ const CAT_ICON_BY_KEY: Record<string, LucideIcon> = {
   desks: LayoutDashboard,
   smarthome: House,
   clipboard: Clipboard,
+  scenarios: Workflow,
 };
 
 /** Ключ категории по id или русскому названию (для значка и особых фильтров). */

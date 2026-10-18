@@ -46,6 +46,7 @@ import {
   WeatherWidget,
 } from "./core";
 import { EXTRA_WIDGETS } from "./extra";
+import { FocusWidgetIcon } from "./extra/focus";
 
 export interface WidgetDef {
   type: string;
@@ -70,6 +71,7 @@ const DEFS: WidgetDef[] = [
   { type: "clock", title: "Часы", description: "Время и дата", icon: <Clock />, size: [1, 1] },
   { type: "timer", title: "Таймер", description: "Обратный отсчёт и помодоро", icon: <Timer />, size: [1, 1] },
   { type: "stopwatch", title: "Секундомер", description: "Замер времени", icon: <AlarmClock />, size: [1, 1] },
+  { type: "focus", title: "Фокус", description: "Помодоро: таймер фокуса и перерывов", icon: <FocusWidgetIcon />, size: [1, 2], min: [1, 1], max: [2, 2] },
   { type: "rates", title: "Курсы валют", description: "Курсы ЦБ и изменение", icon: <Coins />, size: [1, 2], min: [1, 1] },
   { type: "crypto", title: "Криптовалюта", description: "Bitcoin, Ethereum, TON…", icon: <Bitcoin />, size: [1, 2], min: [1, 1] },
   { type: "stocks", title: "Акции", description: "Мосбиржа: Сбер, Газпром…", icon: <CandlestickChart />, size: [1, 2], min: [1, 1] },

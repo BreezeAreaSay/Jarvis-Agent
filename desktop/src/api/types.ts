@@ -234,6 +234,77 @@ export interface AppEntry {
   source: string;
 }
 
+// --- сценарии (docs/CONTRACTS.md §6) ---------------------------------------------------------------
+export type ScenarioTrigger =
+  | { type: "time"; at: string; weekdays: number[] } // weekdays: 0 — Пн; [] — каждый день
+  | { type: "interval"; minutes: number; only_active: boolean }
+  | { type: "phrase"; phrases: string[] }
+  | { type: "jarvis_start" }
+  | { type: "app_open"; app: string }
+  | { type: "app_close"; app: string }
+  | { type: "idle_return"; after_min: number }
+  | { type: "battery_low"; percent: number }
+  | { type: "calendar_event"; before_min: number };
+
+export type ScenarioTriggerType = ScenarioTrigger["type"];
+
+export interface ScenarioConditions {
+  weekdays?: number[];
+  time_from?: string; // "HH:MM" или ""
+  time_to?: string;
+}
+
+export interface Scenario {
+  id: string;
+  name: string;
+  icon: string;
+  enabled: boolean;
+  triggers: ScenarioTrigger[];
+  conditions: ScenarioConditions;
+  actions: CommandAction[];
+  say: string;
+  template: string;
+  last_run: number | null;
+  last_ok: boolean | null;
+  last_trigger: string; // тип триггера или "manual"
+  last_error: string;
+  runs: number;
+  created: number;
+  updated: number;
+}
+
+export interface ScenarioIn {
+  name: string;
+  icon?: string;
+  enabled?: boolean;
+  triggers: ScenarioTrigger[];
+  conditions?: ScenarioConditions;
+  actions: CommandAction[];
+  say?: string;
+  template?: string; // id шаблона, из которого создан (только при создании)
+}
+
+export interface ScenarioTemplate {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  triggers: ScenarioTrigger[];
+  conditions: ScenarioConditions;
+  actions: CommandAction[];
+  say: string;
+  added: boolean;
+}
+
+export interface ScenarioRunEvent {
+  id: string;
+  name: string;
+  trigger: string;
+  ok: boolean;
+  error?: string;
+  cancelled?: boolean;
+}
+
 // --- ИИ --------------------------------------------------------------------------------------------
 export interface Chat {
   id: string;
@@ -452,4 +523,145 @@ export interface RemoteInfo {
     token_set?: boolean;
     error?: string;
   };
+}
+
+// --- «Умный буфер» (плагин clipboard): события plugin.clipboard.* и ответы действий -------------------------
+export interface ClipboardItem {
+  id: string;
+  text: string; // начало записи (до 400 знаков); целиком вставляется по id
+  chars: number;
+  ts: number;
+  pinned: boolean;
+}
+
+export interface ClipboardItems {
+  items: ClipboardItem[];
+  total: number;
+  pinned: number;
+  skipped?: number; // копий из менеджеров паролей, которые не запомнены
+}
+
+export interface ClipboardPalette extends ClipboardItems {
+  actions: { id: string; title: string }[];
+  at: { x: number; y: number } | null; // курсор, физические пиксели экрана
+  selection: string;
+  selection_chars: number;
+  target: { title: string; exe: string } | null;
+  ai: boolean;
+  hotkey: string;
+}
+
+export interface ClipboardResult {
+  id: string;
+  state: "working" | "done" | "replaced" | "error";
+  action: string;
+  title: string;
+  source: string;
+  text?: string;
+  error?: string;
+  at?: { x: number; y: number } | null;
+}
+
+// --- «Фокус» (plugin.focus.*) ---------------------------------------------------------------------------
+export type FocusPhase = "idle" | "focus" | "break" | "paused";
+
+/** Состояние «Фокуса»: событие plugin.focus.state и статус плагина (секунды интерфейс отсчитывает сам). */
+export interface FocusState {
+  phase: FocusPhase;
+  paused_from: "" | "focus" | "break";
+  reason: "" | "user" | "idle"; // почему пауза: сами или вас не было за компьютером
+  long_break: boolean;
+  left_s: number;
+  total_s: number;
+  ends_at: number | null; // unix-время конца, только пока таймер идёт
+  cycle: number; // номер текущего (или последнего) фокуса в серии
+  long_every: number;
+  next: "" | "focus" | "break" | "long_break";
+  waiting: boolean; // перерыв кончился, ждём следующий фокус
+  today_min: number;
+  today_sessions: number;
+  streak: number;
+  focus_min: number;
+  break_min: number;
+  long_break_min: number;
+  guard: "remind" | "close" | "off";
+  allowed: string[];
+}
+
+export interface FocusDay {
+  date: string; // YYYY-MM-DD
+  min: number;
+  sessions: number;
+}
+
+/** Статус плагина «Фокус» = состояние + статистика. */
+export interface FocusStatus extends FocusState {
+  week: FocusDay[]; // 7 дней, старые первыми
+  best: { date: string; min: number } | null;
+  distractions: number;
+  total_min: number;
+  total_sessions: number;
+}
+
+/** Карточка «Фокуса» в оверлее (plugin.focus.alert). */
+export interface FocusAlert {
+  kind: "focus_done" | "break_done" | "back" | "distraction";
+  title: string;
+  text: string;
+  phase: FocusPhase;
+  left_s: number;
+  ts: number;
+  minutes?: number; // focus_done
+  break_min?: number;
+  long?: boolean;
+  auto?: boolean; // break_done: следующий фокус начался сам
+  key?: string; // distraction: app:telegram | site:youtube
+  name?: string;
+  icon?: string;
+  site?: boolean;
+  closed?: boolean;
+}
+
+// --- «Поиск по ПК» (плагин file_search) -------------------------------------------------------------------
+
+/** Тип найденного: значок и фильтр. */
+export type FileKind =
+  | "document"
+  | "spreadsheet"
+  | "presentation"
+  | "image"
+  | "video"
+  | "audio"
+  | "archive"
+  | "pdf"
+  | "folder"
+  | "other";
+
+/** Найденный файл или папка (действие search, событие plugin.file_search.results). */
+export interface FoundFile {
+  path: string;
+  name: string;
+  kind: FileKind;
+  size: number; // байт; у папок 0
+  modified: number; // unix-время
+  folder: string; // где лежит
+  where: string; // она же для человека: «Документы › Проекты»
+}
+
+/** Ответ действия search: mode — где искали (индекс Windows или свой индекс Jarvis). */
+export interface FileSearchResult {
+  ok: boolean;
+  query: string;
+  items: FoundFile[];
+  total: number;
+  mode: "index" | "own";
+  content_skipped?: boolean; // текст файлов не просматривался (свой индекс) — искали в именах
+}
+
+/** Карточка голосового поиска в оверлее (plugin.file_search.results): ttl — сколько ждём «открой второй». */
+export interface FileSearchCard {
+  query: string;
+  items: FoundFile[];
+  total: number;
+  ttl: number;
 }

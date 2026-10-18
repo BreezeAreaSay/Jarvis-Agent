@@ -1,0 +1,1207 @@
+/* «Сценарии» (раздел «Команды»): карточки, витрина шаблонов, редактор с триггерами. Цвета интерфейса — только
+   переменные темы; градиенты значков сценариев (--sc-from / --sc-to) — как фирменные цвета программ. */
+
+@keyframes sc-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(var(--r, 0deg));
+  }
+  50% {
+    transform: translateY(-7px) rotate(var(--r, 0deg));
+  }
+}
+
+@keyframes sc-ran {
+  0% {
+    box-shadow:
+      var(--shadow-1),
+      0 0 0 0 rgba(52, 211, 153, 0);
+  }
+  30% {
+    box-shadow:
+      var(--shadow-1),
+      0 0 0 3px rgba(52, 211, 153, 0.45);
+  }
+  100% {
+    box-shadow:
+      var(--shadow-1),
+      0 0 0 0 rgba(52, 211, 153, 0);
+  }
+}
+
+@keyframes sc-ran-err {
+  30% {
+    box-shadow:
+      var(--shadow-1),
+      0 0 0 3px rgba(248, 113, 113, 0.45);
+  }
+}
+
+@keyframes sc-flash {
+  0% {
+    border-color: rgba(var(--accent-rgb), 0.8);
+    box-shadow:
+      var(--shadow-1),
+      0 0 0 3px rgba(var(--accent-rgb), 0.3);
+  }
+  100% {
+    border-color: var(--line);
+    box-shadow: var(--shadow-1);
+  }
+}
+
+@keyframes sc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+:root[data-anim="off"] .sc-hero-tile,
+:root[data-anim="off"] .sc-card,
+:root[data-anim="off"] .sc-tpl {
+  animation: none !important;
+}
+
+/* --- значок сценария ------------------------------------------------------------------------------- */
+.sc-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: #fff;
+  background:
+    radial-gradient(circle at 28% 18%, rgba(255, 255, 255, 0.32), transparent 58%),
+    linear-gradient(145deg, var(--sc-from), var(--sc-to));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 8px 20px -10px var(--sc-to);
+}
+
+.sc-icon svg {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+}
+
+/* --- чипы триггеров --------------------------------------------------------------------------------- */
+.sc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  height: 23px;
+  padding: 0 9px 0 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.sc-chip svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--accent-text);
+}
+
+.sc-chip.more {
+  color: var(--text-3);
+  background: transparent;
+}
+
+.sc-chip.cond {
+  background: transparent;
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--text-3);
+}
+
+.sc-chip.cond svg {
+  color: var(--text-3);
+}
+
+/* --- список ---------------------------------------------------------------------------------------- */
+.sc-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 12px;
+}
+
+.sc-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+  gap: 12px;
+}
+
+.sc-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 14px 10px;
+  border-radius: 16px;
+  background:
+    radial-gradient(300px 150px at 0% 0%, color-mix(in srgb, var(--sc-from, var(--accent)) 13%, transparent), transparent 72%),
+    var(--panel);
+  backdrop-filter: blur(var(--glass-blur)) saturate(135%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(135%);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-1);
+  animation: fade-in var(--t-med) var(--ease) both;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+
+.sc-card:hover {
+  border-color: var(--line-strong);
+}
+
+.sc-card.skeleton {
+  height: 128px;
+}
+
+.sc-card.flash {
+  animation: sc-flash 1.8s var(--ease) both;
+}
+
+.sc-card.ran {
+  animation: sc-ran 1.6s var(--ease) both;
+}
+
+.sc-card.ran-err {
+  animation: sc-ran-err 1.6s var(--ease) both;
+}
+
+.sc-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.sc-card-top > .toggle {
+  margin-top: 4px;
+}
+
+.sc-card-hit {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  text-align: left;
+  border-radius: 12px;
+}
+
+.sc-card-hit:focus-visible {
+  outline-offset: 3px;
+}
+
+.sc-card-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.sc-card-name {
+  font-weight: 680;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.sc-card.off .sc-card-hit,
+.sc-card.off .sc-card-do {
+  opacity: 0.5;
+}
+
+.sc-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.sc-card-do {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.sc-card-do > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--text-3);
+}
+
+.sc-last {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-last-mark {
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.sc-last.err {
+  color: var(--err);
+}
+
+.sc-last-x {
+  width: 13px;
+  height: 13px;
+}
+
+.sc-last.never {
+  font-style: italic;
+  color: var(--text-4);
+}
+
+.sc-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.sc-card-actions .icon-btn.ghost {
+  color: var(--text-3);
+}
+
+.sc-card-actions .icon-btn.ghost:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.sc-card-add {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 128px;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: 1.5px dashed rgba(255, 255, 255, 0.12);
+  box-shadow: none;
+  color: var(--text-2);
+  text-align: left;
+}
+
+.sc-card-add:hover {
+  border-color: rgba(var(--accent-rgb), 0.55);
+  background: rgba(var(--accent-rgb), 0.05);
+  color: var(--text);
+}
+
+.sc-add-plus {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.sc-add-plus svg {
+  width: 22px;
+  height: 22px;
+}
+
+.sc-add-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.sc-add-text b {
+  font-size: 14.5px;
+  color: var(--text);
+}
+
+/* --- витрина (пустой раздел) --------------------------------------------------------------------------- */
+.sc-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sc-hero {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  min-height: 214px;
+  padding: 28px 30px;
+  border-radius: 18px;
+  background:
+    radial-gradient(520px 260px at 0% 0%, rgba(var(--accent-rgb), 0.22), transparent 70%),
+    radial-gradient(420px 260px at 100% 100%, rgba(255, 140, 90, 0.1), transparent 70%),
+    var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-1);
+  isolation: isolate;
+}
+
+.sc-hero-orbit {
+  position: absolute;
+  top: -36px;
+  right: -10px;
+  bottom: -36px;
+  width: 52%;
+  z-index: -1;
+  display: grid;
+  grid-template-columns: repeat(3, 84px);
+  align-content: center;
+  justify-content: center;
+  gap: 22px 30px;
+  pointer-events: none;
+  transform: rotate(-10deg);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 38%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 38%);
+}
+
+.sc-hero-tile {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  opacity: 0.85;
+  animation: sc-float 6.5s ease-in-out infinite;
+  animation-delay: calc(var(--i) * -0.7s);
+}
+
+.sc-hero-tile:nth-child(2n) {
+  --r: 6deg;
+  opacity: 0.6;
+}
+
+.sc-hero-tile:nth-child(3n) {
+  --r: -5deg;
+}
+
+.sc-hero-body {
+  position: relative;
+  max-width: 500px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sc-hero-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 30px;
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+}
+
+.sc-hero-lead {
+  margin: 0;
+  max-width: 440px;
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.sc-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.sc-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.sc-section-title svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* --- карточки шаблонов --------------------------------------------------------------------------------- */
+.sc-tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+  padding-bottom: 6px;
+}
+
+.sc-tpl-grid.compact {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.sc-tpl {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border-radius: 16px;
+  background:
+    radial-gradient(260px 160px at 0% 0%, color-mix(in srgb, var(--sc-from, var(--accent)) 20%, transparent), transparent 72%),
+    radial-gradient(240px 140px at 100% 100%, color-mix(in srgb, var(--sc-to, var(--accent)) 10%, transparent), transparent 72%),
+    var(--panel);
+  backdrop-filter: blur(var(--glass-blur)) saturate(135%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(135%);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-1);
+  animation: fade-in var(--t-med) var(--ease) both;
+  transition:
+    transform var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.sc-tpl:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--sc-from, var(--accent)) 45%, var(--line-strong));
+}
+
+.sc-tpl.skeleton {
+  height: 214px;
+}
+
+.sc-tpl.added {
+  border-color: rgba(52, 211, 153, 0.22);
+}
+
+.sc-tpl-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  text-align: left;
+  border-radius: 12px;
+}
+
+.sc-tpl-main .sc-icon {
+  margin-bottom: 4px;
+}
+
+.sc-tpl-name {
+  font-weight: 720;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.sc-tpl-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 3em;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.sc-tpl-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.sc-tpl-add.btn,
+.sc-tpl-edit.btn {
+  height: 32px;
+  border-radius: 10px;
+}
+
+.sc-tpl-add svg,
+.sc-tpl-edit svg {
+  width: 15px;
+  height: 15px;
+}
+
+.sc-tpl-edit.btn {
+  color: var(--text-2);
+}
+
+.sc-tpl-added {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--ok-soft);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  color: #a7f3d0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sc-tpl-added svg {
+  width: 15px;
+  height: 15px;
+}
+
+.sc-modal-lead {
+  margin: 0 0 14px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+/* --- редактор --------------------------------------------------------------------------------------- */
+.sc-editor-page .page-body {
+  overflow: auto;
+}
+
+.sc-ed-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 24px;
+}
+
+.sc-ed-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.sc-ed-icon {
+  border-radius: 16px;
+}
+
+.sc-ed-name {
+  flex: 1 1 280px;
+  max-width: 560px;
+}
+
+.sc-ed-enabled {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+  padding: 8px 10px 8px 14px;
+  border-radius: 12px;
+  background: var(--row);
+  border: 1px solid rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.sc-ed-enabled > span {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+}
+
+.sc-ed-enabled b {
+  font-size: 13.5px;
+  font-weight: 620;
+}
+
+.sc-ed-del.icon-btn:hover:not(:disabled) {
+  color: var(--err);
+  background: var(--err-soft);
+}
+
+.sc-ed-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.sc-ed-section {
+  transition: border-color var(--t-fast) var(--ease);
+}
+
+.sc-ed-section.invalid {
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
+.sc-sec-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  margin-bottom: 12px;
+}
+
+.sc-sec-n {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 12.5px;
+  font-weight: 800;
+}
+
+.sc-sec-name {
+  font-weight: 700;
+  font-size: 15.5px;
+}
+
+.sc-sec-hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.sc-sec-title .btn-sm svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* строки триггеров */
+.sc-trig-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sc-trig {
+  padding: 10px 10px 12px 12px;
+  border-radius: 12px;
+  background: var(--field);
+  border: 1px solid var(--line);
+  animation: fade-in var(--t-med) var(--ease) both;
+  transition: border-color var(--t-fast) var(--ease);
+}
+
+.sc-trig:hover {
+  border-color: var(--line-strong);
+}
+
+.sc-trig:focus-within {
+  border-color: rgba(var(--accent-rgb), 0.45);
+}
+
+.sc-trig.invalid {
+  border-color: rgba(248, 113, 113, 0.55);
+}
+
+.sc-trig-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.sc-trig-ico {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.sc-trig-ico svg {
+  width: 15px;
+  height: 15px;
+}
+
+.sc-trig-title {
+  flex: none;
+  font-size: 13.5px;
+  font-weight: 620;
+}
+
+.sc-trig-label {
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.sc-trig-x {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.sc-trig-x svg {
+  width: 15px;
+  height: 15px;
+}
+
+.sc-trig-x:hover {
+  background: var(--err-soft);
+  color: var(--err);
+}
+
+.sc-trig-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 10px;
+  padding-left: 37px;
+}
+
+.sc-trig-err {
+  margin-top: 7px;
+  padding-left: 37px;
+  font-size: 12px;
+  color: var(--err);
+}
+
+.sc-trig-option.pop-item {
+  padding: 3px 8px;
+}
+
+.sc-trig-option .sc-trig-ico {
+  width: 26px;
+  height: 26px;
+}
+
+.sc-timebox {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 9px;
+  background: rgba(14, 16, 21, 0.5);
+  border: 1px solid var(--line-strong);
+  transition: border-color var(--t-fast) var(--ease);
+}
+
+.sc-timebox:focus-within {
+  border-color: rgba(var(--accent-rgb), 0.6);
+}
+
+.sc-timebox.invalid {
+  border-color: rgba(248, 113, 113, 0.6);
+}
+
+.sc-timebox > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--text-3);
+}
+
+.sc-time-input {
+  width: 46px;
+  height: 100%;
+  background: none;
+  border: 0;
+  outline: none;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.sc-time-input::placeholder {
+  color: var(--text-4);
+  font-weight: 500;
+}
+
+.sc-days {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.sc-day {
+  width: 34px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 620;
+  color: var(--text-3);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.sc-days.sm .sc-day {
+  width: 32px;
+  height: 28px;
+}
+
+.sc-day:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.sc-day.on {
+  background: rgba(var(--accent-rgb), 0.18);
+  border-color: rgba(var(--accent-rgb), 0.5);
+  color: var(--accent-text);
+}
+
+.sc-day.weekend:not(.on) {
+  color: var(--text-4);
+}
+
+.sc-presets {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.sc-preset {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--text-3);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.sc-preset:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.sc-preset.on {
+  color: var(--accent-text);
+}
+
+.sc-form-text {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.sc-form-note {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.sc-num {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding-right: 10px;
+  border-radius: 9px;
+  background: rgba(14, 16, 21, 0.5);
+  border: 1px solid var(--line-strong);
+  transition: border-color var(--t-fast) var(--ease);
+}
+
+.sc-num:focus-within {
+  border-color: rgba(var(--accent-rgb), 0.6);
+}
+
+.sc-num.invalid {
+  border-color: rgba(248, 113, 113, 0.6);
+}
+
+.sc-num-input {
+  width: 54px;
+  height: 100%;
+  background: none;
+  border: 0;
+  outline: none;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.sc-num-suffix {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.sc-tags {
+  flex: 1 1 320px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 5px 6px;
+  border-radius: 10px;
+  background: rgba(14, 16, 21, 0.5);
+  border: 1px solid var(--line-strong);
+  cursor: text;
+  transition: border-color var(--t-fast) var(--ease);
+}
+
+.sc-tags:focus-within {
+  border-color: rgba(var(--accent-rgb), 0.6);
+}
+
+.sc-trig.invalid .sc-tags {
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
+.sc-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 3px 0 10px;
+  border-radius: 8px;
+  background: rgba(var(--accent-rgb), 0.14);
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.sc-tag button {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+
+.sc-tag button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+.sc-tag svg {
+  width: 13px;
+  height: 13px;
+}
+
+.sc-tags-input {
+  flex: 1 1 180px;
+  min-width: 140px;
+  height: 26px;
+  padding: 0 6px;
+  background: none;
+  border: 0;
+  outline: none;
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.sc-tags-input::placeholder {
+  color: var(--text-4);
+}
+
+.sc-app-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 230px;
+  max-width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 9px;
+  background: rgba(14, 16, 21, 0.5);
+  border: 1px solid var(--line-strong);
+  font-size: 13.5px;
+  color: var(--text);
+  text-align: left;
+  transition: border-color var(--t-fast) var(--ease);
+}
+
+.sc-app-btn:hover,
+.sc-app-btn[aria-expanded="true"] {
+  border-color: rgba(var(--accent-rgb), 0.55);
+}
+
+.sc-app-btn.placeholder {
+  color: var(--text-3);
+}
+
+.sc-trig.invalid .sc-app-btn {
+  border-color: rgba(248, 113, 113, 0.55);
+}
+
+.sc-app-btn .ellipsis {
+  flex: 1;
+  min-width: 0;
+}
+
+.sc-app-chev {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--text-3);
+}
+
+.sc-pop-refresh {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+
+.sc-pop-refresh:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+}
+
+.sc-pop-refresh.spin svg {
+  animation: sc-spin 0.9s linear infinite;
+}
+
+.sc-when-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 14px;
+  border-radius: 14px;
+  border: 1.5px dashed rgba(255, 255, 255, 0.1);
+  text-align: center;
+}
+
+.sc-ed-section.invalid .sc-when-empty,
+.sc-ed-section.invalid .sc-do-empty {
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
+.sc-when-empty-text {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.sc-more-btn.btn {
+  height: 32px;
+  min-height: 0;
+}
+
+.sc-more-btn svg {
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
+}
+
+/* условия */
+.sc-cond-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.sc-cond-label {
+  width: 86px;
+  flex: none;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.sc-cond-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.sc-cond-note {
+  margin-top: 4px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--row);
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.sc-cond-note.on {
+  color: var(--accent-text);
+  background: var(--accent-softer);
+}
+
+/* действия и фраза */
+.sc-do-empty.ed-empty {
+  height: auto;
+  min-height: 0;
+  padding: 22px 16px;
+}
+
+.sc-say {
+  margin-top: 14px;
+}
+
+.sc-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+
+/* --- узкое окно -------------------------------------------------------------------------------------- */
+@media (max-width: 1100px) {
+  .sc-ed-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1000px) {
+  .sc-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sc-hero-orbit {
+    opacity: 0.45;
+  }
+}

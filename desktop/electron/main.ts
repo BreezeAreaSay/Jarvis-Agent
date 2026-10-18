@@ -314,11 +314,27 @@ function registerShortcuts() {
   };
   bind(settings?.system?.hotkey_show, () => (mainWin?.isVisible() && mainWin.isFocused() ? mainWin.hide() : showMain()));
   bind(settings?.system?.hotkey_listen, () => api("POST", "/api/voice/listen"));
-  const plugins = settings?.plugins ?? {};
-  for (const [id, state] of Object.entries<any>(plugins)) {
-    const hotkey = state?.enabled ? state?.config?.hotkey : "";
-    if (hotkey) bind(String(hotkey), () => api("POST", `/api/plugins/${id}/action`, { action: "toggle", args: {} }));
+  // из ядра — действующие настройки с умолчаниями (сохранённые могут не содержать клавишу по умолчанию)
+  const hotkeys =
+    pluginHotkeys ??
+    Object.entries<any>(settings?.plugins ?? {})
+      .filter(([, state]) => state?.enabled && state?.config?.hotkey)
+      .map(([id, state]) => ({ id, hotkey: String(state.config.hotkey) }));
+  for (const { id, hotkey } of hotkeys) {
+    bind(hotkey, () => api("POST", `/api/plugins/${id}/action`, { action: "toggle", args: {} }));
   }
+}
+
+let pluginHotkeys: { id: string; hotkey: string }[] | null = null;
+
+async function loadPluginHotkeys() {
+  const res = await api("GET", "/api/plugins");
+  if (Array.isArray(res?.items)) {
+    pluginHotkeys = res.items
+      .filter((p: any) => p?.enabled && p?.config?.hotkey)
+      .map((p: any) => ({ id: String(p.id), hotkey: String(p.config.hotkey) }));
+  }
+  registerShortcuts();
 }
 
 // --- обновления: только проверка и ссылка, скачивает и ставит человек ------------------------------------------
@@ -376,9 +392,11 @@ function applySettings(next: any) {
 
 client.on("hello", (data) => {
   applySettings(data.settings);
+  void loadPluginHotkeys();
   setTimeout(checkUpdates, 15_000);
 });
 client.on("settings.changed", (data) => applySettings(data.settings));
+client.on("plugins.changed", () => void loadPluginHotkeys());
 client.on("fullscreen.changed", (data) => {
   fullscreen = !!data.fullscreen;
   syncAvatar();
@@ -509,6 +527,18 @@ function pickPoint(): Promise<{ x: number; y: number } | null> {
 }
 
 ipcMain.handle("screen:pick-point", () => pickPoint());
+
+// палитра буфера и быстрый поиск файлов просят клавиатуру на время ввода, потом отдают её обратно
+ipcMain.on("overlay:focus", (_e, focus: boolean) => {
+  if (!overlayWin) return;
+  if (focus) {
+    overlayWin.setFocusable(true);
+    overlayWin.focus();
+  } else {
+    overlayWin.blur();
+    overlayWin.setFocusable(false);
+  }
+});
 
 // оверлей подписался на границы позже, чем они ушли при загрузке, — прислать ещё раз
 ipcMain.on("overlay:ready", () => {

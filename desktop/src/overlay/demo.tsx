@@ -1,13 +1,18 @@
 // Демо-режим оверлея (?demo=1 или ?demo=<сцена>): подставные события, чтобы посмотреть оверлей в обычном
 // браузере и снять скриншоты. Только в демо у страницы тёмный фон и «окно» «Документы» для питомца.
 // Сцены: all, voice, confirm, agent, agent-run, plugins, pet, pet-window, pet-dance, pet-eat, pet-sleep,
-// pet-cat, pet-ghost.
+// pet-cat, pet-ghost, clipboard (палитра «Умного буфера»), clipboard-result (карточка итога ИИ),
+// focus (таймер «Фокуса», «Telegram подождёт…», через 5 с — «Время перерыва»), files (карточка «Поиска по ПК»
+// с номерами), files-box (быстрый поиск по горячей клавише).
 import { FileText } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { Confirmation } from "@/api/types";
 import { levels } from "@/lib/levels";
 import { useApp } from "@/store/app";
 import { emitOverlay } from "./bus";
+import { ClipboardDemoDoc, clipboardDemo } from "./ClipboardOverlay";
+import { fileSearchDemo } from "./FileSearch";
+import { focusDemo } from "./Focus";
 import type { Bounds } from "./common";
 
 const SENTENCES = [
@@ -181,6 +186,10 @@ export function startDemo(scene: string, windowRect: () => DOMRect | null, bound
     });
   }
 
+  if (scene.startsWith("clipboard")) clipboardDemo(scene, at);
+  if (scene === "focus") focusDemo(at);
+  if (scene.startsWith("files")) fileSearchDemo(scene, at);
+
   return () => {
     for (const t of timers) {
       clearTimeout(t);
@@ -208,6 +217,7 @@ export function DemoBackdrop({ scene, windowRef }: { scene: string; windowRef: R
           <i />
         </div>
       )}
+      {scene.startsWith("clipboard") && <ClipboardDemoDoc />}
     </div>
   );
 }

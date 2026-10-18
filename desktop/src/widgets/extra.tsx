@@ -5,6 +5,7 @@ import "@/styles/widgets-extra.css";
 import type { ComponentType } from "react";
 import type { WidgetProps } from "./common";
 import { CryptoWidget, StocksWidget } from "./extra/finance";
+import { FocusWidget } from "./extra/focus";
 import { AppsWidget, QuickWidget, RecentWidget } from "./extra/launch";
 import { AiWidget, DeskLinksWidget, PetWidget, PluginsWidget } from "./extra/misc";
 import { NewsWidget } from "./extra/news";
@@ -34,5 +35,6 @@ export const EXTRA_WIDGETS: Record<string, ComponentType<WidgetProps>> = {
   notes: NotesWidget,
   timer: TimerWidget,
   stopwatch: StopwatchWidget,
+  focus: FocusWidget,
   activity: ActivityWidget,
 };

@@ -6,10 +6,13 @@ import { useRef } from "react";
 import { useApp } from "@/store/app";
 import { cx } from "@/ui";
 import { AgentPanel } from "./AgentPanel";
+import { ClipboardOverlay } from "./ClipboardOverlay";
 import { useClickThrough } from "./clickthrough";
 import { type Bounds, DEMO, useBounds, useFullscreenHide, useUiZoom } from "./common";
 import { Confirmations } from "./Confirm";
 import { DemoBackdrop, useDemo } from "./demo";
+import { FileSearchOverlay } from "./FileSearch";
+import { FocusOverlay } from "./Focus";
 import { Pet } from "./pet/Pet";
 import { DictationPill, ReaderPlayer, Subtitles, SummaryBadge } from "./PluginViews";
 import { Toasts } from "./Toasts";
@@ -56,12 +59,15 @@ export default function OverlayApp() {
       <ReaderPlayer hidden={hidden} bottom={readerBottom} />
       <Pet hidden={hidden} />
       <SummaryBadge hidden={hidden} />
+      <FocusOverlay hidden={hidden} />
       <div className="ov-top">
         <VoicePill hidden={hidden} />
         <AgentPanel hidden={hidden} />
+        <FileSearchOverlay hidden={hidden} />
         <Confirmations />
         <Toasts hidden={hidden} />
       </div>
+      <ClipboardOverlay />
     </div>
   );
 }

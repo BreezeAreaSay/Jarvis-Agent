@@ -322,3 +322,17 @@ async def test_stop_all_cancels_running_answers(ctx: AppContext, llm: ScriptedLl
     result = await asyncio.wait_for(task, 5)
     assert result.error == "Остановлено"
     assert ctx.ai.stop_all() == 0  # type: ignore[attr-defined]
+
+
+async def test_ai_configured_event_follows_key_and_provider(ctx: AppContext, events: EventLog) -> None:
+    await ctx.ai.start()
+    try:
+        assert not ctx.ai.configured
+        ctx.secrets.set("ai_api_key", "sk-test")
+        ctx.settings.patch({"profile": {"name": "Тони"}})  # не про ИИ — события нет
+        ctx.settings.patch({"ai": {"provider": "ollama"}})  # локальной модели ключ не нужен — уже настроено
+        ctx.secrets.set("ai_api_key", "")
+        ctx.settings.patch({"ai": {"provider": "openai"}})
+        assert events.of("ai.configured") == [{"configured": True}, {"configured": False}]
+    finally:
+        await ctx.ai.stop()

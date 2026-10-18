@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -197,6 +198,8 @@ class Ai(BaseService):
         self.tools = ToolRegistry(ctx)
         self._locks: dict[str, asyncio.Lock] = {}
         self._tasks: dict[str, set[asyncio.Task[Any]]] = {}
+        self._configured: bool | None = None
+        self._unsubs: list[Callable[[], None]] = []
 
     def set_transport(self, transport: Any) -> None:
         """Подменить сеть (тесты): запросы к модели и инструментов пойдут через transport."""
@@ -207,7 +210,29 @@ class Ai(BaseService):
     def configured(self) -> bool:
         return self.llm.configured
 
+    def refresh_configured(self) -> bool:
+        """Перепроверить «ИИ настроен» (ключ, адрес, вход); изменилось — событие ai.configured."""
+        now = self.configured
+        if now != self._configured:
+            self._configured = now
+            self.ctx.bus.publish("ai.configured", {"configured": now})
+        return now
+
+    async def start(self) -> None:
+        self._configured = self.configured
+        self._unsubs += [
+            self.ctx.settings.on_change(self._on_settings),
+            self.ctx.bus.on("secrets.changed", lambda _e: self.refresh_configured()),
+        ]
+
+    def _on_settings(self, old: Any, new: Any) -> None:
+        if old.ai != new.ai:
+            self.refresh_configured()
+
     async def stop(self) -> None:
+        for off in self._unsubs:
+            off()
+        self._unsubs.clear()
         tasks = [t for group in self._tasks.values() for t in group if not t.done()]
         for task in tasks:
             task.cancel()

@@ -48,6 +48,11 @@ body.material .app-root {
   z-index: 2;
 }
 
+.sidebar.locked .nav-btn,
+.sidebar.locked .logo {
+  opacity: 0.35;
+}
+
 .sidebar .logo {
   margin-bottom: 18px;
   -webkit-app-region: no-drag;

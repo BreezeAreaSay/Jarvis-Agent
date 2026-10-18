@@ -139,14 +139,17 @@ export function Orb({ className, logo = true, reactivity = 1, scale = 0.46, colo
       t += dt * (0.55 + energy * 0.9 + (processing ? 0.8 : 0));
 
       ctx.clearRect(0, 0, w, h);
+      if (w < 4 || h < 4) {
+        raf = 0; // холст свёрнут или уже снят со страницы — цикл перезапустит ResizeObserver
+        return;
+      }
       const cx = w / 2;
       const cy = h / 2;
       const R = Math.min(w, h) * o.scale;
       const breathe = 1 + 0.018 * Math.sin(t * 0.9) + 0.07 * energy + 0.06 * flash;
 
-      // ореол
       // ореол гаснет до края холста, иначе виден квадрат
-      const glowR = Math.min(R * 1.45, Math.min(w, h) / 2 - 1);
+      const glowR = Math.max(R * 0.2 + 1, Math.min(R * 1.45, Math.min(w, h) / 2 - 1));
       const glow = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, glowR);
       glow.addColorStop(0, `rgba(${shade(rgb, -0.1)}, ${0.22 + 0.12 * energy + 0.2 * flash})`);
       glow.addColorStop(1, `rgba(${shade(rgb, -0.4)}, 0)`);

@@ -212,7 +212,7 @@ label, placeholder?, options?}], description}`.
 | `DELETE /api/chats/{id}` | — | `{ok}` |
 | `POST /api/chats/{id}/messages` | `{text, images?: [dataURL], mode?}` | `{chat_id, message_id, reply_id}` — ответ идёт событиями (`chat.delta` с `message_id = reply_id`) |
 | `POST /api/chats/{id}/stop` | — | `{ok}` |
-| `POST /api/agent/run` | `{task}` | `{run_id}` |
+| `POST /api/agent/run` | `{task}` | `{run_id}` — задача агенту в новом чате; из открытого чата агент запускается сообщением с `mode: "agent"` |
 | `POST /api/agent/stop` | — | `{ok}` |
 | `GET /api/agent` | — | состояние текущего запуска (как `agent.state`) или `null` |
 | `GET/POST /api/memory`, `DELETE /api/memory/{id}` | `{text}` | `{items}` / item |
@@ -227,7 +227,8 @@ label, placeholder?, options?}], description}`.
 
 `Chat = {id, title, kind: chat|voice, mode: chat|all|agent, model, pinned, created, updated}`.
 `UiMessage = {id, chat_id, role: user|assistant, content, created, meta: {sources?: [{title, url}],
-actions?: [{title, ok, detail?}], memory?: [string], images?: [string], error?, usage?}}`.
+actions?: [{title, ok, detail?}], memory?: [string], images?: [string], error?, usage?, stopped?,
+agent?: {run_id, status, steps, plan}}}` — `stopped` — ответ оборван «Стопом», `agent` — итог запуска агента.
 `McpServer = {id, name, transport: stdio|http, command, args, env, url, headers, enabled, status: connected|connecting|
 error|disabled, error, tools: [{name, description}]}` — секретные `env`/`headers` приходят замаскированными; маска,
 вернувшаяся при сохранении, оставляет прежнее значение.
@@ -249,6 +250,7 @@ error|disabled, error, tools: [{name, description}]}` — секретные `en
 | `agent.state` | `{run_id, task, status: planning\|running\|waiting\|done\|stopped\|error, step, total, text}` |
 | `agent.step` | `{run_id, index, title, status: running\|ok\|error}` |
 | `mcp.status` | `{server_id, status, error?, tools_count}` |
+| `ai.configured` | `{configured}` — изменилось «ИИ настроен» (ключ, провайдер, адрес, вход в ChatGPT) |
 
 Подтверждения агента — общий механизм `ctx.confirmations.request(..., kind="agent")` (события `confirm.*`).
 Фраза «агент, …» отправляет задачу агенту в любом режиме чата; «стоп» останавливает и ответ ИИ, и агента.

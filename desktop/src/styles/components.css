@@ -19,6 +19,13 @@
   min-width: 0;
 }
 
+/* открытое выпадающее меню не прячется под следующей стеклянной карточкой */
+.card:has(.select-menu),
+.radio-card:has(.select-menu) {
+  position: relative;
+  z-index: 6;
+}
+
 .card-title {
   display: flex;
   align-items: center;

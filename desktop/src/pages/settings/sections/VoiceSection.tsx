@@ -47,6 +47,25 @@ const ASR_OPTIONS: { value: Settings["voice"]["asr_model"]; label: string; hint:
   { value: "vosk-small", label: "Vosk small", hint: "лёгкая" },
 ];
 
+const LANGUAGE_OPTIONS: { value: Settings["voice"]["language"]; label: string; hint?: string }[] = [
+  { value: "ru", label: "Русский", hint: "точнее всего" },
+  { value: "auto", label: "Определять самому", hint: "Whisper" },
+  { value: "en", label: "Английский" },
+  { value: "uk", label: "Украинский" },
+  { value: "de", label: "Немецкий" },
+  { value: "fr", label: "Французский" },
+  { value: "es", label: "Испанский" },
+  { value: "it", label: "Итальянский" },
+  { value: "pt", label: "Португальский" },
+  { value: "pl", label: "Польский" },
+  { value: "tr", label: "Турецкий" },
+  { value: "ja", label: "Японский" },
+  { value: "ko", label: "Корейский" },
+  { value: "zh", label: "Китайский" },
+];
+
+const fmtSeconds = (ms: number) => `${String(Number((ms / 1000).toFixed(2))).replace(".", ",")} с`;
+
 /** Полоса «Приватно и быстро»: распознавание на ПК, без интернета, живой уровень микрофона. */
 function VoiceHero() {
   const [settings, patch] = useSettingsPatch();
@@ -139,7 +158,31 @@ function MicrophoneCard() {
           onCommit={(x) => patch({ voice: { sensitivity: Math.round(x) / 100 } })}
         />
       </Setting>
-      <Setting name="Модель распознавания" desc="Работает на вашем ПК — без интернета">
+      <Setting
+        name="Пауза в конце фразы"
+        desc="Столько тишины значит «я договорил». Говорите с паузами — прибавьте; фраза, оборванная на «открой…», и так ждёт продолжения"
+        wide
+      >
+        <Slider
+          value={v.end_silence_ms}
+          min={300}
+          max={2000}
+          step={50}
+          format={fmtSeconds}
+          onCommit={(x) => patch({ voice: { end_silence_ms: Math.round(x / 50) * 50 } })}
+        />
+      </Setting>
+      <Setting
+        name="Язык команд"
+        desc={
+          v.language === "ru"
+            ? "Русский распознаёт GigaAM — точнее и быстрее всего"
+            : "Распознаёт Whisper (скачается сам, ~200 МБ; пока его нет — слушаю по-русски). Встроенные команды Jarvis — русские: фразы на другом языке выполняет Jarvis AI"
+        }
+      >
+        <Select value={v.language} width={250} options={LANGUAGE_OPTIONS} onChange={(l) => patch({ voice: { language: l } })} />
+      </Setting>
+      <Setting name="Модель распознавания" desc={v.language === "ru" ? "Работает на вашем ПК — без интернета" : "Для русского языка команд"}>
         <Select
           value={v.asr_model}
           width={250}
@@ -164,16 +207,20 @@ function WakeCard() {
       <Setting
         name="Слова-активаторы"
         desc={
-          suggest ? (
-            <>
-              Добавьте и имя ассистента —{" "}
-              <button type="button" className="link-btn" onClick={() => patch({ voice: { wake_words: [...v.wake_words, suggest] } })}>
-                «{suggest}»
-              </button>
-            </>
-          ) : (
-            "Enter — добавить слово"
-          )
+          <>
+            {suggest ? (
+              <>
+                Добавьте и имя ассистента —{" "}
+                <button type="button" className="link-btn" onClick={() => patch({ voice: { wake_words: [...v.wake_words, suggest] } })}>
+                  «{suggest}»
+                </button>
+                .{" "}
+              </>
+            ) : (
+              "Enter — добавить слово. "
+            )}
+            Узнаю и с окончаниями («пятницу»), и с искажениями распознавания; фразу из нескольких слов («эй, Джарвис») говорите целиком, в начале команды
+          </>
         }
         wide
       >

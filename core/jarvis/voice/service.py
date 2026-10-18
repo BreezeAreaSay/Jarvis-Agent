@@ -1,5 +1,6 @@
 """Голосовой сервис: микрофон → Silero VAD → Vosk small по ходу речи → GigaAM v3 по концу фразы → «Джарвис»
-→ ctx.dispatcher.handle(команда, "voice"). Всё локально: звук никуда не уходит.
+→ ctx.dispatcher.handle(команда, "voice"). Всё локально: звук никуда не уходит. Команды не по-русски
+(voice.language) — Whisper по концу фразы, без потоковой модели (она русская).
 
 Потоки: PortAudio кладёт блоки в очередь; поток «jarvis-voice» читает микрофон, считает уровень (voice.level
 ~15 Гц) и ведёт слушателя (jarvis.voice.listener): VAD, распознавание и решения — там же, не в цикле ядра.
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 LINGER_S = 8.0  # разовая просьба закончилась — микрофон ещё столько открыт (следующая — без задержки)
+QUESTION_FOLLOW_S = 8.0  # Jarvis спросил — ответ без «Джарвис» ждём не меньше стольких секунд
 NO_MODELS = "Голосовые модели не скачаны — скачайте их в настройках голоса"
 RU_LANGS = ("ru", "ru-ru", "rus", "russian", "русский")
 
@@ -72,7 +74,7 @@ class Voice(BaseService):
         models: m.ModelManager | None = None,
         recognizers: Any = None,
         mic_factory: Callable[[str], Any] | None = None,
-        vad_factory: Callable[[float], Any] | None = None,
+        vad_factory: Callable[[float, float], Any] | None = None,  # (чувствительность, пауза в конце, с)
         auto_download: bool | None = None,
     ) -> None:
         super().__init__(ctx)
@@ -158,15 +160,21 @@ class Voice(BaseService):
     async def stop_listening(self) -> None:
         self.listener.stop()
 
-    def follow_up(self, seconds: float | None = None) -> None:
+    def follow_up(self, seconds: float | None = None, *, question: bool = False) -> None:
         """Окно продолжения после ответа. Пока играет музыка или видео — нет: их речь в микрофоне Jarvis
-        принял бы за ответ человека и разговаривал бы с ними без конца."""
+        принял бы за ответ человека и разговаривал бы с ними без конца.
+
+        question — Jarvis задал уточняющий вопрос: ответ на него не считается в MAX_FOLLOW_CHAIN (но подряд
+        таких окон — не больше MAX_FOLLOW_TOTAL), а окно не короче QUESTION_FOLLOW_S — человек должен успеть
+        подумать. Выключенное в настройках продолжение (0) не включается и для вопросов."""
         secs = float(self.ctx.settings.value.voice.follow_up_s if seconds is None else seconds)
+        if question and secs > 0:
+            secs = max(secs, QUESTION_FOLLOW_S)
         if secs > 0 and self._media_playing():
             log.info("голос: играет музыка или видео — продолжение без «Джарвис» не слушаю")
             return
         if self._phase == "running" or self._thread is not None:
-            self.listener.follow_up(secs)
+            self.listener.follow_up(secs, question=question)
 
     def _media_playing(self) -> bool:
         watcher = getattr(getattr(self.ctx, "widgets", None), "watcher", None)
@@ -195,18 +203,23 @@ class Voice(BaseService):
 
     # --- состояние для API -------------------------------------------------------------------------
     def can_listen(self) -> bool:
-        """Есть VAD и хоть одна модель распознавания (GigaAM или потоковая)."""
+        """Есть VAD и хоть одна модель распознавания: GigaAM, потоковая или (команды не по-русски) Whisper."""
         if not self.models.installed(m.VAD_ID):
             return False
-        return any(self.models.installed(i) for i in (*m.ASR_IDS, m.STREAM_ID))
+        if any(self.models.installed(i) for i in (*m.ASR_IDS, m.STREAM_ID)):
+            return True
+        return self._command_language() is not None and self.has_multilingual()
 
     def has_multilingual(self) -> bool:
         """Скачан Whisper — распознаются языки кроме русского (субтитры, голосовые на других языках)."""
         return any(self.models.installed(i) for i in m.WHISPER_IDS)
 
+    def _required(self, settings: Settings) -> list[str]:
+        return self.models.required_ids(settings, self.models.installed)
+
     def listening_ids(self, settings: Settings | None = None) -> list[str]:
         s = settings or self.ctx.settings.value
-        return [i for i in self.models.required_ids(s) if not i.startswith("piper-")]
+        return [i for i in self._required(s) if not i.startswith("piper-")]
 
     def models_ready(self) -> bool:
         return not self.models.missing(self.listening_ids())
@@ -225,7 +238,7 @@ class Voice(BaseService):
         }
 
     def models_list(self) -> list[dict[str, Any]]:
-        return self.models.catalog(self.models.required_ids(self.ctx.settings.value))
+        return self.models.catalog(self._required(self.ctx.settings.value))
 
     # --- Host для слушателя (поток распознавания) --------------------------------------------------
     def settings(self) -> VoiceSettings:
@@ -322,7 +335,7 @@ class Voice(BaseService):
             else:
                 self._publish_state()
             return
-        required = self.models.required_ids(self.ctx.settings.value)
+        required = self._required(self.ctx.settings.value)
         missing = [i for i in self.models.missing(required) if i not in self._user_deleted]
         if missing and self._auto_download_allowed() and self.ctx.settings.value.voice.enabled:
             self._start_download(missing)
@@ -477,20 +490,45 @@ class Voice(BaseService):
         with self._lock:
             self._mic_error = ""
 
+    def _command_language(self) -> str | None:
+        """Команды не по-русски — код языка для Whisper ("" — пусть определит сам); по-русски — None."""
+        lang = self.ctx.settings.value.voice.language
+        if lang == "ru":
+            return None
+        return "" if lang == "auto" else lang
+
+    def _whisper(self) -> Any:
+        """Whisper для команд не по-русски; не скачан или не загрузился — None (распознаём по-русски)."""
+        if self._command_language() is None:
+            return None
+        try:
+            return self.recognizers.whisper()
+        except AsrError as e:
+            log.warning("голос: Whisper недоступен — команды распознаю по-русски: %s", e)
+            return None
+
     def _new_session(self) -> Session | None:
+        if self._whisper() is not None:
+            return None  # потоковая модель — русская: на другом языке её текст — мусор и ложные «Джарвис»
         rec = self.recognizers.streaming()
         return rec.session() if rec is not None else None
 
     def _final_text(self, audio: np.ndarray, punct: bool) -> str:
+        whisper = self._whisper()
+        if whisper is not None:
+            return str(whisper.recognize(audio, self._command_language() or ""))
         asr = self.recognizers.pick_offline(self.ctx.settings.value.voice.asr_model, punct=punct)
         if asr is not None:
             return str(asr.recognize(audio))
         stream = self.recognizers.streaming()
         return str(stream.recognize(audio)) if stream is not None else ""
 
+    def _make_vad(self, s: VoiceSettings) -> Any:
+        return self.vad_factory(s.sensitivity, s.end_silence_ms / 1000)
+
     def _load_engines(self) -> Any:
         s = self.ctx.settings.value.voice
-        vad = self.vad_factory(s.sensitivity)
+        vad = self._make_vad(s)
         try:
             self.recognizers.pick_offline(s.asr_model)  # GigaAM — секунда-две, заранее, не на первой фразе
         except AsrError as e:
@@ -499,6 +537,7 @@ class Voice(BaseService):
             self.recognizers.streaming()
         except AsrError as e:
             log.warning("голос: потоковая модель недоступна: %s", e)
+        self._whisper()  # команды не по-русски — Whisper тоже заранее
         return vad
 
     def _worker(self, stop: threading.Event) -> None:
@@ -565,7 +604,7 @@ class Voice(BaseService):
             listener.utt = None
         if "vad" in todo:
             try:
-                listener.vad = self.vad_factory(s.sensitivity)
+                listener.vad = self._make_vad(s)
                 listener.utt = None
             except Exception:
                 log.exception("голос: VAD не перенастроился")
@@ -575,6 +614,8 @@ class Voice(BaseService):
                 self.recognizers.streaming()
             except AsrError as e:
                 log.warning("голос: %s", e)
+            self._whisper()
+            listener.utt = None  # начатая фраза — потоковой моделью прежнего языка
         return mic
 
     def _on_settings(self, old: Settings, new: Settings) -> None:
@@ -582,11 +623,16 @@ class Voice(BaseService):
         with self._lock:
             if o.input_device != n.input_device:
                 self._reconfig.add("mic")
-            if o.sensitivity != n.sensitivity:
+            if o.sensitivity != n.sensitivity or o.end_silence_ms != n.end_silence_ms:
                 self._reconfig.add("vad")
-            if o.asr_model != n.asr_model:
+            if o.asr_model != n.asr_model or o.language != n.language:
                 self._reconfig.add("final")
-        if o.enabled != n.enabled or o.asr_model != n.asr_model or old.tts.piper_voice != new.tts.piper_voice:
+        if (
+            o.enabled != n.enabled
+            or o.asr_model != n.asr_model
+            or o.language != n.language
+            or old.tts.piper_voice != new.tts.piper_voice
+        ):
             self.ctx.call_soon(self._apply)
         if o.ptt_key != n.ptt_key:
             loop = self.ctx.loop

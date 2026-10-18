@@ -338,19 +338,18 @@ export function TtsOptions({ engine, compact }: { engine: Engine; compact?: bool
 
       {!compact && (
         <div className="tts-grid">
-          {engine === "piper" && (
-            <label className="tts-cell">
-              <span className="tts-label">Высота голоса</span>
-              <Slider
-                value={tts.pitch}
-                min={0.8}
-                max={1.2}
-                step={0.01}
-                format={(v) => `${v.toFixed(2)}`}
-                onCommit={(v) => patchTts({ pitch: Math.round(v * 100) / 100 })}
-              />
-            </label>
-          )}
+          {/* тон меняют все движки: piper, Windows и облачные (edge — параметром сервиса, остальные — частотой вывода) */}
+          <label className="tts-cell">
+            <span className="tts-label">Высота голоса</span>
+            <Slider
+              value={tts.pitch}
+              min={0.8}
+              max={1.2}
+              step={0.01}
+              format={(v) => `${v.toFixed(2)}`}
+              onCommit={(v) => patchTts({ pitch: Math.round(v * 100) / 100 })}
+            />
+          </label>
           <label className="tts-cell">
             <span className="tts-label">Эффект «Джарвис»</span>
             <Slider value={Math.round(tts.effect * 100)} onCommit={(v) => patchTts({ effect: Math.round(v) / 100 })} />

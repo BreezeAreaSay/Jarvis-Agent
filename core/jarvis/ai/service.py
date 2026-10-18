@@ -21,6 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from jarvis.ai.chatgpt import ChatGpt
 from jarvis.ai.chats import MODES, ChatStore, ui_message
 from jarvis.ai.format import chat_title, speech_text
 from jarvis.ai.llm import LlmClient, LlmError, LlmResponse, ToolCall, Usage, user_content
@@ -196,6 +197,7 @@ class Ai(BaseService):
         self.web = WebClient(ctx)
         self.chats = ChatStore(ctx)
         self.tools = ToolRegistry(ctx)
+        self.chatgpt = ChatGpt(self)  # провайдер «ChatGPT (подписка)» через Codex
         self._locks: dict[str, asyncio.Lock] = {}
         self._tasks: dict[str, set[asyncio.Task[Any]]] = {}
         self._configured: bool | None = None
@@ -208,6 +210,8 @@ class Ai(BaseService):
 
     @property
     def configured(self) -> bool:
+        if self.chatgpt.selected:
+            return self.chatgpt.configured
         return self.llm.configured
 
     def refresh_configured(self) -> bool:
@@ -224,6 +228,7 @@ class Ai(BaseService):
             self.ctx.settings.on_change(self._on_settings),
             self.ctx.bus.on("secrets.changed", lambda _e: self.refresh_configured()),
         ]
+        await self.chatgpt.start()
 
     def _on_settings(self, old: Any, new: Any) -> None:
         if old.ai != new.ai:
@@ -238,12 +243,26 @@ class Ai(BaseService):
             task.cancel()
         if tasks:
             await asyncio.wait(tasks, timeout=3.0)
+        await self.chatgpt.stop()
         await self.llm.aclose()
 
     # --- провайдеры и расходы (для API) ---------------------------------------------------------------
     def providers(self) -> list[dict[str, Any]]:
         custom_url = self.ctx.settings.value.ai.base_url.strip()
-        return [p.to_json(custom_url if p.id == "custom" else None) for p in PRESETS.values()]
+        items = [p.to_json(custom_url if p.id == "custom" else None) for p in PRESETS.values()]
+        return [self.chatgpt.preset_json(p) if p["id"] == "chatgpt" else p for p in items]
+
+    async def list_models(self) -> list[str]:
+        """Модели выбранного провайдера (у ChatGPT — из каталога Codex)."""
+        if self.chatgpt.selected:
+            return await self.chatgpt.list_models()
+        return await self.llm.list_models()
+
+    async def test_connection(self) -> dict[str, Any]:
+        """Проверка связи с выбранным провайдером: {ok, error?, latency_ms, model}."""
+        if self.chatgpt.selected:
+            return await self.chatgpt.test()
+        return await self.llm.test()
 
     def usage(self) -> dict[str, Any]:
         return {"month": self.llm.month_usage(), "budget": self.ctx.settings.value.ai.monthly_budget}
@@ -259,6 +278,7 @@ class Ai(BaseService):
 
     def delete_chat(self, chat_id: str) -> bool:
         self.stop_chat(chat_id)
+        self.chatgpt.forget_chat(chat_id)
         return self.chats.delete(chat_id)
 
     def stop_chat(self, chat_id: str) -> bool:
@@ -312,6 +332,10 @@ class Ai(BaseService):
         max_tokens: int | None = None,
     ) -> Any:
         """Одиночный запрос без инструментов (сборщик команд, конспекты, перевод, диктовка)."""
+        if self.chatgpt.selected:
+            return await self.chatgpt.complete(
+                messages, json_schema=json_schema, temperature=temperature, max_tokens=max_tokens
+            )
         response = await self.llm.chat(
             messages, json_schema=json_schema, temperature=temperature, max_tokens=max_tokens, stream=False
         )
@@ -420,6 +444,8 @@ class Ai(BaseService):
 
     # --- ответ модели с инструментами ---------------------------------------------------------------------
     async def _run_chat(self, turn: Turn) -> AskResult:
+        if self.chatgpt.selected:
+            return await self.chatgpt.run_chat(turn)
         problem = self.llm.problem(turn.model or None)
         if problem:
             return self._finish(turn, error=problem)

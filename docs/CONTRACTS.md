@@ -254,6 +254,7 @@ label, placeholder?, options?, required}], description}`.
 | `POST /api/agent/run` | `{task}` | `{run_id}` — задача агенту в новом чате; из открытого чата агент запускается сообщением с `mode: "agent"` |
 | `POST /api/agent/stop` | — | `{ok}` |
 | `GET /api/agent` | — | состояние текущего запуска (как `agent.state`) или `null` |
+| `GET /api/ai/tools` | — | `{items: ToolInfo[], groups: [{id, title}], agent_confirm}` — каталог «Инструменты и разрешения» (`jarvis/ai/catalog.py`); разрешение меняется `PATCH /api/settings {ai: {tool_policy: {<policy_key>: allow\|ask\|deny\|auto}}}` (`auto` — снова по риску) |
 | `GET/POST /api/memory`, `DELETE /api/memory/{id}` | `{text, kind?}` | `{items}` / `MemoryItem` (временные с истёкшим сроком не приходят) |
 | `PATCH /api/memory/{id}` | `{text?, kind?}` | `MemoryItem` — поправленная запись становится записью человека (`source: user`); 404 — нет записи |
 | `DELETE /api/memory` | — | `{ok, count}` — забыть всё |
@@ -268,6 +269,11 @@ label, placeholder?, options?, required}], description}`.
 | `POST /api/mcp/import` | `{keys: string[]}` | `{items: McpServer[], skipped: [{key, reason}]}` |
 | `GET /api/mcp/catalog?q=&cursor=` | — | `{items: [{name, title, description, version, repository, website, install, installs}], next_cursor, total}` (`install` может содержать `headers`) |
 
+`ToolInfo = {policy_key, name, title, description, source: builtin|plugin:<имя>|mcp:<сервер>|agent, group, modes:
+[chat|all|agent], available, timeout, risk: read|act|risky, risk_title, default: allow|ask, override:
+allow|ask|deny|null, decision: allow|ask|deny}` — `policy_key` — ключ в `settings.ai.tool_policy`: имя инструмента,
+у действий агента — `agent.<действие>` (`agent.ui_click`); `risk` и `decision` — `jarvis/ai/policy.py`
+(рискованное по умолчанию спрашивается); `available: false` — выключено настройкой (поиск, память).
 `MemoryItem = {id, text, source: ai|user, kind: fact|assumption|temp, expires, created}` — `assumption`: предположение (ИИ уточняет, прежде чем на него опираться), `temp`: забывается через сутки (`expires` — unix-время). Запись человека ИИ не перезаписывает: `Notes.memory_add` вернёт её же с `unchanged: true`.
 `Chat = {id, title, kind: chat|voice, mode: chat|all|agent, model, pinned, created, updated}`.
 `UiMessage = {id, chat_id, role: user|assistant, content, created, meta: {sources?: [{title, url}],
@@ -542,3 +548,35 @@ briefcase, battery, calendar, bell, music, home, rocket, heart, book, monitor` �
 |---|---|
 | `scenarios.changed` | `{op: add\|update\|delete, item?, id?}` |
 | `scenario.run` | `{id, name, trigger: time\|interval\|phrase\|jarvis_start\|app_open\|app_close\|idle_return\|battery_low\|calendar_event\|manual, ok, error?, cancelled?}` |
+
+## 7. Приватность и данные (`jarvis/retention.py`, `jarvis/redact.py`, `jarvis/api/data.py`)
+
+Сроки хранения — `settings.privacy` (дни; 0 — хранить, пока человек не удалит сам): `history_days` (90) — история
+команд, `chat_days` (0) — чаты Jarvis AI без новых сообщений (закреплённые не трогаются), `voice_chat_days` (30) —
+сообщения голосового чата, Telegram и пульта, `tool_results_days` (30) — скрытые результаты инструментов и
+картинки старых сообщений (текст переписки остаётся; у сообщения появляется `meta.images_removed`), `audio_days`
+(1) — записи «Конспекта» (не трогаются, если в плагине включено «Хранить запись»), `logs_days` (14) — журналы ядра
+(большие обрезаются до последнего мегабайта). Очистка идёт раз в сутки (первая — через минуту после запуска);
+временные записи памяти с истёкшим сроком удаляются всегда. База — `PRAGMA secure_delete` (удалённое затирается).
+
+Секреты не попадают в журналы: `jarvis.log.RedactFilter` прогоняет сообщение и текст исключения через
+`jarvis.redact.redact()` — номера карт (по Луну), CVV, «пароль: …», пин-коды, ключи (`sk-…`, `ghp_…`, `xox…`,
+`AIza…`, `y0_…`, токены ботов Telegram, `Bearer`/`Basic`, JWT) и `key=…`/`token: …`/`*_SESSION_STRING=…`.
+
+| Маршрут | Тело | Ответ |
+|---|---|---|
+| `GET /api/data/inventory` | — | `{dir, logs_dir, db_bytes, purged_at, items: DataCategory[]}` |
+| `POST /api/data/clear` | `{scopes: [id…]}` (`"all"` — всё, что можно удалить) | `{ok, cleared: {id: сколько}}`; неизвестная или неудаляемая категория — 400 |
+| `POST /api/data/purge` | — | `{ok, removed: {…}}` — очистить по срокам сейчас |
+| `GET /api/logs` | — | `{dir, items: [{name, size, modified}]}` — журналы ядра |
+| `DELETE /api/logs` | — | `{ok, cleared}` — открытые журналы обрезаются, старые копии удаляются |
+
+`DataCategory = {id, title, hint, count, bytes, clearable}`; `id`: `history, chats, voice_chats, memory, notes, tasks,
+events, reminders, clipboard, summaries, screenshots, file_index, usage, logs, secrets` и `models` (не удаляется
+отсюда — «Голос и распознавание»). Чаты удаляются через Jarvis AI — вместе с тредами Codex и сессиями программ.
+
+| Событие | Данные |
+|---|---|
+| `data.purged` | `{removed: {memory?, history?, chats?, voice_chats?, tool_results?, summaries?, logs?}, ts}` |
+| `data.cleared` | `{cleared: {id: сколько}, ts}` |
+| `notes.changed` / `tasks.changed` / `events.changed` / `reminders.changed` | ещё и `{op: "clear"}` — удалены все |

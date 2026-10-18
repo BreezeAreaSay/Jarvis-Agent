@@ -44,7 +44,7 @@ desktop/ (Electron + React)                     core/ (Python 3.12, FastAPI)
 |---|---|---|
 | `GET /api/health` | — | `{ok, version}` (без токена) |
 | `GET /api/status` | — | `{version, platform, data_dir, uptime_s, voice: {state}, ai: {configured}, ready}` |
-| `POST /api/stop` | — | `{ok}` — «Стоп»: замолчать, бросить ответ ИИ и агента, перестать слушать (как «Джарвис, стоп») |
+| `POST /api/stop` | — | `{ok}` — «Стоп»: замолчать, бросить ответ ИИ и агента, отклонить открытые подтверждения, остановить идущие сценарии, перестать слушать (как «Джарвис, стоп») |
 | `POST /api/shutdown` | — | `{ok}` — штатный выход ядра (сервисы закрывают базу и файлы); 409 — запущено не сервером |
 | `GET /api/settings` | — | `{settings: Settings, secrets: {name: bool}}` |
 | `PATCH /api/settings` | частичный Settings | `{settings}` (422 — неверное значение) |
@@ -326,8 +326,9 @@ error|disabled, error, tools: [{name, description}]}` — секретные `en
 | `memory.cleared` | `{count}` — память очищена целиком |
 | `notes.changed` / `tasks.changed` / `events.changed` / `reminders.changed` | `{op: add\|update\|delete, item?, id?}` |
 | `reminder.fired` | `{item: {…, kind: reminder\|event, missed}}` |
-| `agent.state` | `{run_id, task, status: planning\|running\|waiting\|done\|stopped\|error, step, total, text}` |
+| `agent.state` | `{run_id, task, status: planning\|running\|waiting\|done\|stopped\|error, step, total, text, plan: string[], outcome: ""\|done\|partial\|failed}` — `outcome` — как оценил итог сам агент (finish): «Готово» в интерфейсе только при `done` |
 | `agent.step` | `{run_id, index, title, status: running\|ok\|error}` |
+| `agent.pointer` | `{run_id, kind: click\|double\|right\|type\|keys\|scroll\|focus, x, y, label, rect?: [l,t,r,b], ts}` — куда агент жмёт и что вводит, в физических точках экрана (оверлей рисует «курсор агента»; основной монитор: точка оверлея = физическая / масштаб − начало рабочей области) |
 | `mcp.status` | `{server_id, status, error?, tools_count}` |
 | `ai.configured` | `{configured}` — изменилось «ИИ настроен» (ключ, провайдер, адрес, каталог, вход в ChatGPT или программу) |
 | `ai.cli` | `{provider, state: installing\|log\|installed\|error\|login\|auth, line?, version?, error?, opened?, logged_in?}` — установка программы-провайдера, окно терминала для входа, смена состояния входа |
@@ -335,6 +336,23 @@ error|disabled, error, tools: [{name, description}]}` — секретные `en
 
 Подтверждения агента — общий механизм `ctx.confirmations.request(..., kind="agent")` (события `confirm.*`).
 Фраза «агент, …» отправляет задачу агенту в любом режиме чата; «стоп» останавливает и ответ ИИ, и агента.
+Агент из чата (инструмент `run_agent`) пишет итог в тот же чат.
+
+Агент (`jarvis/ai/agent.py`). Действия: `ui_snapshot`, `screenshot`, `focus_window`, `ui_click` (`double`),
+`ui_type`, `click_point {x, y, what, button?, double?}` (координаты картинки последнего снимка окна → экран;
+окно сдвинули — пересчёт), `type_text {text, field?}` (туда, где фокус), `scroll {direction, amount, x?, y?}`,
+`press_keys`, `launch_app`, `open_url` (`https:`, `tg:`, `ms-settings:`, `spotify:`, `mailto:`), `run_command`,
+`wait`, `finish {status: done|partial|failed, summary, attention?}` и инструменты подключённых серверов MCP
+(имя `mcp__…`, ответы помечены как данные). Видит окно впереди (никогда не окно Jarvis): элементы UI Automation и,
+если модель понимает картинки (`settings.ai.vision`: `auto` — по провайдеру и модели, `on`, `off`) и элементов мало,
+картинку только этого окна с метками `e…` и сеткой через 100 точек (`jarvis/ai/vision.py`). Перед каждым вводом —
+окно той же программы, что при последнем снимке (впереди окно Jarvis — фокус окну задачи; другая программа —
+действие не выполняется); мышь не жмёт, если точку закрывает чужое окно; курсор человека возвращается на место.
+Подсказки по программам (Telegram, браузеры, Проводник, параметры Windows, Discord, WhatsApp, Office, почта,
+VS Code, Spotify, Блокнот) — `jarvis/ai/playbooks.py`. Разрешения: `settings.ai.tool_policy` с ключами
+`agent.<действие>` и именами инструментов MCP; отправка, удаление и оплата через MCP спрашиваются всегда; после
+отказа агент спрашивает перед каждым действием, которое что-то меняет. Лимиты: `ai.max_agent_steps`, 30 минут на
+запуск, 3 минуты на действие.
 
 Провайдер `chatgpt` — «ChatGPT (подписка)» (`jarvis/ai/chatgpt`): модели GPT по подписке ChatGPT через Codex
 app-server (SDK `openai-codex==0.163.0` с бинарём Codex, ≈150 МБ, скачивается в `<data>/pylib` по кнопке; extra

@@ -290,3 +290,53 @@ async def test_page_names_resolving_to_local_network_are_refused(monkeypatch: py
             await check_resolved(f"http://{host}/page")
     await check_resolved("https://example.com/")  # внешний адрес
     await check_resolved("https://unknown.example/")  # DNS не ответил — решает прокси
+
+
+async def test_chat_typing_goes_to_user_window_and_asks_before_sending(ctx: AppContext) -> None:
+    from jarvis.platform.base import WindowInfo
+
+    platform: Any = ctx.platform
+    telegram = WindowInfo(201, "Telegram", "Telegram.exe", 900, (0, 0, 800, 600), foreground=False)
+    platform.foreground_window = lambda: telegram  # впереди окно Jarvis, под ним — Telegram
+    asked: list[tuple[str, str]] = []
+
+    def answer(event: Any) -> None:
+        asked.append((event.data["title"], event.data["detail"]))
+        ctx.confirmations.resolve(event.data["id"], False)
+
+    ctx.bus.on("confirm.request", answer)
+    tools = ToolRegistry(ctx).available("all")
+    env = _env(ctx)
+    typed = await tools["type_text"].handler(env, {"text": "Привет, буду в семь"})
+    assert typed.ok and "«Telegram»" in typed.content
+    calls_ = [(n, a) for n, a in platform.calls if n in ("window_action", "type_text")]
+    assert calls_ == [("window_action", ("focus", 201)), ("type_text", ("Привет, буду в семь",))]
+    sent = await tools["press_keys"].handler(env, {"combo": "Enter"})
+    assert not sent.ok and asked == [
+        ("Нажать enter в «Telegram»?", "Будет отправлено: «Привет, буду в семь»")
+    ]
+    assert not any(n == "press_keys" for n, _ in platform.calls)
+    hotkey = await tools["press_keys"].handler(env, {"combo": "ctrl+alt+j"})
+    assert not hotkey.ok and "горячая клавиша самого Jarvis" in hotkey.content
+
+
+async def test_tool_permissions_apply_in_chat(ctx: AppContext) -> None:
+    from tests.ai.fakes import ScriptedLlm, calls, reply
+
+    ctx.secrets.set("ai_api_key", "sk-test")
+    llm = ScriptedLlm()
+    ctx.ai.set_transport(llm.transport)  # type: ignore[attr-defined]
+    ctx.settings.patch({"ai": {"tool_policy": {"set_volume": "deny", "get_rates": "ask"}}})
+    asked: list[str] = []
+
+    def answer(event: Any) -> None:
+        asked.append(event.data["title"])
+        ctx.confirmations.resolve(event.data["id"], False)
+
+    ctx.bus.on("confirm.request", answer)
+    llm.add(calls(("set_volume", {"level": 30}), ("get_rates", {})), reply("Не получилось."))
+    await ctx.ai.ask("Громкость 30 и курс доллара")
+    assert not any(n == "volume_set" for n, _ in ctx.platform.calls)  # type: ignore[attr-defined]
+    results = [m["content"] for m in llm.requests[-1]["messages"] if m["role"] == "tool"]
+    assert "запрещён в настройках" in results[0] and "не разрешил" in results[1]
+    assert asked == ["Курсы валют?"]

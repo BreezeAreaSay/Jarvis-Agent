@@ -1,5 +1,5 @@
 // Подключение Jarvis AI: карточки провайдеров, адрес, ключ, модель и проверка связи.
-import { Check, Download, ExternalLink, LogIn, LogOut, Server, Zap } from "lucide-react";
+import { Check, Download, ExternalLink, LogIn, LogOut, Server, Smartphone, Zap } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { siLmstudio } from "simple-icons";
 import { api, ApiError } from "@/api/client";
@@ -9,7 +9,7 @@ import { AppIcon } from "@/components/AppIcon";
 import { bridge } from "@/lib/bridge";
 import { useApp } from "@/store/app";
 import { Button, cx, notify, notifyError, Setting } from "@/ui";
-import { Combo, LazyText, Note, ProgressBar, SecretField, useApi, useSettingsPatch } from "./kit";
+import { Combo, CopyButton, LazyText, Note, ProgressBar, SecretField, useApi, useSettingsPatch } from "./kit";
 
 /** Провайдер: контракт + поля ядра сверх него (локальный, где взять ключ, вход в аккаунт, скачиваемый компонент). */
 export type Provider = ProviderPreset & { local?: boolean; key_url?: string; login?: boolean; component?: boolean };
@@ -159,17 +159,26 @@ export function ProviderCards({ compact }: { compact?: boolean }) {
   );
 }
 
-interface ChatGptState {
+/** Ссылки входа: браузер (auth_url; opened — ядро его уже открыло) или вход с другого устройства по коду. */
+interface ChatGptLogin {
+  auth_url?: string;
+  verification_url?: string;
+  user_code?: string;
+  opened?: boolean;
+}
+
+interface ChatGptState extends ChatGptLogin {
   installed: boolean;
   installing: boolean;
   logged_in: boolean;
   account: string;
   error: string;
   progress?: number;
+  login_pending?: boolean;
 }
 
-interface ChatGptEvent {
-  state: "installing" | "installed" | "error" | string;
+interface ChatGptEvent extends ChatGptLogin {
+  state: "installing" | "installed" | "login" | "device" | "logged_in" | "logged_out" | "error" | string;
   error?: string;
   progress?: number;
 }
@@ -178,8 +187,9 @@ interface ChatGptEvent {
 export function ChatGptPanel({ compact }: { compact?: boolean }) {
   const q = useApi<ChatGptState>("/api/ai/chatgpt");
   const { data, setData, reload } = q;
-  const [busy, setBusy] = useState<"" | "install" | "login" | "logout">("");
+  const [busy, setBusy] = useState<"" | "install" | "login" | "device" | "logout">("");
   const [waiting, setWaiting] = useState(false);
+  const [login, setLogin] = useState<ChatGptLogin | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
 
   useEffect(
@@ -198,6 +208,12 @@ export function ChatGptPanel({ compact }: { compact?: boolean }) {
             : prev,
         );
         if (d.state === "error" && d.error) notify(d.error, "error");
+        if (d.state === "login" || d.state === "device") {
+          // вход начат (здесь или в мастере первой настройки) — показать ссылку или код
+          setLogin({ auth_url: d.auth_url, verification_url: d.verification_url, user_code: d.user_code, opened: d.opened });
+          setWaiting(true);
+        }
+        if (d.state === "logged_in" || d.state === "logged_out" || d.state === "error") setLogin(null);
         if (d.state !== "installing") void reload();
       }),
     [setData, reload],
@@ -222,7 +238,36 @@ export function ChatGptPanel({ compact }: { compact?: boolean }) {
     }
   }, [loggedIn, waiting]);
 
-  const run = async (kind: "install" | "login" | "logout") => {
+  const startLogin = async (device: boolean) => {
+    setBusy(device ? "device" : "login");
+    try {
+      const r = await api.post<ChatGptLogin & { logged_in?: boolean }>("/api/ai/chatgpt/login", device ? { device: true } : {});
+      if (r.logged_in) {
+        await reload();
+        refreshAiConfigured();
+        return;
+      }
+      setLogin({ auth_url: r.auth_url, verification_url: r.verification_url, user_code: r.user_code, opened: r.opened });
+      setWaiting(true);
+    } catch (e) {
+      notifyError(e);
+      void reload();
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const cancelLogin = async () => {
+    setWaiting(false);
+    setLogin(null);
+    try {
+      await api.post("/api/ai/chatgpt/login/cancel");
+    } catch {
+      /* вход уже завершился или не начинался */
+    }
+  };
+
+  const run = async (kind: "install" | "logout") => {
     setBusy(kind);
     try {
       await api.post(`/api/ai/chatgpt/${kind}`);
@@ -230,7 +275,6 @@ export function ChatGptPanel({ compact }: { compact?: boolean }) {
         setProgress(null);
         setData((prev) => prev && { ...prev, installing: true, error: "" });
       }
-      if (kind === "login") setWaiting(true);
       if (kind === "logout") {
         await reload();
         refreshAiConfigured();
@@ -264,18 +308,48 @@ export function ChatGptPanel({ compact }: { compact?: boolean }) {
       </Button>
     );
   } else if (!data.logged_in) {
-    hint = waiting ? "Жду входа в браузере… Вернитесь сюда, когда войдёте" : "Откроется браузер, войдите в свой аккаунт ChatGPT";
+    const device = !!login?.user_code;
+    if (!waiting) hint = "Откроется браузер, войдите в свой аккаунт ChatGPT";
+    else if (device)
+      hint = (
+        <span className="gpt-device">
+          На телефоне или другом компьютере откройте{" "}
+          <a href={login?.verification_url} onClick={(e) => (e.preventDefault(), bridge.openExternal(login?.verification_url ?? ""))}>
+            {login?.verification_url}
+          </a>{" "}
+          и введите код <b className="mono gpt-code">{login?.user_code}</b>
+          <CopyButton text={login?.user_code ?? ""} label="Скопировать код" />
+        </span>
+      );
+    else if (login && login.opened === false && login.auth_url)
+      hint = (
+        <span className="gpt-device">
+          Браузер не открылся сам —{" "}
+          <a href={login.auth_url} onClick={(e) => (e.preventDefault(), bridge.openExternal(login.auth_url ?? ""))}>
+            откройте страницу входа
+          </a>
+          <CopyButton text={login.auth_url} label="Скопировать ссылку" />
+        </span>
+      );
+    else hint = "Жду входа в браузере… Вернитесь сюда, когда войдёте";
     action = waiting ? (
       <>
         <span className="spinner" />
-        <Button size="sm" variant="ghost" onClick={() => setWaiting(false)}>
+        <Button size="sm" variant="ghost" onClick={cancelLogin}>
           Отмена
         </Button>
       </>
     ) : (
-      <Button variant="primary" size={compact ? "sm" : undefined} icon={<LogIn />} loading={busy === "login"} onClick={() => run("login")}>
-        Войти через ChatGPT
-      </Button>
+      <>
+        {!compact && (
+          <Button size="sm" variant="ghost" icon={<Smartphone />} loading={busy === "device"} onClick={() => startLogin(true)}>
+            С другого устройства
+          </Button>
+        )}
+        <Button variant="primary" size={compact ? "sm" : undefined} icon={<LogIn />} loading={busy === "login"} onClick={() => startLogin(false)}>
+          Войти через ChatGPT
+        </Button>
+      </>
     );
   } else {
     hint = (

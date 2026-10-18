@@ -196,6 +196,7 @@ export interface CommandIn {
   icon?: string;
   say?: string;
   category?: string;
+  enabled?: boolean;
 }
 
 export interface ActionParam {
@@ -259,6 +260,8 @@ export interface UiMessage {
     error?: string;
     usage?: Record<string, number>;
     status?: string;
+    stopped?: boolean;
+    agent?: { run_id: string; status: string; steps: number; plan: string[] };
   };
 }
 
@@ -269,6 +272,10 @@ export interface ProviderPreset {
   needs_key: boolean;
   default_model: string;
   models: string[];
+  local?: boolean;
+  key_url?: string;
+  login?: boolean;
+  component?: boolean;
 }
 
 export interface MemoryItem {
@@ -324,6 +331,7 @@ export interface McpServer {
   args: string[];
   env: Record<string, string>;
   url: string;
+  headers?: Record<string, string>;
   enabled: boolean;
   status: "connected" | "connecting" | "error" | "disabled";
   error: string;
@@ -336,12 +344,15 @@ export interface McpCatalogItem {
   description: string;
   version: string;
   repository: string;
+  website?: string;
+  installs?: number;
   install: {
     transport: "stdio" | "http";
     command?: string;
     args?: string[];
     url?: string;
-    env_vars?: { name: string; description?: string; required?: boolean }[];
+    env_vars?: { name: string; description?: string; required?: boolean; secret?: boolean; default?: string }[];
+    headers?: { name: string; description?: string; required?: boolean; secret?: boolean; default?: string }[];
   } | null;
 }
 
@@ -378,8 +389,16 @@ export interface PluginSchemaItem {
   label: string;
   options?: { value: string; label: string }[] | string[];
   secret?: SecretName;
+  set?: boolean;
   default?: unknown;
   hint?: string;
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  integer?: boolean;
+  device?: string;
+  fields?: PluginSchemaItem[];
 }
 
 export interface PluginInfo {
@@ -393,6 +412,7 @@ export interface PluginInfo {
   schema: PluginSchemaItem[];
   status: Record<string, unknown>;
   actions: { id: string; title: string }[];
+  examples?: string[];
 }
 
 export interface MediaInfo {
@@ -415,16 +435,21 @@ export interface VoiceModel {
   downloading: boolean;
   progress: number;
   required: boolean;
+  description?: string;
+  error?: string;
 }
 
 export interface RemoteInfo {
-  lan?: { enabled: boolean; port: number; urls: string[]; qr_svg: string };
+  lan?: { enabled: boolean; port: number; urls: string[]; qr_svg: string; status?: string; error?: string };
   telegram?: {
     enabled: boolean;
     status: "off" | "connecting" | "online" | "error";
     bot: string;
     owner_id: number;
     pairing_code?: string;
+    pairing_expires?: number | null;
+    pairing_link?: string;
+    token_set?: boolean;
     error?: string;
   };
 }

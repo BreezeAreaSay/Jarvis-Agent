@@ -1,0 +1,1526 @@
+/* Дополнительные виджеты столов (src/widgets/extra/*): котировки, новости, программы, быстрые команды,
+   файлы, громкость, сеть, батарея, активность, таймер, секундомер, мировое время, отсчёт, заметки,
+   стикер, Jarvis AI, плагины, столы, умный дом, питомец. Плитки плагинов — в extensions.css. */
+
+/* --- общее ------------------------------------------------------------------------------------------ */
+.wx-head-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -3px -4px -3px 0;
+  border-radius: 6px;
+  color: var(--text-3);
+  flex: none;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    opacity var(--t-fast) var(--ease);
+}
+
+.wx-head-btn + .wx-head-btn {
+  margin-left: 2px;
+}
+
+.wx-head-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.wx-head-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wx-head-btn.wx-hover {
+  opacity: 0;
+}
+
+.widget:hover .wx-head-btn.wx-hover,
+.wx-head-btn.wx-hover:focus-visible {
+  opacity: 1;
+}
+
+.wx-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+
+.wx-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.wx-link:hover {
+  text-decoration: underline;
+}
+
+.wx-link svg {
+  width: 13px;
+  height: 13px;
+}
+
+.wx-pick-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wx-pick-grid .check-chip {
+  height: 32px;
+  font-size: 12.5px;
+}
+
+.wx-chosen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.wx-chosen .chip button {
+  display: inline-flex;
+  margin-right: -4px;
+  color: var(--text-3);
+}
+
+.wx-chosen .chip button:hover {
+  color: var(--text);
+}
+
+/* --- котировки --------------------------------------------------------------------------------------- */
+.wx-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wx-quote {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  font-size: 13px;
+}
+
+.wx-quote.wide {
+  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+}
+
+.wx-quote.stock.wide {
+  grid-template-columns: 46px minmax(0, 1fr) auto auto;
+}
+
+.wx-quote .code {
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wx-quote.wide .code {
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.wx-quote.stock .code {
+  color: var(--text-2);
+}
+
+.wx-quote .name {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.wx-quote .val {
+  font-weight: 700;
+  font-size: 14.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.wx-quote:not(.wide) .val {
+  text-align: left;
+}
+
+.wx-quote .delta {
+  justify-self: end;
+}
+
+.wx-coin {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+/* --- новости ------------------------------------------------------------------------------------------- */
+.wx-topic {
+  margin-left: 7px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.wx-news {
+  gap: 1px;
+}
+
+.wx-news-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 9px;
+  text-align: left;
+  transition: background var(--t-fast) var(--ease);
+}
+
+.wx-news-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.wx-news-item .t {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.wx-news-item .t:not(.ellipsis) {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.wx-news-item .m {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* --- программы ------------------------------------------------------------------------------------------ */
+.wx-apps-box {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wx-apps {
+  display: grid;
+  gap: 8px;
+}
+
+.wx-app {
+  min-width: 0;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition:
+    transform var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.wx-app:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.wx-app:active {
+  transform: scale(0.96);
+}
+
+.wx-app.busy {
+  border-color: rgba(var(--accent-rgb), 0.6);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+.wx-app.missing {
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+
+.wx-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 30%;
+  font-weight: 800;
+}
+
+.wx-app-list,
+.wx-plugin-pick {
+  margin-top: 10px;
+  max-height: 300px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wx-app-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  text-align: left;
+  font-size: 13.5px;
+}
+
+.wx-app-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.wx-app-row.on {
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+.wx-app-row > svg {
+  width: 16px;
+  height: 16px;
+  color: var(--accent-text);
+}
+
+.wx-app-row-icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* --- быстрые команды ------------------------------------------------------------------------------------ */
+.wx-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 7px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 31px;
+  padding: 0 12px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(var(--accent-rgb), 0.17);
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  white-space: nowrap;
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+.wx-chip:hover:not(:disabled) {
+  background: rgba(var(--accent-rgb), 0.27);
+  border-color: rgba(var(--accent-rgb), 0.6);
+}
+
+.wx-chip:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.wx-chip.ok {
+  background: var(--ok-soft);
+  border-color: rgba(52, 211, 153, 0.45);
+}
+
+.wx-chip.err {
+  background: var(--err-soft);
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.wx-chip .spinner {
+  width: 13px;
+  height: 13px;
+}
+
+.wx-chip-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--accent-text);
+}
+
+.wx-chip.ok .wx-chip-icon {
+  color: var(--ok);
+}
+
+.wx-chip.err .wx-chip-icon {
+  color: var(--err);
+}
+
+.wx-chip-icon.glyph {
+  display: inline-flex;
+}
+
+.wx-chip-icon.glyph svg {
+  width: 100%;
+  height: 100%;
+}
+
+.wx-quick-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.wx-quick-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr) 30px;
+  gap: 6px;
+  align-items: center;
+}
+
+.wx-quick-row .input {
+  height: 34px;
+}
+
+/* --- недавние файлы -------------------------------------------------------------------------------------- */
+.wx-files {
+  gap: 0;
+}
+
+.wx-file {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 31px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: 13.5px;
+  font-weight: 560;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.wx-file:last-child {
+  border-bottom-color: transparent;
+}
+
+.wx-file:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.wx-file .when {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.wx-file-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+/* --- умный дом -------------------------------------------------------------------------------------------- */
+.wx-devices {
+  display: grid;
+  gap: 6px;
+  overflow: auto;
+  min-height: 0;
+  align-content: start;
+}
+
+.wx-device {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 7px 8px 7px 7px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  transition:
+    background var(--t-med) var(--ease),
+    border-color var(--t-med) var(--ease);
+}
+
+.wx-device.on {
+  background: rgba(253, 224, 71, 0.07);
+  border-color: rgba(253, 224, 71, 0.16);
+}
+
+.wx-device.na {
+  opacity: 0.5;
+}
+
+.wx-device-icon {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-3);
+  transition:
+    background var(--t-med) var(--ease),
+    color var(--t-med) var(--ease);
+}
+
+.wx-device-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wx-device.on .wx-device-icon {
+  background: rgba(253, 224, 71, 0.18);
+  color: #fde68a;
+}
+
+.wx-device.on.climate .wx-device-icon {
+  background: rgba(96, 165, 250, 0.2);
+  color: #bfdbfe;
+}
+
+.wx-device-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wx-device-sub {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.wx-device .toggle {
+  transform: scale(0.88);
+  transform-origin: right center;
+}
+
+/* --- громкость --------------------------------------------------------------------------------------------- */
+.wx-volume {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wx-volume .slider-row {
+  gap: 10px;
+}
+
+.wx-volume .slider-row .value {
+  width: 40px;
+}
+
+.wx-volume.muted .slider {
+  opacity: 0.45;
+}
+
+/* --- сеть ---------------------------------------------------------------------------------------------------- */
+.wx-net {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wx-net-nums {
+  display: flex;
+  gap: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wx-net-v {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.wx-net-v svg {
+  width: 13px;
+  height: 13px;
+  align-self: center;
+}
+
+.wx-net-v.down svg {
+  color: var(--accent-text);
+}
+
+.wx-net-v.up svg {
+  color: var(--ok);
+}
+
+.wx-net-v b {
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.wx-net-v small {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.wx-net.roomy .wx-net-v b {
+  font-size: 20px;
+}
+
+.wx-net-chart {
+  position: relative;
+  flex: 1;
+  min-height: 16px;
+}
+
+.wx-spark {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.wx-spark .line {
+  fill: none;
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+}
+
+.wx-spark .area {
+  stroke: none;
+}
+
+.wx-spark.down .line {
+  stroke: var(--accent-text);
+}
+
+.wx-spark.down .area {
+  fill: rgba(var(--accent-rgb), 0.16);
+}
+
+.wx-spark.up .line {
+  stroke: var(--ok);
+  opacity: 0.8;
+}
+
+.wx-spark.up .area {
+  fill: rgba(52, 211, 153, 0.08);
+}
+
+/* --- батарея ------------------------------------------------------------------------------------------------- */
+.wx-battery {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+}
+
+.wx-battery.none {
+  gap: 3px;
+}
+
+.wx-batt {
+  position: relative;
+  height: 9px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.wx-batt i {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: var(--ok);
+  transition: width var(--t-slow) var(--ease);
+}
+
+.wx-battery.mid .wx-batt i {
+  background: var(--warn);
+}
+
+.wx-battery.low .wx-batt i {
+  background: var(--err);
+}
+
+.wx-battery.charge .wx-batt i {
+  background: linear-gradient(90deg, var(--ok), #6ee7b7);
+}
+
+/* --- активность ----------------------------------------------------------------------------------------------- */
+.wx-activity {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wx-act-main {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  min-height: 0;
+}
+
+.wx-act-num {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: none;
+}
+
+.wx-act-num .big {
+  font-size: 30px;
+}
+
+.wx-hours {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.wx-hours i {
+  flex: 1;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.wx-hours i.has {
+  background: rgba(var(--accent-rgb), 0.6);
+}
+
+.wx-hours i.now {
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.6);
+}
+
+.wx-activity.tall .wx-hours {
+  height: 54px;
+}
+
+.wx-act-top {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  overflow: hidden;
+}
+
+/* --- таймер и секундомер ----------------------------------------------------------------------------------------- */
+.wx-timer {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 0;
+}
+
+.wx-time {
+  font-family: var(--font-display);
+  font-weight: 750;
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wx-time.done {
+  color: var(--ok);
+  font-size: 24px;
+  animation: pulse-dot 1.4s infinite;
+}
+
+.wx-timer-ctl {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.wx-round-btn {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 4px 14px rgba(var(--accent-rgb), 0.35);
+  transition:
+    transform var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+
+.wx-round-btn:hover {
+  transform: scale(1.06);
+  background: var(--accent-hover);
+}
+
+.wx-round-btn.on {
+  background: rgba(255, 255, 255, 0.92);
+  color: #14161c;
+  box-shadow: none;
+}
+
+.wx-round-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.wx-presets {
+  display: flex;
+  gap: 3px;
+  margin: -3px -3px -3px 0;
+}
+
+.wx-preset {
+  min-width: 26px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--text-3);
+  background: rgba(255, 255, 255, 0.05);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.wx-preset:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.wx-preset.on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.wx-timer-bar {
+  margin-top: 6px;
+  height: 4px;
+}
+
+.wx-timer-big {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+}
+
+.wx-ring {
+  position: relative;
+  height: 100%;
+  max-height: 160px;
+  aspect-ratio: 1;
+}
+
+.wx-ring svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.wx-ring circle {
+  fill: none;
+  stroke-width: 6;
+}
+
+.wx-ring .track {
+  stroke: rgba(255, 255, 255, 0.08);
+}
+
+.wx-ring .bar {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.3s linear;
+  filter: drop-shadow(0 0 6px rgba(var(--accent-rgb), 0.5));
+}
+
+.wx-ring.done .bar {
+  stroke: var(--ok);
+}
+
+.wx-ring-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.wx-ring-text .wx-time {
+  font-size: 32px;
+}
+
+.wx-timer-big .wx-timer-ctl {
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wx-timer-big .wx-round-btn {
+  width: 46px;
+  height: 46px;
+}
+
+.wx-watch {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.wx-watch.with-laps .wx-timer {
+  flex: none;
+}
+
+.wx-laps {
+  margin-top: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wx-lap {
+  display: flex;
+  gap: 10px;
+  padding: 3px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+/* --- мировое время ------------------------------------------------------------------------------------------------ */
+.wx-zones {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wx-zones.row-mode {
+  flex-direction: row;
+  gap: 8px;
+}
+
+.wx-zones.row-mode .wx-zone {
+  flex: 1;
+  min-width: 0;
+}
+
+.wx-zone {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 36px;
+  padding: 3px 0;
+}
+
+.wx-zone-icon {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wx-zone-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wx-zone-icon.day {
+  background: rgba(251, 191, 36, 0.14);
+  color: #fcd34d;
+}
+
+.wx-zone-icon.night {
+  background: rgba(129, 140, 248, 0.16);
+  color: #c7d2fe;
+}
+
+.wx-zone-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wx-zone-diff {
+  display: block;
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.wx-zone-time {
+  font-family: var(--font-display);
+  font-weight: 750;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wx-zones.row-mode .wx-zone-time {
+  font-size: 17px;
+}
+
+/* --- обратный отсчёт ----------------------------------------------------------------------------------------------- */
+.wx-count {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-content: center;
+}
+
+.wx-count-num {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 44px;
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(180deg, #ffffff, var(--accent-text));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.wx-count.roomy .wx-count-num {
+  font-size: 52px;
+}
+
+.wx-count-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.wx-count-text b {
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.wx-count-text span {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.wx-today {
+  color: var(--ok);
+  font-size: 22px !important;
+}
+
+.wx-count-date {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* --- заметки и стикер ----------------------------------------------------------------------------------------------- */
+.wx-notes {
+  gap: 4px;
+}
+
+.wx-note {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px 6px 14px;
+  border-radius: 9px;
+  text-align: left;
+  transition: background var(--t-fast) var(--ease);
+}
+
+.wx-note::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--note);
+}
+
+.wx-note:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.wx-note .t {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.wx-note .pin {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--accent-text);
+}
+
+.wx-note .b {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.wx-note .m {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.widget.wx-sticky {
+  --st: 251, 191, 36;
+  position: relative;
+  padding: 10px 12px;
+  background: linear-gradient(160deg, rgba(var(--st), 0.26), rgba(var(--st), 0.12)), var(--panel);
+  border-color: rgba(var(--st), 0.32);
+}
+
+.wx-sticky.pink {
+  --st: 244, 114, 182;
+}
+
+.wx-sticky.green {
+  --st: 52, 211, 153;
+}
+
+.wx-sticky.blue {
+  --st: 96, 165, 250;
+}
+
+.wx-sticky.violet {
+  --st: 167, 139, 250;
+}
+
+.wx-sticky textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: rgb(255, 250, 235);
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.45;
+}
+
+.wx-sticky textarea::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.wx-sticky-colors {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+.wx-sticky:hover .wx-sticky-colors {
+  opacity: 1;
+}
+
+.wx-sticky-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.4);
+  background: #fbbf24;
+}
+
+.wx-sticky-dot.pink {
+  background: #f472b6;
+}
+
+.wx-sticky-dot.green {
+  background: #34d399;
+}
+
+.wx-sticky-dot.blue {
+  background: #60a5fa;
+}
+
+.wx-sticky-dot.violet {
+  background: #a78bfa;
+}
+
+.wx-sticky-dot.on {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+}
+
+/* --- Jarvis AI ------------------------------------------------------------------------------------------------------- */
+.widget.wx-ai {
+  gap: 8px;
+  padding: 12px;
+  background:
+    radial-gradient(90% 120% at 0% 0%, rgba(var(--accent-rgb), 0.16), transparent 60%),
+    var(--panel);
+}
+
+.wx-ai-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 40px;
+  flex: none;
+  padding: 0 5px 0 5px;
+  border-radius: 12px;
+  background: var(--field);
+  border: 1px solid var(--line);
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+.wx-ai-row:focus-within {
+  border-color: var(--line-accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.14);
+}
+
+.wx-ai-orb {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--on-accent);
+  background:
+    radial-gradient(120% 80% at 30% 0%, rgba(255, 255, 255, 0.3), transparent 60%),
+    linear-gradient(160deg, var(--accent-hover), var(--accent));
+}
+
+.wx-ai-orb svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wx-ai-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-size: 13.5px;
+}
+
+.wx-ai-input::placeholder {
+  color: var(--text-4);
+}
+
+.wx-ai-send {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-text);
+  transition: background var(--t-fast) var(--ease);
+}
+
+.wx-ai-send:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.wx-ai-send:disabled {
+  color: var(--text-4);
+}
+
+.wx-ai-send svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wx-ai-answer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 0 4px;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow: hidden;
+}
+
+.wx-ai.tall .wx-ai-answer {
+  flex-direction: column;
+  overflow: auto;
+}
+
+.wx-ai-answer.error .wx-ai-text,
+.wx-ai-answer.unknown .wx-ai-text {
+  color: #fecaca;
+}
+
+.wx-ai-answer.command .wx-ai-text {
+  color: #a7f3d0;
+}
+
+.wx-ai-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.wx-ai-text.one {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wx-ai-answer .wx-link {
+  flex: none;
+}
+
+/* --- плагины ------------------------------------------------------------------------------------------------------------ */
+.wx-plugins-box {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wx-plugins {
+  display: grid;
+  gap: 6px;
+  justify-content: start;
+}
+
+.wx-plugin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  border-radius: 10px;
+  min-width: 0;
+}
+
+.wx-plugin:hover .ptile {
+  transform: translateY(-2px);
+}
+
+.wx-plugin.busy .ptile {
+  animation: pulse-dot 0.9s infinite;
+}
+
+.wx-plugin-tile {
+  position: relative;
+  display: inline-flex;
+}
+
+.wx-plugin-tile .pl-badge {
+  width: 10px;
+  height: 10px;
+  right: -2px;
+  bottom: -2px;
+  box-shadow: 0 0 0 2px rgba(28, 31, 40, 0.95);
+}
+
+.wx-plugin-name {
+  max-width: 100%;
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- столы --------------------------------------------------------------------------------------------------------------- */
+.wx-desks {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 6px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wx-desk {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  height: 31px;
+  padding: 0 11px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.wx-desk:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.wx-desk.on {
+  color: #fff;
+  background: var(--accent);
+  border-color: transparent;
+  box-shadow: 0 3px 12px rgba(var(--accent-rgb), 0.3);
+}
+
+.wx-desk svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+/* --- питомец --------------------------------------------------------------------------------------------------------------- */
+.widget.wx-pet {
+  padding: 10px 12px 12px;
+  align-items: center;
+  background:
+    radial-gradient(70% 60% at 50% 45%, rgba(56, 189, 248, 0.12), transparent 70%),
+    var(--panel);
+}
+
+.wx-pet-stage {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wx-pet-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+}
+
+:root[data-anim="off"] .wx-time.done,
+:root[data-anim="off"] .wx-plugin.busy .ptile {
+  animation: none !important;
+}
+
+/* компактный виджет без шапки: шестерёнка поверх, в углу */
+.widget.wx-floating {
+  position: relative;
+}
+
+.wx-float-cfg {
+  position: absolute;
+  top: 9px;
+  right: 11px;
+  z-index: 1;
+}
+
+.wx-desks.compact .wx-desk {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  justify-content: center;
+}
+
+.wx-desks.compact .wx-desk svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* длинные списки мягко уходят вниз */
+.wx-news,
+.wx-notes {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+  padding-bottom: 10px;
+}
+
+.wx-zones.row-mode .wx-zone-icon {
+  display: none;
+}
+
+.wx-zones.row-mode .wx-zone + .wx-zone {
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+}

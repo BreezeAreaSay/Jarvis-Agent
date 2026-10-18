@@ -23,10 +23,11 @@ const NAV: { id: string; label: string; icon: ReactNode }[] = [
   { id: "settings", label: "Настройки", icon: <Settings /> },
 ];
 
-function Sidebar({ page }: { page: string }) {
+/** locked — идёт первая настройка: разделы откроются после неё. */
+function Sidebar({ page, locked }: { page: string; locked: boolean }) {
   const pendingConfirm = useApp((s) => s.confirmations.length > 0);
   return (
-    <aside className="sidebar">
+    <aside className={cx("sidebar", locked && "locked")} inert={locked}>
       <button className="logo" onClick={() => navigate("home")} aria-label="Jarvis">
         <LogoMark size={38} />
       </button>
@@ -120,7 +121,7 @@ export function Shell() {
   return (
     <div className="app-root">
       <div className="app-bg" />
-      <Sidebar page={page} />
+      <Sidebar page={page} locked={ready && !onboarded} />
       <main className="main">
         <TitleBar />
         <Suspense fallback={null}>{ready && (onboarded ? content : <Onboarding />)}</Suspense>

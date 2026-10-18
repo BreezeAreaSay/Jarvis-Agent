@@ -1,0 +1,223 @@
+{
+  "id": "cs2",
+  "name": "Counter-Strike 2",
+  "app": "cs2.exe",
+  "icon": "cs2",
+  "description": "Стандартные клавиши Counter-Strike 2: оружие, закупка, перезарядка, консоль.",
+  "commands": [
+    {
+      "id": "console",
+      "name": "CS2: консоль",
+      "phrases": [
+        "консоль в кс",
+        "консоль кс",
+        "открой консоль"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "cs2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "backquote"
+        }
+      ]
+    },
+    {
+      "id": "buy",
+      "name": "CS2: меню закупки",
+      "phrases": [
+        "открой закупку",
+        "открой меню закупки",
+        "открой меню покупки",
+        "закупку",
+        "меню закупки",
+        "меню покупки",
+        "в кс закупка",
+        "кс закупка"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "cs2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "b"
+        }
+      ]
+    },
+    {
+      "id": "reload",
+      "name": "CS2: перезарядка",
+      "phrases": [
+        "перезарядка",
+        "перезаряди",
+        "в кс перезарядка",
+        "кс перезарядка"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "cs2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "r"
+        }
+      ]
+    },
+    {
+      "id": "drop",
+      "name": "CS2: выбросить оружие",
+      "phrases": [
+        "выброси оружие",
+        "сбрось оружие",
+        "в кс выброси",
+        "кс выброси"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "cs2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "g"
+        }
+      ]
+    },
+    {
+      "id": "inspect",
+      "name": "CS2: осмотреть оружие",
+      "phrases": [
+        "осмотри оружие",
+        "в кс осмотри",
+        "кс осмотри"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "cs2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "f"
+        }
+      ]
+    },
+    {
+      "id": "last_weapon",
+      "name": "CS2: прошлое оружие",
+      "phrases": [
+        "прошлое оружие",
+        "последнее оружие",
+        "предыдущее оружие"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "cs2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "q"
+        }
+      ]
+    },
+    {
+      "id": "primary",
+      "name": "CS2: основное оружие",
+      "phrases": [
+        "основное оружие",
+        "достань автомат",
+        "автомат"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "cs2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "1"
+        }
+      ]
+    },
+    {
+      "id": "secondary",
+      "name": "CS2: пистолет",
+      "phrases": [
+        "достань пистолет",
+        "пистолет"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "cs2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "2"
+        }
+      ]
+    },
+    {
+      "id": "knife",
+      "name": "CS2: нож",
+      "phrases": [
+        "достань нож",
+        "нож"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "cs2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "3"
+        }
+      ]
+    },
+    {
+      "id": "grenade",
+      "name": "CS2: граната",
+      "phrases": [
+        "достань гранату",
+        "гранату",
+        "граната"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "cs2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "4"
+        }
+      ]
+    },
+    {
+      "id": "bomb",
+      "name": "CS2: бомба",
+      "phrases": [
+        "достань бомбу",
+        "бомбу",
+        "бомба"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "cs2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "5"
+        }
+      ]
+    }
+  ]
+}

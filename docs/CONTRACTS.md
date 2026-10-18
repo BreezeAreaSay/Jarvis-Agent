@@ -115,13 +115,19 @@ mouse, search, weather, timer, note, task, calendar, desk, ai, home, plugin, err
 ```
 
 - `phrases` — фразы активации (обязательная часть), `optional` — слова, которые можно добавить («пожалуйста»).
-- Шаблоны слотов в фразах: `{number}` (число словами или цифрами: «пятьдесят», «50», «50%»), `{app}` (программа
-  из меню «Пуск»), `{site}` (известный сайт), `{desk}` (стол), `{text}` / `{query}` (свободный хвост фразы).
-  В `value` действий слоты подставляются: `"value": "{number}"`.
+- Шаблоны слотов в фразах: `{number}` (число словами или цифрами: «пятьдесят», «50», «50%», «половину» → 50,
+  «на максимум» → 100), `{app}` (программа из меню «Пуск»), `{site}` (известный сайт или адрес «vk.com»), `{desk}`
+  (стол), `{text}` / `{query}` (свободный хвост фразы), `{keys}` (клавиши словами: «контрол шифт эс»).
+  В `value` действий слоты подставляются: `"value": "{number}"`. В `slots` совпадения: `number` — число,
+  `app` — название (+ `app_id`, `exe`), `site` — название (+ `url`), `desk`, `text`/`query`, `keys` — «ctrl+s».
 - `confirm` — спросить подтверждение перед выполнением; `chain` («Связывать») — команду можно соединять с другими
-  в одной фразе («сверни все окна и включи музыку»).
+  в одной фразе («сверни все окна и включи музыку»; фраза делится, только если каждая часть — команда с `chain`).
 - `id`: встроенные — `builtin.<имя>`, паков — `pack.<pack>.<имя>`, свои — `user.<slug>`, динамические —
-  `<провайдер>:<ключ>`.
+  `<провайдер>:<ключ>` (в путях API — как есть, с «:»).
+- Разбор: порог похожести 82 (фраза с вопросительного слова — 90); при равной похожести фраза без слотов важнее
+  шаблона со слотом, затем источник: свои → паки → динамические → встроенные. Шаблон со свободным хвостом
+  (`{text}`/`{query}`) уступает фразе без слотов. Вопросы и длинные просьбы, не совпавшие с командой, идут ИИ.
+- Динамическая команда получает слоты с `"_source"` (откуда фраза: `voice`, `text`, `ui`…).
 
 ### Действия (`type`)
 
@@ -132,7 +138,19 @@ System.BrightnessSet, System.Lock, System.Sleep, System.Shutdown, System.Restart
 System.Screenshot, System.EmptyRecycleBin, Media.PlayPause, Media.Next, Media.Prev, Media.Stop,
 Window.MinimizeAll, Window.Minimize, Window.Maximize, Window.Restore, Window.Close, Wait, Speak, Notify,
 Clipboard.Set, Web.Search, Info.Time, Info.Date, Info.Weather, Jarvis.OpenDesk, Jarvis.Ask, Jarvis.Command,
-Jarvis.Plugin, Jarvis.SilentMode, Jarvis.ShowWindow`. Каталог с описанием параметров — `GET /api/commands/actions`.
+Jarvis.Plugin, Jarvis.SilentMode, Jarvis.ShowWindow` и для встроенных команд `Info.Volume, Info.Media,
+Info.Battery, Info.System, Jarvis.Timer, Jarvis.Reminder`. Каталог с описанием параметров —
+`GET /api/commands/actions`.
+
+Значения: `Keys.Press` — «ctrl+shift+s», несколько через пробел («ctrl+k ctrl+s»), повтор «down*3»; `Wait`,
+`System.Shutdown`/`Restart` — секунды или «5m», «1h»; `System.VolumeSet`/`BrightnessSet` — 0–100 или «+10»/«-10»;
+`Mouse.*` — «x y» (пусто — где курсор, `center` — центр экрана); `Media.PlayPause` — «» (переключить), `play`,
+`pause`; `Web.Search` — «google: запрос» (`google, yandex, youtube, bing, duckduckgo, wikipedia, images, maps` или
+сайт с поиском: `avito, ozon…`); `Launch.Folder` — путь или `downloads, documents, desktop, pictures, music, videos,
+screenshots`; `Launch.Shell` — только в своих командах; `Jarvis.Command` — id команды или её фраза;
+`Jarvis.Plugin` — «плагин:действие» («dictation:toggle»), аргументы JSON после «|»; `Jarvis.SilentMode` — `on`,
+`off`, `toggle`; `Jarvis.ShowWindow` — `show`, `hide` или страница (`settings`, `commands`, `chat`);
+`Jarvis.Timer` — «5m»; `Jarvis.Reminder` — «10m | Позвонить маме».
 
 ### Маршруты
 
@@ -149,17 +167,26 @@ Jarvis.Plugin, Jarvis.SilentMode, Jarvis.ShowWindow`. Каталог с опис
 | `GET /api/commands/actions` | — | `{items: ActionType[]}` |
 | `POST /api/commands/record/start` | — | `{ok}` |
 | `POST /api/commands/record/stop` | — | `{actions: Action[]}` |
-| `POST /api/commands/build` | `{description}` | `{name, phrases, actions, steps: [{title, detail}]}` — «Создать с помощью AI» |
+| `POST /api/commands/build` | `{description}` | `{name, phrases, actions, steps: [{title, detail}], skipped: [string]}` — «Создать с помощью AI» (команда не сохраняется; `skipped` — непонятые части описания) |
 | `GET /api/packs` | — | `{items: Pack[], totals: {packs, commands}}` |
 | `POST /api/packs/{id}/install` / `DELETE /api/packs/{id}` | — | `Pack` |
 | `GET /api/apps?refresh=0` | — | `{items: [{name, app_id, path, source}]}` |
 
-`CommandInfo = Command + {source: builtin|pack|user|dynamic, pack?, editable}`.
+`{id}` — с точками и двоеточиями («desks:abc»); неизвестный id или пак — 404, ошибка проверки — 400 с текстом.
+`GET /api/commands`: `items` — с учётом `q` (все слова в названии, id, фразах) и `category` (`user`/`packs` —
+по источнику); `categories` и `total` — по всем командам; `title` категории — по-русски («Громкость», «Мышь»,
+«Столы», «Плагины»…), незнакомая — id с заглавной буквы.
+`CommandInfo = Command + {source: builtin|pack|user|dynamic, pack?, editable}` (у динамических `actions: []`).
+`CommandIn = {name, phrases, optional?, actions, confirm?, chain?, icon?, say?, enabled? (по умолчанию true)}` —
+`category` своих команд всегда `user`.
 `ActionType = {type, title, category, icon, params: [{name, kind: text|number|keys|path|app|url|select|coords,
-label, placeholder?, options?}], description}`.
-`Pack = {id, name, app, icon, description, commands_count, installed, commands: [{id, name, phrases}]}`.
+label, placeholder?, options?, required}], description}`.
+`Pack = {id, name, app, icon, description, commands_count, installed, commands: [{id, name, phrases}]}` — `app` —
+процесс программы («Spotify.exe»), `name` — для людей.
+`CommandService.describe(limit)` (для ИИ и пульта) — `[{id, title, example, phrases, category, icon, slots?}]`.
 
-События: `commands.changed {}`; `record.state {recording, count}`; `packs.changed {}`.
+События: `commands.changed {}`; `record.state {recording, count}`; `packs.changed {}`; от `Jarvis.ShowWindow` —
+`ui.show {page?}` (показать окно, открыть страницу) и `ui.hide {}`.
 
 ## 3. Голос (`jarvis/voice`, `jarvis/api/voice.py`)
 
@@ -223,6 +250,10 @@ label, placeholder?, options?}], description}`.
 | `GET /api/mcp/servers` | — | `{items: McpServer[]}` |
 | `POST /api/mcp/servers`, `PUT/DELETE /api/mcp/servers/{id}` | `McpServerIn` | `McpServer` |
 | `POST /api/mcp/servers/{id}/reconnect` | — | `McpServer` |
+| `GET /api/mcp/aidev` | — | `{found, install: {source, label, command, args, root, version, docker} \| null, server: McpServer \| null, profiles: [{id, tools, description, enabled}], tools, github}` — AI Dev System на этом ПК |
+| `POST /api/mcp/aidev` | `{profiles?: string[], folder?: string}` | как `GET` — подключить AI Dev System (сервер `ai-dev`), сменить профили или указать папку клона |
+| `GET /api/mcp/import` | — | `{items: [{key, client, client_label, file, name, transport, command, args, env, url, headers, problem, added}]}` — серверы из Claude Code, Claude Desktop, Cursor, VS Code, Codex, Gemini CLI |
+| `POST /api/mcp/import` | `{keys: string[]}` | `{items: McpServer[], skipped: [{key, reason}]}` |
 | `GET /api/mcp/catalog?q=&cursor=` | — | `{items: [{name, title, description, version, repository, website, install, installs}], next_cursor, total}` (`install` может содержать `headers`) |
 
 `Chat = {id, title, kind: chat|voice, mode: chat|all|agent, model, pinned, created, updated}`.

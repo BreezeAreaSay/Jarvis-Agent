@@ -1,6 +1,6 @@
 // Значки серверов MCP: бренд угадывается по названию, команде и адресу (GitHub, Notion, Figma…),
 // иначе — значок по смыслу (файлы, браузер, память, время) или общий «сервер».
-import { Brain, Clock, Database, FolderOpen, Globe, Plug, Search, Server, TerminalSquare } from "lucide-react";
+import { Brain, BrainCircuit, Clock, Database, FolderOpen, Globe, Plug, Search, Server, TerminalSquare } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import type { McpCatalogItem, McpServer } from "@/api/types";
 import {
@@ -191,6 +191,7 @@ const KEYWORDS: [RegExp, string][] = [
 ];
 
 const GLYPHS: [RegExp, ReactNode][] = [
+  [/ai-dev|ai dev system/, <BrainCircuit key="aidev" />],
   [/file|папк|файл|fs\b|disk/, <FolderOpen key="fs" />],
   [/fetch|browser|chrome|сайт|\bweb\b/, <Globe key="web" />],
   [/memory|память|knowledge|think/, <Brain key="mem" />],

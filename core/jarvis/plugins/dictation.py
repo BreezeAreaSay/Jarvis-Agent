@@ -81,7 +81,7 @@ class Dictation(Plugin):
     name = "Умная диктовка"
     description = "Говорите — текст появляется там, где стоит курсор, с запятыми и заглавными буквами."
     icon = "dictation"
-    color = ("#60A5FA", "#3B82F6")
+    color = ("#A78BFA", "#7C3AED")
     fields = (
         ConfigField(
             "smart",

@@ -70,7 +70,7 @@ class SecondPc(Plugin):
         "Голосом управляйте другим компьютером в сети, где тоже запущен Jarvis: «на ноутбуке включи музыку»."
     )
     icon = "computer"
-    color = ("#22D3EE", "#0891B2")
+    color = ("#818CF8", "#4F46E5")
     fields = (
         ConfigField(
             "pcs",

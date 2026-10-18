@@ -16,6 +16,7 @@ const SEND = new Set([
   "avatar:menu",
   "main:show",
   "overlay:ignore-mouse",
+  "overlay:ready",
 ]);
 
 function arg(name: string): string {
@@ -31,6 +32,7 @@ contextBridge.exposeInMainWorld("jarvis", {
   openExternal: (url: string) => ipcRenderer.send("shell:open-external", String(url)),
   pickFile: (options: unknown) => ipcRenderer.invoke("dialog:pick-file", options),
   fileIcon: (path: string) => ipcRenderer.invoke("app:file-icon", String(path)),
+  pickPoint: () => ipcRenderer.invoke("screen:pick-point"),
   on: (channel: string, listener: (...args: unknown[]) => void) => {
     if (!LISTEN.has(channel)) return () => undefined;
     const wrapped = (_: IpcRendererEvent, ...args: unknown[]) => listener(...args);

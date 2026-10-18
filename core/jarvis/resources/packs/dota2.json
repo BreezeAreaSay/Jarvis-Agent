@@ -1,0 +1,294 @@
+{
+  "id": "dota2",
+  "name": "Dota 2",
+  "app": "dota2.exe",
+  "icon": "dota2",
+  "description": "Классические клавиши Dota 2: способности QWER/D, предметы ZXCVBN, телепорт, выбор героя и пауза.",
+  "commands": [
+    {
+      "id": "skill_q",
+      "name": "Dota 2: первая способность",
+      "phrases": [
+        "первая способность",
+        "в доте первая способность",
+        "дота первая способность"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "q"
+        }
+      ]
+    },
+    {
+      "id": "skill_w",
+      "name": "Dota 2: вторая способность",
+      "phrases": [
+        "вторая способность",
+        "в доте вторая способность",
+        "дота вторая способность"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "w"
+        }
+      ]
+    },
+    {
+      "id": "skill_e",
+      "name": "Dota 2: третья способность",
+      "phrases": [
+        "третья способность",
+        "в доте третья способность",
+        "дота третья способность"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "e"
+        }
+      ]
+    },
+    {
+      "id": "ult",
+      "name": "Dota 2: ультимейт",
+      "phrases": [
+        "ульта",
+        "ультимейт",
+        "прожми ульту",
+        "в доте ульта",
+        "дота ульта"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "r"
+        }
+      ]
+    },
+    {
+      "id": "skill_d",
+      "name": "Dota 2: способность D",
+      "phrases": [
+        "способность ди",
+        "четвертая способность"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "d"
+        }
+      ]
+    },
+    {
+      "id": "item_1",
+      "name": "Dota 2: предмет 1",
+      "phrases": [
+        "первый предмет",
+        "предмет один"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "z"
+        }
+      ]
+    },
+    {
+      "id": "item_2",
+      "name": "Dota 2: предмет 2",
+      "phrases": [
+        "второй предмет",
+        "предмет два"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "x"
+        }
+      ]
+    },
+    {
+      "id": "item_3",
+      "name": "Dota 2: предмет 3",
+      "phrases": [
+        "третий предмет",
+        "предмет три"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "c"
+        }
+      ]
+    },
+    {
+      "id": "item_4",
+      "name": "Dota 2: предмет 4",
+      "phrases": [
+        "четвертый предмет",
+        "предмет четыре"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "v"
+        }
+      ]
+    },
+    {
+      "id": "item_5",
+      "name": "Dota 2: предмет 5",
+      "phrases": [
+        "пятый предмет",
+        "предмет пять"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "b"
+        }
+      ]
+    },
+    {
+      "id": "item_6",
+      "name": "Dota 2: предмет 6",
+      "phrases": [
+        "шестой предмет",
+        "предмет шесть"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "n"
+        }
+      ]
+    },
+    {
+      "id": "tp",
+      "name": "Dota 2: телепорт",
+      "phrases": [
+        "телепорт",
+        "тп",
+        "телепортируйся",
+        "в доте телепорт",
+        "дота телепорт"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "t"
+        }
+      ]
+    },
+    {
+      "id": "select_hero",
+      "name": "Dota 2: выбрать героя",
+      "phrases": [
+        "выбери героя",
+        "выдели героя",
+        "в доте герой",
+        "дота герой"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "f1"
+        }
+      ]
+    },
+    {
+      "id": "pause",
+      "name": "Dota 2: пауза",
+      "phrases": [
+        "пауза в доте",
+        "пауза дота",
+        "в доте пауза",
+        "дота пауза"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "f9"
+        }
+      ]
+    },
+    {
+      "id": "chat",
+      "name": "Dota 2: чат",
+      "phrases": [
+        "чат в доте",
+        "чат дота",
+        "в доте чат",
+        "дота чат"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "dota2.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "enter"
+        }
+      ]
+    }
+  ]
+}

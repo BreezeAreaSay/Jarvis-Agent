@@ -123,7 +123,7 @@ class AutoLock(Plugin):
     name = "Блокировка, когда отходишь"
     description = "Блокирует компьютер, когда камера не видит вас за столом. Вернулись — просто войдите."
     icon = "lock"
-    color = ("#F87171", "#DC2626")
+    color = ("#2DD4BF", "#0D9488")
     fields = (
         ConfigField(
             "mode",

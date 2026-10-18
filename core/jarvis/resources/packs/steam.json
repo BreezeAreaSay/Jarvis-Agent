@@ -1,0 +1,173 @@
+{
+  "id": "steam",
+  "name": "Steam",
+  "app": "steam.exe",
+  "icon": "steam",
+  "description": "Разделы клиента Steam (библиотека, магазин, друзья, загрузки, Big Picture) и оверлей в игре.",
+  "commands": [
+    {
+      "id": "library",
+      "name": "Steam: библиотека",
+      "phrases": [
+        "библиотека в стиме",
+        "библиотека стим",
+        "открой библиотеку стима",
+        "библиотеку стима",
+        "в стиме библиотека",
+        "стим библиотека"
+      ],
+      "actions": [
+        {
+          "type": "Launch.Url",
+          "value": "steam://open/games"
+        }
+      ]
+    },
+    {
+      "id": "store",
+      "name": "Steam: магазин",
+      "phrases": [
+        "открой магазин стима",
+        "открой магазин стим",
+        "магазин стима",
+        "магазин стим",
+        "в стиме магазин",
+        "стим магазин"
+      ],
+      "actions": [
+        {
+          "type": "Launch.Url",
+          "value": "steam://store"
+        }
+      ]
+    },
+    {
+      "id": "friends",
+      "name": "Steam: друзья",
+      "phrases": [
+        "друзья в стиме",
+        "друзья стим",
+        "в стиме друзья",
+        "стим друзья"
+      ],
+      "actions": [
+        {
+          "type": "Launch.Url",
+          "value": "steam://open/friends"
+        }
+      ]
+    },
+    {
+      "id": "downloads",
+      "name": "Steam: загрузки",
+      "phrases": [
+        "загрузки стима",
+        "загрузки в стиме",
+        "в стиме загрузки",
+        "стим загрузки"
+      ],
+      "actions": [
+        {
+          "type": "Launch.Url",
+          "value": "steam://open/downloads"
+        }
+      ]
+    },
+    {
+      "id": "big_picture",
+      "name": "Steam: Big Picture",
+      "phrases": [
+        "биг пикчер",
+        "режим big picture",
+        "режим биг пикчер",
+        "в стиме биг пикчер",
+        "стим биг пикчер"
+      ],
+      "actions": [
+        {
+          "type": "Launch.Url",
+          "value": "steam://open/bigpicture"
+        }
+      ]
+    },
+    {
+      "id": "settings",
+      "name": "Steam: настройки",
+      "phrases": [
+        "настройки стима",
+        "настройки в стиме",
+        "в стиме настройки",
+        "стим настройки"
+      ],
+      "actions": [
+        {
+          "type": "Launch.Url",
+          "value": "steam://open/settings"
+        }
+      ]
+    },
+    {
+      "id": "screenshots",
+      "name": "Steam: скриншоты",
+      "phrases": [
+        "скриншоты стима",
+        "скриншоты в стиме",
+        "в стиме скриншоты",
+        "стим скриншоты"
+      ],
+      "actions": [
+        {
+          "type": "Launch.Url",
+          "value": "steam://open/screenshots"
+        }
+      ]
+    },
+    {
+      "id": "news",
+      "name": "Steam: новости",
+      "phrases": [
+        "новости стима",
+        "новости в стиме",
+        "в стиме новости",
+        "стим новости"
+      ],
+      "actions": [
+        {
+          "type": "Launch.Url",
+          "value": "steam://open/news"
+        }
+      ]
+    },
+    {
+      "id": "overlay",
+      "name": "Steam: оверлей в игре",
+      "phrases": [
+        "оверлей стима",
+        "открой оверлей",
+        "в стиме оверлей",
+        "стим оверлей"
+      ],
+      "actions": [
+        {
+          "type": "Keys.Press",
+          "value": "shift+tab"
+        }
+      ]
+    },
+    {
+      "id": "game_screenshot",
+      "name": "Steam: скриншот в игре",
+      "phrases": [
+        "скриншот в игре",
+        "в стиме скриншот",
+        "стим скриншот"
+      ],
+      "actions": [
+        {
+          "type": "Keys.Press",
+          "value": "f12"
+        }
+      ]
+    }
+  ]
+}

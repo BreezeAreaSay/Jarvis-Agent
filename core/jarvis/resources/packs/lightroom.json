@@ -1,0 +1,303 @@
+{
+  "id": "lightroom",
+  "name": "Adobe Lightroom Classic",
+  "app": "Lightroom.exe",
+  "icon": "lightroom",
+  "description": "Модули, флажки, оценки, копирование настроек и экспорт в Lightroom Classic.",
+  "commands": [
+    {
+      "id": "develop",
+      "name": "Lightroom: модуль коррекции",
+      "phrases": [
+        "коррекция в лайтруме",
+        "коррекция лайтрум",
+        "модуль коррекции в лайтруме",
+        "модуль коррекции лайтрум",
+        "обработка в лайтруме",
+        "обработка лайтрум",
+        "в лайтруме коррекция",
+        "лайтрум коррекция"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "d"
+        }
+      ]
+    },
+    {
+      "id": "library",
+      "name": "Lightroom: библиотека",
+      "phrases": [
+        "библиотека в лайтруме",
+        "библиотека лайтрум",
+        "сетка в лайтруме",
+        "сетка лайтрум",
+        "в лайтруме библиотека",
+        "лайтрум библиотека"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "g"
+        }
+      ]
+    },
+    {
+      "id": "loupe",
+      "name": "Lightroom: просмотр фото",
+      "phrases": [
+        "лупа в лайтруме",
+        "лупа лайтрум",
+        "просмотр фото в лайтруме",
+        "просмотр фото лайтрум",
+        "в лайтруме лупа",
+        "лайтрум лупа"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "e"
+        }
+      ]
+    },
+    {
+      "id": "compare",
+      "name": "Lightroom: сравнение",
+      "phrases": [
+        "сравнение в лайтруме",
+        "сравнение лайтрум",
+        "в лайтруме сравни",
+        "лайтрум сравни"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "c"
+        }
+      ]
+    },
+    {
+      "id": "pick",
+      "name": "Lightroom: отметить фото",
+      "phrases": [
+        "отметь фото в лайтруме",
+        "отметь фото лайтрум",
+        "поставь флажок в лайтруме",
+        "поставь флажок лайтрум",
+        "в лайтруме отметь",
+        "лайтрум отметь"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "p"
+        }
+      ]
+    },
+    {
+      "id": "reject",
+      "name": "Lightroom: отклонить фото",
+      "phrases": [
+        "отклони фото в лайтруме",
+        "отклони фото лайтрум",
+        "в лайтруме отклони",
+        "лайтрум отклони"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "x"
+        }
+      ]
+    },
+    {
+      "id": "unflag",
+      "name": "Lightroom: снять флажок",
+      "phrases": [
+        "сними флажок в лайтруме",
+        "сними флажок лайтрум",
+        "в лайтруме сними флажок",
+        "лайтрум сними флажок"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "u"
+        }
+      ]
+    },
+    {
+      "id": "rate_5",
+      "name": "Lightroom: пять звёзд",
+      "phrases": [
+        "пять звезд в лайтруме",
+        "пять звезд лайтрум",
+        "оценка пять в лайтруме",
+        "оценка пять лайтрум",
+        "в лайтруме пять звезд",
+        "лайтрум пять звезд"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "5"
+        }
+      ]
+    },
+    {
+      "id": "before_after",
+      "name": "Lightroom: до и после",
+      "phrases": [
+        "до и после в лайтруме",
+        "до и после лайтрум",
+        "в лайтруме до и после",
+        "лайтрум до и после"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "backslash"
+        }
+      ]
+    },
+    {
+      "id": "copy_settings",
+      "name": "Lightroom: копировать настройки",
+      "phrases": [
+        "скопируй настройки в лайтруме",
+        "скопируй настройки лайтрум",
+        "в лайтруме скопируй настройки",
+        "лайтрум скопируй настройки"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+c"
+        }
+      ]
+    },
+    {
+      "id": "paste_settings",
+      "name": "Lightroom: вставить настройки",
+      "phrases": [
+        "вставь настройки в лайтруме",
+        "вставь настройки лайтрум",
+        "в лайтруме вставь настройки",
+        "лайтрум вставь настройки"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+v"
+        }
+      ]
+    },
+    {
+      "id": "auto_tone",
+      "name": "Lightroom: автотон",
+      "phrases": [
+        "автотон в лайтруме",
+        "автотон лайтрум",
+        "авто тон в лайтруме",
+        "авто тон лайтрум",
+        "в лайтруме автотон",
+        "лайтрум автотон"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+u"
+        }
+      ]
+    },
+    {
+      "id": "crop",
+      "name": "Lightroom: кадрирование",
+      "phrases": [
+        "кадрирование в лайтруме",
+        "кадрирование лайтрум",
+        "в лайтруме кадрируй",
+        "лайтрум кадрируй"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "r"
+        }
+      ]
+    },
+    {
+      "id": "export",
+      "name": "Lightroom: экспорт",
+      "phrases": [
+        "экспорт в лайтруме",
+        "экспорт лайтрум",
+        "в лайтруме экспорт",
+        "лайтрум экспорт"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Lightroom.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+e"
+        }
+      ]
+    }
+  ]
+}

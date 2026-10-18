@@ -2,6 +2,7 @@
 // (состояние, инструменты, включение, переподключение, правка, удаление) и каталог серверов MCP с поиском.
 import {
   ChevronDown,
+  Download,
   ExternalLink,
   Library,
   Pencil,
@@ -20,6 +21,7 @@ import type { McpCatalogItem, McpServer } from "@/api/types";
 import { bridge } from "@/lib/bridge";
 import { navigate } from "@/lib/router";
 import { Button, cx, Empty, IconButton, Modal, notify, notifyError, Tabs, TextInput, Toggle } from "@/ui";
+import { ImportModal } from "./McpAiDev";
 import { CountUp, McpOrbit } from "./McpOrbit";
 import { GITHUB_PATH, MCP_STATUS, McpIcon, joinArgs, shortRepo } from "./mcpKit";
 import { McpServerModal } from "./McpServerModal";
@@ -322,6 +324,7 @@ export function McpTab({ sub }: { sub?: string }) {
   const [modal, setModal] = useState<{ server?: McpServer; preset?: McpCatalogItem } | null>(null);
   const [removing, setRemoving] = useState<McpServer | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [importing, setImporting] = useState(false);
   const serversRef = useRef<McpServer[] | null>(null);
   serversRef.current = servers;
 
@@ -436,6 +439,9 @@ export function McpTab({ sub }: { sub?: string }) {
             ]}
           />
           <span className="spacer" />
+          <Button icon={<Download />} onClick={() => setImporting(true)} title="Серверы из Claude, Cursor, VS Code, Codex и Gemini">
+            Импорт
+          </Button>
           <Button variant="primary" icon={<Plus />} onClick={() => setModal({})}>
             Добавить сервер
           </Button>
@@ -452,24 +458,28 @@ export function McpTab({ sub }: { sub?: string }) {
               </Button>
             </div>
           </Empty>
-        ) : servers && !servers.length ? (
-          <div className="mcp-empty">
-            <div className="mcp-empty-title">Пока нет подключений</div>
-            <p className="muted small">
-              MCP-серверы дают Jarvis AI новые умения: GitHub, Notion, файлы, базы данных, браузер и тысячи других.
-              Выберите сервер в каталоге или добавьте свой.
-            </p>
-            <div className="row" style={{ gap: 8, justifyContent: "center" }}>
-              <Button variant="soft" icon={<Library />} onClick={() => navigate("extensions", "mcp", "catalog")}>
-                Открыть каталог
-              </Button>
-              <Button icon={<Plus />} onClick={() => setModal({})}>
-                Добавить вручную
-              </Button>
-            </div>
-          </div>
         ) : (
           <div className="mcp-list">
+            {servers && !servers.length && (
+              <div className="mcp-empty">
+                <div className="mcp-empty-title">Пока нет подключений</div>
+                <p className="muted small">
+                  MCP-серверы дают Jarvis AI новые умения: GitHub, Notion, файлы, базы данных, браузер и тысячи других.
+                  Выберите сервер в каталоге, перенесите свои из Claude или Cursor или добавьте вручную.
+                </p>
+                <div className="row" style={{ gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+                  <Button variant="soft" icon={<Library />} onClick={() => navigate("extensions", "mcp", "catalog")}>
+                    Открыть каталог
+                  </Button>
+                  <Button icon={<Download />} onClick={() => setImporting(true)}>
+                    Импорт из Claude, Cursor…
+                  </Button>
+                  <Button icon={<Plus />} onClick={() => setModal({})}>
+                    Добавить вручную
+                  </Button>
+                </div>
+              </div>
+            )}
             {!servers && Array.from({ length: 3 }, (_, i) => <div key={i} className="mcp-server skeleton" aria-hidden />)}
             {list.map((s) => (
               <ServerRow
@@ -496,6 +506,7 @@ export function McpTab({ sub }: { sub?: string }) {
           setTimeout(load, 300);
         }}
       />
+      <ImportModal open={importing} onClose={() => setImporting(false)} onImported={() => setTimeout(load, 300)} />
       <Modal
         open={!!removing}
         onClose={() => setRemoving(null)}

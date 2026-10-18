@@ -24,6 +24,9 @@ export function bindLevels() {
   onEvent<{ state: VoiceState }>("voice.state", (e) => {
     levels.state = e.data.state;
   });
+  onEvent<{ voice?: { state?: VoiceState } }>("hello", (e) => {
+    if (e.data.voice?.state) levels.state = e.data.voice.state;
+  });
   onEvent("voice.wake", () => {
     levels.wakeAt = performance.now();
   });

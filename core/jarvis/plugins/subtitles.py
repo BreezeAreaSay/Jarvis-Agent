@@ -104,7 +104,7 @@ class Subtitles(Plugin):
     name = "Живые субтитры"
     description = "Текст того, что звучит в колонках — видео, созвоны, стримы, — с переводом на русский."
     icon = "subtitles"
-    color = ("#FBBF24", "#F59E0B")
+    color = ("#38BDF8", "#0284C7")
     fields = (
         ConfigField("source_lang", "select", "Язык звука", default="auto", options=SOURCE_OPTIONS),
         ConfigField("target_lang", "select", "Переводить на", default="ru", options=TARGET_OPTIONS),

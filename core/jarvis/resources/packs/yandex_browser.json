@@ -1,0 +1,229 @@
+{
+  "id": "yandex_browser",
+  "name": "Яндекс Браузер",
+  "app": "browser.exe",
+  "icon": "yandex",
+  "description": "Вкладки, история, загрузки, закладки и режим инкогнито в Яндекс Браузере.",
+  "commands": [
+    {
+      "id": "new_tab",
+      "name": "Яндекс Браузер: новая вкладка",
+      "phrases": [
+        "новая вкладка в яндекс браузере",
+        "яндекс браузер новая вкладка",
+        "открой новую вкладку в яндекс браузере"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "browser.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+t"
+        }
+      ]
+    },
+    {
+      "id": "close_tab",
+      "name": "Яндекс Браузер: закрыть вкладку",
+      "phrases": [
+        "закрой вкладку в яндекс браузере",
+        "яндекс браузер закрой вкладку"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "browser.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+w"
+        }
+      ]
+    },
+    {
+      "id": "reopen_tab",
+      "name": "Яндекс Браузер: вернуть закрытую вкладку",
+      "phrases": [
+        "верни закрытую вкладку в яндекс браузере",
+        "верни вкладку в яндекс браузере",
+        "яндекс браузер верни вкладку"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "browser.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+t"
+        }
+      ]
+    },
+    {
+      "id": "next_tab",
+      "name": "Яндекс Браузер: следующая вкладка",
+      "phrases": [
+        "следующая вкладка в яндекс браузере",
+        "яндекс браузер следующая вкладка"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "browser.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+tab"
+        }
+      ]
+    },
+    {
+      "id": "prev_tab",
+      "name": "Яндекс Браузер: предыдущая вкладка",
+      "phrases": [
+        "предыдущая вкладка в яндекс браузере",
+        "яндекс браузер предыдущая вкладка"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "browser.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+tab"
+        }
+      ]
+    },
+    {
+      "id": "history",
+      "name": "Яндекс Браузер: история",
+      "phrases": [
+        "история в яндекс браузере",
+        "яндекс браузер история",
+        "открой историю в яндекс браузере"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "browser.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+h"
+        }
+      ]
+    },
+    {
+      "id": "downloads",
+      "name": "Яндекс Браузер: загрузки",
+      "phrases": [
+        "загрузки в яндекс браузере",
+        "яндекс браузер загрузки"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "browser.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+j"
+        }
+      ]
+    },
+    {
+      "id": "bookmark",
+      "name": "Яндекс Браузер: добавить в закладки",
+      "phrases": [
+        "добавь в закладки в яндекс браузере",
+        "яндекс браузер в закладки"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "browser.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+d"
+        }
+      ]
+    },
+    {
+      "id": "refresh",
+      "name": "Яндекс Браузер: обновить страницу",
+      "phrases": [
+        "обнови страницу в яндекс браузере",
+        "яндекс браузер обнови страницу"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "browser.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "f5"
+        }
+      ]
+    },
+    {
+      "id": "clear_data",
+      "name": "Яндекс Браузер: очистить историю",
+      "phrases": [
+        "очисти историю в яндекс браузере",
+        "яндекс браузер очисти историю",
+        "очисти кэш в яндекс браузере"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "browser.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+delete"
+        }
+      ]
+    },
+    {
+      "id": "incognito",
+      "name": "Яндекс Браузер: инкогнито",
+      "phrases": [
+        "инкогнито в яндекс браузере",
+        "яндекс браузер инкогнито"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "browser.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+n"
+        }
+      ]
+    },
+    {
+      "id": "bookmarks_bar",
+      "name": "Яндекс Браузер: панель закладок",
+      "phrases": [
+        "панель закладок в яндекс браузере",
+        "яндекс браузер закладки"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "browser.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+b"
+        }
+      ]
+    }
+  ]
+}

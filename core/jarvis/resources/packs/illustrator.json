@@ -1,0 +1,298 @@
+{
+  "id": "illustrator",
+  "name": "Adobe Illustrator",
+  "app": "Illustrator.exe",
+  "icon": "illustrator",
+  "description": "Инструменты, группы, блокировка, кривые из текста и экспорт в Illustrator.",
+  "commands": [
+    {
+      "id": "selection",
+      "name": "Illustrator: выделение",
+      "phrases": [
+        "инструмент выделение в иллюстраторе",
+        "инструмент выделение иллюстратор",
+        "выделение в иллюстраторе",
+        "выделение иллюстратор",
+        "в иллюстраторе выделение",
+        "иллюстратор выделение"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "v"
+        }
+      ]
+    },
+    {
+      "id": "direct",
+      "name": "Illustrator: прямое выделение",
+      "phrases": [
+        "прямое выделение в иллюстраторе",
+        "прямое выделение иллюстратор",
+        "в иллюстраторе прямое выделение",
+        "иллюстратор прямое выделение"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "a"
+        }
+      ]
+    },
+    {
+      "id": "pen",
+      "name": "Illustrator: перо",
+      "phrases": [
+        "инструмент перо в иллюстраторе",
+        "инструмент перо иллюстратор",
+        "перо в иллюстраторе",
+        "перо иллюстратор",
+        "в иллюстраторе перо",
+        "иллюстратор перо"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "p"
+        }
+      ]
+    },
+    {
+      "id": "type",
+      "name": "Illustrator: текст",
+      "phrases": [
+        "инструмент текст в иллюстраторе",
+        "инструмент текст иллюстратор",
+        "текст в иллюстраторе",
+        "текст иллюстратор",
+        "в иллюстраторе текст",
+        "иллюстратор текст"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "t"
+        }
+      ]
+    },
+    {
+      "id": "rectangle",
+      "name": "Illustrator: прямоугольник",
+      "phrases": [
+        "прямоугольник в иллюстраторе",
+        "прямоугольник иллюстратор",
+        "в иллюстраторе прямоугольник",
+        "иллюстратор прямоугольник"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "m"
+        }
+      ]
+    },
+    {
+      "id": "ellipse",
+      "name": "Illustrator: эллипс",
+      "phrases": [
+        "эллипс в иллюстраторе",
+        "эллипс иллюстратор",
+        "круг в иллюстраторе",
+        "круг иллюстратор",
+        "в иллюстраторе эллипс",
+        "иллюстратор эллипс"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "l"
+        }
+      ]
+    },
+    {
+      "id": "group",
+      "name": "Illustrator: сгруппировать",
+      "phrases": [
+        "сгруппируй в иллюстраторе",
+        "сгруппируй иллюстратор",
+        "в иллюстраторе группа",
+        "иллюстратор группа"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+g"
+        }
+      ]
+    },
+    {
+      "id": "ungroup",
+      "name": "Illustrator: разгруппировать",
+      "phrases": [
+        "разгруппируй в иллюстраторе",
+        "разгруппируй иллюстратор",
+        "в иллюстраторе разгруппируй",
+        "иллюстратор разгруппируй"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+g"
+        }
+      ]
+    },
+    {
+      "id": "lock",
+      "name": "Illustrator: закрепить объект",
+      "phrases": [
+        "закрепи объект в иллюстраторе",
+        "закрепи объект иллюстратор",
+        "заблокируй объект в иллюстраторе",
+        "заблокируй объект иллюстратор"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+2"
+        }
+      ]
+    },
+    {
+      "id": "unlock",
+      "name": "Illustrator: открепить всё",
+      "phrases": [
+        "открепи все в иллюстраторе",
+        "открепи все иллюстратор",
+        "разблокируй все в иллюстраторе",
+        "разблокируй все иллюстратор"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+alt+2"
+        }
+      ]
+    },
+    {
+      "id": "outlines",
+      "name": "Illustrator: текст в кривые",
+      "phrases": [
+        "преобразуй текст в кривые в иллюстраторе",
+        "преобразуй текст в кривые иллюстратор",
+        "кривые из текста в иллюстраторе",
+        "кривые из текста иллюстратор",
+        "текст в кривые"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+o"
+        }
+      ]
+    },
+    {
+      "id": "outline_view",
+      "name": "Illustrator: режим контуров",
+      "phrases": [
+        "режим контуров в иллюстраторе",
+        "режим контуров иллюстратор",
+        "в иллюстраторе контуры",
+        "иллюстратор контуры"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+y"
+        }
+      ]
+    },
+    {
+      "id": "export_screens",
+      "name": "Illustrator: экспорт для экранов",
+      "phrases": [
+        "экспорт для экранов в иллюстраторе",
+        "экспорт для экранов иллюстратор",
+        "в иллюстраторе экспорт",
+        "иллюстратор экспорт"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+alt+e"
+        }
+      ]
+    },
+    {
+      "id": "save",
+      "name": "Illustrator: сохранить",
+      "phrases": [
+        "сохрани в иллюстраторе",
+        "сохрани иллюстратор",
+        "в иллюстраторе сохрани",
+        "иллюстратор сохрани"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Illustrator.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+s"
+        }
+      ]
+    }
+  ]
+}

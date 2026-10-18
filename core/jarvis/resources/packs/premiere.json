@@ -1,0 +1,311 @@
+{
+  "id": "premiere",
+  "name": "Adobe Premiere Pro",
+  "app": "Adobe Premiere Pro.exe",
+  "icon": "premiere",
+  "description": "Монтаж в Premiere Pro: воспроизведение, разрезы, метки, масштаб таймлайна и экспорт.",
+  "commands": [
+    {
+      "id": "play",
+      "name": "Premiere: воспроизведение",
+      "phrases": [
+        "плей в премьере",
+        "плей премьер",
+        "воспроизведение в премьере",
+        "воспроизведение премьер",
+        "пауза в премьере",
+        "пауза премьер",
+        "в премьере плей",
+        "в премьере пауза",
+        "премьер плей",
+        "премьер пауза"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "space"
+        }
+      ]
+    },
+    {
+      "id": "razor",
+      "name": "Premiere: лезвие",
+      "phrases": [
+        "инструмент лезвие в премьере",
+        "инструмент лезвие премьер",
+        "лезвие в премьере",
+        "лезвие премьер",
+        "в премьере лезвие",
+        "премьер лезвие"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "c"
+        }
+      ]
+    },
+    {
+      "id": "selection",
+      "name": "Premiere: выделение",
+      "phrases": [
+        "инструмент выделение в премьере",
+        "инструмент выделение премьер",
+        "выделение в премьере",
+        "выделение премьер",
+        "в премьере выделение",
+        "премьер выделение"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "v"
+        }
+      ]
+    },
+    {
+      "id": "add_edit",
+      "name": "Premiere: разрез на плейхеде",
+      "phrases": [
+        "разрежь клип в премьере",
+        "разрежь клип премьер",
+        "сделай разрез в премьере",
+        "сделай разрез премьер",
+        "в премьере разрез",
+        "премьер разрез"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+k"
+        }
+      ]
+    },
+    {
+      "id": "ripple_delete",
+      "name": "Premiere: удалить со сдвигом",
+      "phrases": [
+        "удали со сдвигом в премьере",
+        "удали со сдвигом премьер",
+        "риппл делит в премьере",
+        "риппл делит премьер",
+        "в премьере удали со сдвигом",
+        "премьер удали со сдвигом"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "shift+delete"
+        }
+      ]
+    },
+    {
+      "id": "undo",
+      "name": "Premiere: отменить",
+      "phrases": [
+        "отмени в премьере",
+        "отмени премьер",
+        "в премьере отмена",
+        "премьер отмена"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+z"
+        }
+      ]
+    },
+    {
+      "id": "save",
+      "name": "Premiere: сохранить проект",
+      "phrases": [
+        "сохрани проект в премьере",
+        "сохрани проект премьер",
+        "сохрани в премьере",
+        "сохрани премьер",
+        "в премьере сохрани",
+        "премьер сохрани"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+s"
+        }
+      ]
+    },
+    {
+      "id": "export",
+      "name": "Premiere: экспорт",
+      "phrases": [
+        "экспорт в премьере",
+        "экспорт премьер",
+        "экспортируй видео в премьере",
+        "экспортируй видео премьер",
+        "в премьере экспорт",
+        "премьер экспорт"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+m"
+        }
+      ]
+    },
+    {
+      "id": "import",
+      "name": "Premiere: импорт",
+      "phrases": [
+        "импорт в премьере",
+        "импорт премьер",
+        "в премьере импорт",
+        "премьер импорт"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+i"
+        }
+      ]
+    },
+    {
+      "id": "mark_in",
+      "name": "Premiere: метка входа",
+      "phrases": [
+        "метка входа в премьере",
+        "метка входа премьер",
+        "точка входа в премьере",
+        "точка входа премьер",
+        "в премьере метка входа",
+        "премьер метка входа"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "i"
+        }
+      ]
+    },
+    {
+      "id": "mark_out",
+      "name": "Premiere: метка выхода",
+      "phrases": [
+        "метка выхода в премьере",
+        "метка выхода премьер",
+        "точка выхода в премьере",
+        "точка выхода премьер",
+        "в премьере метка выхода",
+        "премьер метка выхода"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "o"
+        }
+      ]
+    },
+    {
+      "id": "zoom_in",
+      "name": "Premiere: приблизить таймлайн",
+      "phrases": [
+        "приблизь таймлайн в премьере",
+        "приблизь таймлайн премьер",
+        "в премьере приблизь таймлайн",
+        "премьер приблизь таймлайн"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "equal"
+        }
+      ]
+    },
+    {
+      "id": "zoom_out",
+      "name": "Premiere: отдалить таймлайн",
+      "phrases": [
+        "отдали таймлайн в премьере",
+        "отдали таймлайн премьер",
+        "в премьере отдали таймлайн",
+        "премьер отдали таймлайн"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "minus"
+        }
+      ]
+    },
+    {
+      "id": "fullscreen",
+      "name": "Premiere: панель на весь экран",
+      "phrases": [
+        "панель на весь экран в премьере",
+        "панель на весь экран премьер",
+        "разверни панель в премьере",
+        "разверни панель премьер"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Adobe Premiere Pro.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "backquote"
+        }
+      ]
+    }
+  ]
+}

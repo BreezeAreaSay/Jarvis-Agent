@@ -484,7 +484,7 @@ class SmartHome(Plugin):
         "Свет, розетки, климат и шторы из Home Assistant и Умного дома Яндекса — голосом и с плитки."
     )
     icon = "home"
-    color = ("#34D399", "#059669")
+    color = ("#FDBA74", "#F97316")
     fields = (
         ConfigField(
             "ha_url",

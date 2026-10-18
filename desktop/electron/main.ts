@@ -1,6 +1,7 @@
 // Главный процесс Jarvis: ядро, окна (главное, оверлей поверх всего, аватар), трей, хоткеи, автозапуск.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   app,
   BrowserWindow,
@@ -379,7 +380,9 @@ client.on("fullscreen.changed", (data) => {
   fullscreen = !!data.fullscreen;
   syncAvatar();
 });
-client.on("ui.show", () => showMain());
+// «Джарвис, открой настройки» и т. п.: страница из команды Jarvis.ShowWindow → маршрут интерфейса
+const UI_PAGES: Record<string, string> = { settings: "settings", commands: "commands", chat: "ai", ai: "ai", home: "home" };
+client.on("ui.show", (data) => showMain(UI_PAGES[String(data?.page ?? "")]));
 client.on("ui.hide", () => mainWin?.hide());
 client.on("desk.open", () => {
   if (!mainWin?.isVisible()) showMain();
@@ -404,7 +407,13 @@ ipcMain.on("window:control", (e, action: string) => {
 
 ipcMain.on("shell:open-external", (_e, url: string) => {
   if (/^(https?:|mailto:)/i.test(url)) shell.openExternal(url);
-  else if (/^file:/i.test(url)) shell.openPath(decodeURIComponent(url.replace(/^file:\/\/\/?/i, "")));
+  else if (/^file:/i.test(url)) {
+    try {
+      shell.openPath(fileURLToPath(url));
+    } catch {
+      /* битая ссылка — открывать нечего */
+    }
+  }
 });
 
 ipcMain.handle("dialog:pick-file", async (e, options: any) => {
@@ -424,6 +433,83 @@ ipcMain.handle("app:file-icon", async (_e, file: string) => {
   } catch {
     return null;
   }
+});
+
+// «Указать на экране» в редакторе команд: прозрачная пелена на каждом мониторе, щелчок — точка в пикселях экрана
+// (как у ядра, которое понимает DPI), Esc или правая кнопка — отмена.
+const PICK_HTML = `<!doctype html><meta charset="utf-8"><title></title><style>
+html,body{margin:0;height:100%;cursor:crosshair;background:rgba(6,10,18,.22);user-select:none}
+.hint{position:fixed;left:50%;top:28px;transform:translateX(-50%);padding:10px 16px;border-radius:12px;
+background:rgba(20,26,38,.94);color:#fff;border:1px solid rgba(255,255,255,.14);box-shadow:0 10px 30px rgba(0,0,0,.45);
+font:600 14px "Segoe UI",system-ui,sans-serif}.hint b{color:#60a5fa}</style>
+<div class="hint">Щёлкните в нужной точке экрана · <b>Esc</b> — отмена</div>
+<script>addEventListener("mousedown",e=>{e.preventDefault();document.title=e.button===0?"pick":"cancel"});
+addEventListener("keydown",e=>{if(e.key==="Escape")document.title="cancel"});
+addEventListener("contextmenu",e=>e.preventDefault());</script>`;
+let picking: Promise<{ x: number; y: number } | null> | null = null;
+
+function pickPoint(): Promise<{ x: number; y: number } | null> {
+  if (picking) return picking;
+  picking = new Promise((resolve) => {
+    const wins: BrowserWindow[] = [];
+    const mainShown = !!mainWin?.isVisible();
+    let done = false;
+    const finish = (point: { x: number; y: number } | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      for (const w of wins) if (!w.isDestroyed()) w.destroy();
+      if (mainShown) showMain();
+      picking = null;
+      resolve(point);
+    };
+    const timer = setTimeout(() => finish(null), 60_000);
+    mainWin?.hide(); // окно Jarvis не заслоняет то, во что нужно ткнуть
+    for (const d of screen.getAllDisplays()) {
+      const w = new BrowserWindow({
+        ...d.bounds,
+        frame: false,
+        transparent: true,
+        resizable: false,
+        movable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: true,
+        hasShadow: false,
+        alwaysOnTop: true,
+        show: false,
+        webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
+      });
+      wins.push(w);
+      w.setAlwaysOnTop(true, "screen-saver");
+      w.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      w.webContents.on("will-navigate", (e) => e.preventDefault());
+      w.on("page-title-updated", (e, title) => {
+        e.preventDefault();
+        if (title === "cancel") finish(null);
+        else if (title === "pick") {
+          const dip = screen.getCursorScreenPoint();
+          const px = process.platform === "win32" ? screen.dipToScreenPoint(dip) : dip;
+          finish({ x: Math.round(px.x), y: Math.round(px.y) });
+        }
+      });
+      w.on("closed", () => finish(null));
+      w.once("ready-to-show", () => {
+        w.show();
+        w.focus();
+      });
+      w.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(PICK_HTML)}`);
+    }
+  });
+  return picking;
+}
+
+ipcMain.handle("screen:pick-point", () => pickPoint());
+
+// оверлей подписался на границы позже, чем они ушли при загрузке, — прислать ещё раз
+ipcMain.on("overlay:ready", () => {
+  overlayWin?.webContents.send("overlay:bounds", overlayBounds());
 });
 
 ipcMain.on("overlay:ignore-mouse", (_e, ignore: boolean) => {

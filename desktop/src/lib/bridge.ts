@@ -8,6 +8,8 @@ export interface JarvisBridge {
   openExternal: (url: string) => void;
   pickFile: (options: { title?: string; filters?: { name: string; extensions: string[] }[]; folder?: boolean }) => Promise<string | null>;
   fileIcon: (path: string) => Promise<string | null>;
+  /** Выбрать точку на экране (пиксели экрана); null — отмена. Только в приложении. */
+  pickPoint?: () => Promise<{ x: number; y: number } | null>;
   on: (channel: string, listener: (...args: unknown[]) => void) => () => void;
   send: (channel: string, ...args: unknown[]) => void;
   platform: string;

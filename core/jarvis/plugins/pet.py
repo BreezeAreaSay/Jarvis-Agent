@@ -62,7 +62,7 @@ class Pet(Plugin):
         "Пиксельная медуза гуляет по экрану, сидит на окнах, танцует под музыку и ест файлы из Корзины."
     )
     icon = "pet"
-    color = ("#C084FC", "#818CF8")
+    color = ("#E879F9", "#A21CAF")
     fields = (
         ConfigField(
             "skin",

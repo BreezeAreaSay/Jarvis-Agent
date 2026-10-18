@@ -1,0 +1,323 @@
+{
+  "id": "figma",
+  "name": "Figma",
+  "app": "Figma.exe",
+  "icon": "figma",
+  "description": "Инструменты, группы, компоненты, автолейаут и масштаб в Figma.",
+  "commands": [
+    {
+      "id": "frame",
+      "name": "Figma: фрейм",
+      "phrases": [
+        "фрейм в фигме",
+        "фрейм фигма",
+        "инструмент фрейм в фигме",
+        "инструмент фрейм фигма",
+        "в фигме фрейм",
+        "фигма фрейм"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "f"
+        }
+      ]
+    },
+    {
+      "id": "rectangle",
+      "name": "Figma: прямоугольник",
+      "phrases": [
+        "прямоугольник в фигме",
+        "прямоугольник фигма",
+        "в фигме прямоугольник",
+        "фигма прямоугольник"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "r"
+        }
+      ]
+    },
+    {
+      "id": "ellipse",
+      "name": "Figma: эллипс",
+      "phrases": [
+        "эллипс в фигме",
+        "эллипс фигма",
+        "круг в фигме",
+        "круг фигма",
+        "в фигме эллипс",
+        "фигма эллипс"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "o"
+        }
+      ]
+    },
+    {
+      "id": "line",
+      "name": "Figma: линия",
+      "phrases": [
+        "линия в фигме",
+        "линия фигма",
+        "в фигме линия",
+        "фигма линия"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "l"
+        }
+      ]
+    },
+    {
+      "id": "arrow",
+      "name": "Figma: стрелка",
+      "phrases": [
+        "стрелка в фигме",
+        "стрелка фигма",
+        "в фигме стрелка",
+        "фигма стрелка"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "shift+l"
+        }
+      ]
+    },
+    {
+      "id": "pen",
+      "name": "Figma: перо",
+      "phrases": [
+        "перо в фигме",
+        "перо фигма",
+        "в фигме перо",
+        "фигма перо"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "p"
+        }
+      ]
+    },
+    {
+      "id": "text",
+      "name": "Figma: текст",
+      "phrases": [
+        "текст в фигме",
+        "текст фигма",
+        "инструмент текст в фигме",
+        "инструмент текст фигма",
+        "в фигме текст",
+        "фигма текст"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "t"
+        }
+      ]
+    },
+    {
+      "id": "comment",
+      "name": "Figma: комментарий",
+      "phrases": [
+        "комментарий в фигме",
+        "комментарий фигма",
+        "в фигме комментарий",
+        "фигма комментарий"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "c"
+        }
+      ]
+    },
+    {
+      "id": "move",
+      "name": "Figma: перемещение",
+      "phrases": [
+        "перемещение в фигме",
+        "перемещение фигма",
+        "в фигме перемещение",
+        "фигма перемещение"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "v"
+        }
+      ]
+    },
+    {
+      "id": "group",
+      "name": "Figma: сгруппировать",
+      "phrases": [
+        "сгруппируй в фигме",
+        "сгруппируй фигма",
+        "в фигме группа",
+        "фигма группа"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+g"
+        }
+      ]
+    },
+    {
+      "id": "ungroup",
+      "name": "Figma: разгруппировать",
+      "phrases": [
+        "разгруппируй в фигме",
+        "разгруппируй фигма",
+        "в фигме разгруппируй",
+        "фигма разгруппируй"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+g"
+        }
+      ]
+    },
+    {
+      "id": "component",
+      "name": "Figma: создать компонент",
+      "phrases": [
+        "создай компонент в фигме",
+        "создай компонент фигма",
+        "компонент в фигме",
+        "компонент фигма",
+        "в фигме компонент",
+        "фигма компонент"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+alt+k"
+        }
+      ]
+    },
+    {
+      "id": "auto_layout",
+      "name": "Figma: автолейаут",
+      "phrases": [
+        "автолейаут в фигме",
+        "автолейаут фигма",
+        "авто лейаут в фигме",
+        "авто лейаут фигма",
+        "в фигме автолейаут",
+        "фигма автолейаут"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "shift+a"
+        }
+      ]
+    },
+    {
+      "id": "zoom_fit",
+      "name": "Figma: показать всё",
+      "phrases": [
+        "покажи все в фигме",
+        "покажи все фигма",
+        "масштаб по размеру в фигме",
+        "масштаб по размеру фигма",
+        "в фигме покажи все",
+        "фигма покажи все"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "shift+1"
+        }
+      ]
+    },
+    {
+      "id": "hide_ui",
+      "name": "Figma: скрыть интерфейс",
+      "phrases": [
+        "скрой интерфейс в фигме",
+        "скрой интерфейс фигма",
+        "спрячь панели в фигме",
+        "спрячь панели фигма",
+        "в фигме скрой интерфейс",
+        "фигма скрой интерфейс"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "Figma.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+backslash"
+        }
+      ]
+    }
+  ]
+}

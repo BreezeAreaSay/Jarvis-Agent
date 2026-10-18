@@ -168,7 +168,7 @@ class NotifyVoice(Plugin):
     name = "Озвучка уведомлений"
     description = "Jarvis читает вслух новые уведомления Windows: мессенджеры, почту, напоминания."
     icon = "notification"
-    color = ("#FF8A3D", "#FF5E3A")
+    color = ("#FCD34D", "#F59E0B")
     fields = (
         ConfigField(
             "apps_allow",

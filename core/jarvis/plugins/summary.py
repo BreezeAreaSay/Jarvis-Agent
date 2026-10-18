@@ -133,7 +133,7 @@ class Summary(Plugin):
     name = "Конспект видео и созвонов"
     description = "Слушает созвон или видео и пишет конспект: о чём говорили, какие решения и задачи."
     icon = "summary"
-    color = ("#A78BFA", "#7C3AED")
+    color = ("#F87171", "#DC2626")
     fields = (
         ConfigField(
             "language",

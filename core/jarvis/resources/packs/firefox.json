@@ -1,0 +1,299 @@
+{
+  "id": "firefox",
+  "name": "Mozilla Firefox",
+  "app": "firefox.exe",
+  "icon": "firefox",
+  "description": "Вкладки, приватные окна, режим чтения, скриншоты страниц и история Firefox.",
+  "commands": [
+    {
+      "id": "new_tab",
+      "name": "Mozilla Firefox: новая вкладка",
+      "phrases": [
+        "новая вкладка в фаерфоксе",
+        "новая вкладка в файрфоксе",
+        "фаерфокс новая вкладка",
+        "файрфокс новая вкладка",
+        "открой новую вкладку в фаерфоксе",
+        "открой новую вкладку в файрфоксе"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+t"
+        }
+      ]
+    },
+    {
+      "id": "close_tab",
+      "name": "Mozilla Firefox: закрыть вкладку",
+      "phrases": [
+        "закрой вкладку в фаерфоксе",
+        "закрой вкладку в файрфоксе",
+        "фаерфокс закрой вкладку",
+        "файрфокс закрой вкладку"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+w"
+        }
+      ]
+    },
+    {
+      "id": "reopen_tab",
+      "name": "Mozilla Firefox: вернуть закрытую вкладку",
+      "phrases": [
+        "верни закрытую вкладку в фаерфоксе",
+        "верни закрытую вкладку в файрфоксе",
+        "верни вкладку в фаерфоксе",
+        "верни вкладку в файрфоксе",
+        "фаерфокс верни вкладку",
+        "файрфокс верни вкладку"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+t"
+        }
+      ]
+    },
+    {
+      "id": "next_tab",
+      "name": "Mozilla Firefox: следующая вкладка",
+      "phrases": [
+        "следующая вкладка в фаерфоксе",
+        "следующая вкладка в файрфоксе",
+        "фаерфокс следующая вкладка",
+        "файрфокс следующая вкладка"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+tab"
+        }
+      ]
+    },
+    {
+      "id": "prev_tab",
+      "name": "Mozilla Firefox: предыдущая вкладка",
+      "phrases": [
+        "предыдущая вкладка в фаерфоксе",
+        "предыдущая вкладка в файрфоксе",
+        "фаерфокс предыдущая вкладка",
+        "файрфокс предыдущая вкладка"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+tab"
+        }
+      ]
+    },
+    {
+      "id": "history",
+      "name": "Mozilla Firefox: история",
+      "phrases": [
+        "история в фаерфоксе",
+        "история в файрфоксе",
+        "фаерфокс история",
+        "файрфокс история",
+        "открой историю в фаерфоксе",
+        "открой историю в файрфоксе"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+h"
+        }
+      ]
+    },
+    {
+      "id": "downloads",
+      "name": "Mozilla Firefox: загрузки",
+      "phrases": [
+        "загрузки в фаерфоксе",
+        "загрузки в файрфоксе",
+        "фаерфокс загрузки",
+        "файрфокс загрузки"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+j"
+        }
+      ]
+    },
+    {
+      "id": "bookmark",
+      "name": "Mozilla Firefox: добавить в закладки",
+      "phrases": [
+        "добавь в закладки в фаерфоксе",
+        "добавь в закладки в файрфоксе",
+        "фаерфокс в закладки",
+        "файрфокс в закладки"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+d"
+        }
+      ]
+    },
+    {
+      "id": "refresh",
+      "name": "Mozilla Firefox: обновить страницу",
+      "phrases": [
+        "обнови страницу в фаерфоксе",
+        "обнови страницу в файрфоксе",
+        "фаерфокс обнови страницу",
+        "файрфокс обнови страницу"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "f5"
+        }
+      ]
+    },
+    {
+      "id": "clear_data",
+      "name": "Mozilla Firefox: очистить историю",
+      "phrases": [
+        "очисти историю в фаерфоксе",
+        "очисти историю в файрфоксе",
+        "фаерфокс очисти историю",
+        "файрфокс очисти историю",
+        "очисти кэш в фаерфоксе",
+        "очисти кэш в файрфоксе"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+delete"
+        }
+      ]
+    },
+    {
+      "id": "private",
+      "name": "Firefox: приватное окно",
+      "phrases": [
+        "приватное окно в фаерфоксе",
+        "приватное окно в файрфоксе",
+        "фаерфокс приватное окно",
+        "файрфокс приватное окно",
+        "инкогнито в фаерфоксе",
+        "инкогнито в файрфоксе"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+p"
+        }
+      ]
+    },
+    {
+      "id": "reader",
+      "name": "Firefox: режим чтения",
+      "phrases": [
+        "режим чтения в фаерфоксе",
+        "режим чтения в файрфоксе",
+        "фаерфокс режим чтения",
+        "файрфокс режим чтения"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "f9"
+        }
+      ]
+    },
+    {
+      "id": "screenshot",
+      "name": "Firefox: скриншот страницы",
+      "phrases": [
+        "скриншот страницы в фаерфоксе",
+        "скриншот страницы в файрфоксе",
+        "фаерфокс скриншот",
+        "файрфокс скриншот"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+s"
+        }
+      ]
+    },
+    {
+      "id": "library",
+      "name": "Firefox: библиотека загрузок",
+      "phrases": [
+        "библиотека в фаерфоксе",
+        "библиотека в файрфоксе",
+        "фаерфокс библиотека",
+        "файрфокс библиотека"
+      ],
+      "actions": [
+        {
+          "type": "App.Focus",
+          "value": "firefox.exe"
+        },
+        {
+          "type": "Keys.Press",
+          "value": "ctrl+shift+y"
+        }
+      ]
+    }
+  ]
+}

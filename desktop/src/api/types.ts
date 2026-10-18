@@ -428,10 +428,17 @@ export interface CliProviderEvent {
   logged_in?: boolean | null;
 }
 
+export type MemoryKind = "fact" | "assumption" | "temp";
+
 export interface MemoryItem {
   id: string;
   text: string;
+  /** ai — записал Jarvis по просьбе в разговоре, user — добавили или поправили вы. */
   source: string;
+  /** fact — факт, assumption — предположение (Jarvis уточняет), temp — на сутки. */
+  kind: MemoryKind;
+  /** Когда временная запись забудется (unix-секунды); null — бессрочно. */
+  expires: number | null;
   created: number;
 }
 

@@ -3,10 +3,12 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
-.hypothesis/
+*.egg-info/
+node_modules/
+desktop/dist/
+desktop/dist-electron/
+desktop/release/
 build/
 dist/
-*.egg-info/
-evals/reports/
-# Бенчмарк: логи сервера (полные пути, сотни КБ); отчёты коммитятся после просмотра.
-benchmarks/results/**/*.log
+*.log
+.DS_Store

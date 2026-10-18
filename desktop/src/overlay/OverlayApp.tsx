@@ -15,7 +15,7 @@ import { DemoBackdrop, useDemo } from "./demo";
 import { FileSearchOverlay } from "./FileSearch";
 import { FocusOverlay } from "./Focus";
 import { Pet } from "./pet/Pet";
-import { DictationPill, ReaderPlayer, Subtitles, SummaryBadge } from "./PluginViews";
+import { DictationPill, ReaderPlayer, RecordingBadges, Subtitles } from "./PluginViews";
 import { Toasts } from "./Toasts";
 import { VoicePill } from "./VoicePill";
 
@@ -68,8 +68,8 @@ export default function OverlayApp() {
       <ErrorBoundary silent area="оверлей: питомец">
         <Pet hidden={hidden} />
       </ErrorBoundary>
-      <ErrorBoundary silent area="оверлей: конспект">
-        <SummaryBadge hidden={hidden} />
+      <ErrorBoundary silent area="оверлей: запись и субтитры">
+        <RecordingBadges hidden={hidden} />
       </ErrorBoundary>
       <ErrorBoundary silent area="оверлей: фокус">
         <FocusOverlay hidden={hidden} />

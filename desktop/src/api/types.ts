@@ -89,6 +89,8 @@ export interface Settings {
     agent_confirm: "risky" | "always";
     max_agent_steps: number;
     monthly_budget: number;
+    /** Разрешения инструментов ИИ по имени; нет записи или auto — по риску. */
+    tool_policy: Record<string, "auto" | "allow" | "ask" | "deny">;
   };
   avatar: {
     desktop: boolean;

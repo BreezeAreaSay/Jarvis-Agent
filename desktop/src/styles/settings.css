@@ -2120,3 +2120,23 @@
   gap: 8px;
   margin-bottom: 14px;
 }
+
+/* вход в ChatGPT: ссылка и код для входа с другого устройства */
+.gpt-device {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.gpt-device a {
+  color: var(--accent-text);
+}
+
+.gpt-code {
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  letter-spacing: 0.08em;
+  font-size: 14px;
+}

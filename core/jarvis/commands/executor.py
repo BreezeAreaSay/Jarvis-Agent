@@ -414,18 +414,57 @@ class Executor:
         return value
 
     async def _launch_shell(self, value: str, st: RunState) -> None:
+        """Команда консоли: слоты без спецсимволов оболочки; ждём код выхода до SHELL_WAIT_S — ошибка видна
+        в итоге команды, долгая программа считается запущенной."""
+        from jarvis.commands import validate
+
         if st.entry.source != "user":
             raise UserFacingError("Команды консоли можно запускать только из своих команд")
         if not value:
             raise UserFacingError("Не указана команда консоли")
+        unsafe = validate.shell_slot_error(value, st.slots)
+        if unsafe:
+            raise UserFacingError(unsafe)
         proc = await asyncio.create_subprocess_shell(
             value,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
         st.data["pid"] = proc.pid
-        self.ctx.spawn(proc.wait(), "commands-shell")
+
+        async def read_errors() -> bytes:
+            # канал читаем до конца (иначе болтливая программа встанет на полном канале), храним только начало
+            kept = b""
+            while proc.stderr is not None and (chunk := await proc.stderr.read(65536)):
+                kept = (kept + chunk)[:4000]
+            return kept
+
+        errors = asyncio.ensure_future(read_errors())
+        waiter = asyncio.ensure_future(proc.wait())
+
+        async def finish() -> None:
+            await asyncio.gather(errors, waiter, return_exceptions=True)
+
+        try:
+            done, _ = await asyncio.wait({waiter}, timeout=validate.SHELL_WAIT_S)
+        except asyncio.CancelledError:
+            self.ctx.spawn(finish(), "commands-shell")  # команду остановили — программа живёт сама по себе
+            raise
+        if not done:
+            self.ctx.spawn(finish(), "commands-shell")
+            st.info("Запущено")
+            return
+        raw = await errors
+        code = waiter.result()
+        if code:
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                text = raw.decode("cp866" if sys.platform == "win32" else "latin-1", errors="replace")
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            detail = f": {lines[-1][:200]}" if lines else ""
+            raise UserFacingError(f"Команда консоли завершилась с ошибкой (код {code}){detail}")
 
     # --- программы ----------------------------------------------------------------------------------
     def _app_target(self, value: str, st: RunState) -> tuple[str, str]:

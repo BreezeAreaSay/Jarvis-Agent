@@ -10,10 +10,16 @@ from jarvis.ai.tools import builtin_tools
 from jarvis.context import AppContext
 
 SPECS = [
-    {"type": "function", "function": {"name": "mcp__telegram__send_message", "description": "Send a message"}},
+    {
+        "type": "function",
+        "function": {"name": "mcp__telegram__send_message", "description": "Send a message"},
+    },
     {"type": "function", "function": {"name": "mcp__telegram__get_chats", "description": "List chats"}},
 ]
-TITLES = {"mcp__telegram__send_message": "Telegram: send_message", "mcp__telegram__get_chats": "Telegram: get_chats"}
+TITLES = {
+    "mcp__telegram__send_message": "Telegram: send_message",
+    "mcp__telegram__get_chats": "Telegram: get_chats",
+}
 
 
 @pytest.fixture
@@ -35,7 +41,9 @@ def test_catalog_lists_tools_with_risk_and_policy(with_mcp: AppContext) -> None:
     data = describe(with_mcp)
     items = _by_key(data)
     search = items["web_search"]
-    assert search["title"] == "Поиск в интернете" and search["source"] == "builtin" and search["group"] == "web"
+    assert (
+        search["title"] == "Поиск в интернете" and search["source"] == "builtin" and search["group"] == "web"
+    )
     assert search["risk"] == "read" and search["decision"] == "allow" and search["override"] is None
     assert search["modes"] == ["chat", "all", "agent"] and search["available"] is True
     assert items["press_keys"]["modes"] == ["all", "agent"]
@@ -80,4 +88,6 @@ def test_tools_api(client: TestClient) -> None:
     assert res.status_code == 200
     items = {i["policy_key"]: i for i in client.get("/api/ai/tools").json()["items"]}
     assert items["type_text"]["decision"] == "ask"
-    assert client.patch("/api/settings", json={"ai": {"tool_policy": {"type_text": "maybe"}}}).status_code == 422
+    assert (
+        client.patch("/api/settings", json={"ai": {"tool_policy": {"type_text": "maybe"}}}).status_code == 422
+    )

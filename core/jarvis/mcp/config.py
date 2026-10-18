@@ -1,9 +1,12 @@
 """Настройки серверов MCP: список McpServerConfig в kv «mcp:servers».
 
 Секреты в заголовках и переменных окружения (ключи, токены) интерфейсу отдаются замаскированными; если при
-сохранении пришла маска — остаётся прежнее значение.
+сохранении пришла маска — остаётся прежнее значение. В базе все значения env и headers лежат зашифрованными
+тем же способом, что ключи API (DPAPI на Windows, jarvis.settings): «enc:…»; старые открытые значения
+шифруются при первом чтении.
 """
 
+import base64
 import logging
 import os
 import re
@@ -15,12 +18,16 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from jarvis.db import Database, new_id
 from jarvis.services import UserFacingError
+from jarvis.settings import _protect, _unprotect
 
 log = logging.getLogger(__name__)
 
 KV_KEY = "mcp:servers"
 MASK = "••••••"
-_SECRET_KEY = re.compile(r"key|token|secret|passw|auth|credential|cookie|\bpat\b|bearer", re.I)
+ENC = "enc:"
+_SECRET_KEY = re.compile(
+    r"key|token|secret|passw|auth|credential|cookie|\bpat\b|bearer|hash|session|private|signature", re.I
+)
 
 _TRANSLIT = {
     "а": "a",
@@ -154,15 +161,54 @@ def new_server_id(name: str) -> str:
     return f"{slug(name, 24) or 'server'}-{new_id()[:6]}"
 
 
+def seal(value: str) -> str:
+    """Значение для базы: зашифрованное «enc:…» (пустое и уже зашифрованное — как есть)."""
+    if not value or value.startswith(ENC):
+        return value
+    return ENC + base64.b64encode(_protect(value.encode("utf-8"))).decode("ascii")
+
+
+def unseal(value: str) -> str:
+    if not value.startswith(ENC):
+        return value
+    try:
+        return _unprotect(base64.b64decode(value[len(ENC) :])).decode("utf-8")
+    except Exception:
+        log.warning("значение из настройки сервера MCP не расшифровано (другой пользователь Windows?)")
+        return ""
+
+
+def _sealed_map(values: Any) -> tuple[dict[str, str], bool]:
+    """(расшифрованные значения, были ли открытые — тогда настройку надо пересохранить)."""
+    if not isinstance(values, dict):
+        return {}, False
+    plain = any(isinstance(v, str) and v and not v.startswith(ENC) for v in values.values())
+    return {str(k): unseal(str(v)) for k, v in values.items()}, plain
+
+
 def load(db: Database) -> list[McpServerConfig]:
     out = []
+    migrate = False
     for raw in db.kv_get(KV_KEY, []) or []:
+        if isinstance(raw, dict):
+            env, plain_env = _sealed_map(raw.get("env"))
+            headers, plain_headers = _sealed_map(raw.get("headers"))
+            raw = {**raw, "env": env, "headers": headers}
+            migrate = migrate or plain_env or plain_headers
         try:
             out.append(McpServerConfig.model_validate(raw))
         except ValidationError as e:
             log.warning("настройка сервера MCP пропущена: %s", e)
+    if migrate:
+        save(db, out)  # открытые секреты прежних версий — в базу зашифрованными
     return out
 
 
 def save(db: Database, configs: list[McpServerConfig]) -> None:
-    db.kv_set(KV_KEY, [c.model_dump(mode="json") for c in configs])
+    rows = []
+    for c in configs:
+        row = c.model_dump(mode="json")
+        row["env"] = {k: seal(v) for k, v in c.env.items()}
+        row["headers"] = {k: seal(v) for k, v in c.headers.items()}
+        rows.append(row)
+    db.kv_set(KV_KEY, rows)

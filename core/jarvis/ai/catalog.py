@@ -1,4 +1,4 @@
-"""Каталог инструментов Jarvis AI для человека: что ИИ может делать, где, с каким риском и с каким разрешением.
+"""Каталог инструментов Jarvis AI для человека: что ИИ может делать, где, с каким риском и разрешением.
 
 describe(ctx) собирает список из ToolRegistry чата (встроенные, плагины, подключённые серверы MCP) и действий
 агента (AGENT_ACTIONS). Риск — jarvis.ai.policy.tool_risk, итоговое решение — jarvis.ai.policy.decision с
@@ -70,7 +70,8 @@ AGENT_ACTIONS: list[dict[str, Any]] = [
     {"name": "focus_window", "title": "Переключать окна", "risk": "act",
      "description": "Выводит нужную программу на передний план"},
     {"name": "ui_click", "title": "Нажимать кнопки", "risk": "act",
-     "description": "Нажимает кнопки и пункты меню по названию. «Отправить», «Удалить», «Оплатить» — только с разрешения"},
+     "description": "Нажимает кнопки и пункты меню по названию. «Отправить», «Удалить», «Оплатить» — "
+                    "только с разрешения"},
     {"name": "click_point", "title": "Щелчок мышью", "risk": "act",
      "description": "Щёлкает в точке окна, когда у кнопки нет названия"},
     {"name": "ui_type", "title": "Заполнять поля", "risk": "act",
@@ -82,11 +83,13 @@ AGENT_ACTIONS: list[dict[str, Any]] = [
      "description": "Нажимает клавиши в окне программы. Опасные сочетания — только с разрешения"},
     {"name": "launch_app", "title": "Запуск программ", "risk": "act",
      "description": "Открывает программу, если её ещё нет"},
-    {"name": "open_url", "title": "Открыть сайт", "risk": "act", "description": "Открывает ссылку в браузере"},
+    {"name": "open_url", "title": "Открыть сайт", "risk": "act",
+     "description": "Открывает ссылку в браузере"},
     {"name": "run_command", "title": "Команды Jarvis", "risk": "act",
      "description": "Выполняет команду Jarvis, как голосом"},
     {"name": "wait", "title": "Подождать", "risk": "read", "description": "Ждёт, пока окно догрузится"},
-    {"name": "finish", "title": "Отчёт", "risk": "read", "description": "Заканчивает задачу и пишет, что сделано"},
+    {"name": "finish", "title": "Отчёт", "risk": "read",
+     "description": "Заканчивает задачу и пишет, что сделано"},
 ]  # fmt: skip
 
 

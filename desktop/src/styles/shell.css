@@ -1,0 +1,267 @@
+/* Каркас главного окна: фон со свечением, боковая панель, заголовок, страницы. */
+.app-root {
+  position: relative;
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-0);
+  isolation: isolate;
+}
+
+body.material .app-root {
+  background: rgba(16, 18, 23, 0.55);
+}
+
+.app-bg {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(900px 600px at 8% -10%, var(--bg-glow-1), transparent 60%),
+    radial-gradient(800px 640px at 105% 110%, var(--bg-glow-2), transparent 60%),
+    radial-gradient(600px 500px at 70% 30%, rgba(var(--accent-rgb), 0.07), transparent 70%),
+    linear-gradient(180deg, var(--bg-1), var(--bg-0));
+}
+
+.app-bg::after {
+  /* лёгкое зерно, чтобы градиенты не полосили */
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+/* --- боковая панель ---------------------------------------------------------------------------------- */
+.sidebar {
+  width: var(--sidebar-w);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 0 16px;
+  background: rgba(10, 12, 16, 0.28);
+  border-right: 1px solid var(--line);
+  -webkit-app-region: drag;
+  z-index: 2;
+}
+
+.sidebar .logo {
+  margin-bottom: 18px;
+  -webkit-app-region: no-drag;
+  transition: transform var(--t-med) var(--ease);
+}
+
+.sidebar .logo:hover {
+  transform: scale(1.06);
+}
+
+.nav-btn {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  color: var(--text-2);
+  -webkit-app-region: no-drag;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.nav-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.nav-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.nav-btn.active {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.nav-btn .nav-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-1);
+}
+
+.nav-tip {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: rgba(30, 34, 43, 0.96);
+  border: 1px solid var(--line-strong);
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+  z-index: 30;
+}
+
+.nav-btn:hover .nav-tip {
+  opacity: 1;
+}
+
+/* --- основная область ------------------------------------------------------------------------------- */
+.main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--titlebar-h);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  padding: 0 8px;
+  -webkit-app-region: drag;
+  z-index: 20;
+}
+
+.titlebar .win-btn {
+  width: 34px;
+  height: 28px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  -webkit-app-region: no-drag;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.titlebar .win-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.titlebar .win-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.titlebar .win-btn.close {
+  color: var(--accent-text);
+}
+
+.titlebar .win-btn.close:hover {
+  background: #e5484d;
+  color: #fff;
+}
+
+.titlebar .conn {
+  margin-right: auto;
+  margin-left: 18px;
+  font-size: 12px;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 26px 22px 24px;
+  animation: fade-in var(--t-slow) var(--ease) both;
+}
+
+.page-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  margin-bottom: 16px;
+  padding-right: 90px; /* место под кнопки окна */
+  -webkit-app-region: drag;
+}
+
+.page-head > * {
+  -webkit-app-region: no-drag;
+}
+
+.page-head .h-page {
+  -webkit-app-region: drag;
+}
+
+.page-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin-right: -10px;
+  padding-right: 10px;
+}
+
+.page-body.fill {
+  overflow: hidden;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* --- экран подключения ------------------------------------------------------------------------------- */
+.splash {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  z-index: 40;
+  background: var(--bg-0);
+}
+
+.splash .orb-box {
+  width: 320px;
+  height: 320px;
+}

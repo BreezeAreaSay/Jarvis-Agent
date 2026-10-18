@@ -23,6 +23,8 @@ dependencies = [
   "qrcode>=8.0",
   "send2trash>=1.8.3",
   "soundcard>=0.4.3",
+  "miniaudio>=1.61",
+  "beautifulsoup4>=4.12",
   "pywin32>=308; sys_platform == 'win32'",
   "pycaw>=20240316; sys_platform == 'win32'",
   "comtypes>=1.4.8; sys_platform == 'win32'",

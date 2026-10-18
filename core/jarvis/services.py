@@ -125,8 +125,12 @@ class VoiceService(Protocol):
         """Выслушать одну фразу и вернуть текст, не выполняя её (диктовка, ответы плагинам)."""
         ...
 
-    async def transcribe(self, samples: Any, rate: int) -> str:
-        """Распознать готовый звук (голосовое из Telegram, запись созвона). samples — float32 моно."""
+    async def transcribe(self, samples: Any, rate: int, *, language: str = "ru") -> str:
+        """Распознать готовый звук (голосовое из Telegram, запись созвона, субтитры). samples — float32 моно.
+
+        language: "ru" — GigaAM; другой язык или "auto" — многоязычная модель (Whisper), если скачана,
+        иначе UserFacingError с подсказкой, какую модель скачать.
+        """
         ...
 
     async def start(self) -> None: ...

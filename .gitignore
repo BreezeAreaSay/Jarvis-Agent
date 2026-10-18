@@ -8,7 +8,7 @@ node_modules/
 desktop/dist/
 desktop/dist-electron/
 desktop/release/
-build/
-dist/
+/build/
+/dist/
 *.log
 .DS_Store

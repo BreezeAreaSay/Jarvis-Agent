@@ -145,7 +145,9 @@ export function Orb({ className, logo = true, reactivity = 1, scale = 0.46, colo
       const breathe = 1 + 0.018 * Math.sin(t * 0.9) + 0.07 * energy + 0.06 * flash;
 
       // ореол
-      const glow = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * 1.45);
+      // ореол гаснет до края холста, иначе виден квадрат
+      const glowR = Math.min(R * 1.45, Math.min(w, h) / 2 - 1);
+      const glow = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, glowR);
       glow.addColorStop(0, `rgba(${shade(rgb, -0.1)}, ${0.22 + 0.12 * energy + 0.2 * flash})`);
       glow.addColorStop(1, `rgba(${shade(rgb, -0.4)}, 0)`);
       ctx.fillStyle = glow;

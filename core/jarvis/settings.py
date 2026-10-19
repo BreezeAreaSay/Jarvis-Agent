@@ -20,6 +20,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from jarvis import netproxy
 from jarvis.bus import EventBus
 
 log = logging.getLogger(__name__)
@@ -131,7 +132,7 @@ class AiSettings(_Model):
     base_url: str = ""  # пусто — адрес провайдера по умолчанию
     model: str = "gpt-5.4-mini"
     temperature: float = Field(0.6, ge=0.0, le=2.0)
-    proxy: str = ""  # http://… или socks5://… для запросов к ИИ
+    proxy: str = ""  # http://… или socks5://… для запросов к ИИ; пусто — системный прокси (VPN) или напрямую
     persona: Literal["jarvis", "plain"] = "jarvis"
     custom_instructions: str = ""
     web_search: bool = True
@@ -151,6 +152,13 @@ class AiSettings(_Model):
     folder_id: str = ""  # ID каталога Yandex Cloud (для YandexGPT)
     # разрешения инструментов ИИ по имени: allow / ask / deny; auto или нет записи — по риску (ai/policy.py)
     tool_policy: dict[str, Literal["auto", "allow", "ask", "deny"]] = Field(default_factory=dict)
+
+    @field_validator("proxy", mode="before")
+    @classmethod
+    def _proxy(cls, value: Any) -> Any:
+        # «127.0.0.1:1080» → «http://127.0.0.1:1080», «socks4://…» → «socks5://…»: без схемы адрес не понимают
+        # ни httpx, ни Claude Code
+        return netproxy.normalize(value) if isinstance(value, str) else value
 
     @field_validator("vision", mode="before")
     @classmethod

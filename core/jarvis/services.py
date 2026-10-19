@@ -15,6 +15,14 @@ class UserFacingError(RuntimeError):
     """Ошибка с понятным человеку текстом (уходит в интерфейс и голос как есть)."""
 
 
+class NeedsAgent(UserFacingError):
+    """Готовая команда не справилась, а агент справится: task — что ему поручить (диспетчер сам передаст)."""
+
+    def __init__(self, message: str, task: str) -> None:
+        super().__init__(message)
+        self.task = task
+
+
 # --- команды ---------------------------------------------------------------------------------------
 
 
@@ -187,8 +195,10 @@ class AiService(Protocol):
         source: Source = "text",
         mode: str | None = None,
         images: list[str] | None = None,
+        agent_task: str = "",
     ) -> AskResult:
-        """Сообщение в чат с инструментами; события chat.* идут в шину по ходу ответа."""
+        """Сообщение в чат с инструментами; события chat.* идут в шину по ходу ответа. agent_task — сразу
+        агенту с этой задачей (в чате — text)."""
         ...
 
     async def complete(

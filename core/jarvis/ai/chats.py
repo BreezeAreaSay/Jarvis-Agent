@@ -166,6 +166,19 @@ class ChatStore:
         self.ctx.db.update("chats", chat_id, {"updated": ts})
         return _row(row)
 
+    def message(self, chat_id: str, message_id: str) -> dict[str, Any] | None:
+        rows = self.ctx.db.query("SELECT * FROM messages WHERE chat_id=? AND id=?", (chat_id, message_id))
+        return _row(rows[0]) if rows else None
+
+    def set_meta(self, chat_id: str, message_id: str, meta: dict[str, Any]) -> dict[str, Any] | None:
+        """Заменить meta сообщения (отметка «сценарий сохранён»); нет сообщения — None."""
+        found = self.message(chat_id, message_id)
+        if found is None:
+            return None
+        self.ctx.db.update("messages", message_id, {"meta": dumps(meta) if meta else None})
+        found["meta"] = dict(meta)
+        return found
+
     def rows(self, chat_id: str) -> list[dict[str, Any]]:
         """Все сообщения чата по порядку (вместе со скрытыми — для истории модели)."""
         rows = self.ctx.db.query("SELECT * FROM messages WHERE chat_id=? ORDER BY created, rowid", (chat_id,))

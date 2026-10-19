@@ -150,13 +150,43 @@ def test_telegram_recipe_uses_real_tool_names(ctx: AppContext) -> None:
 @pytest.mark.parametrize(
     ("text", "agent"),
     [
+        # дела на компьютере — агенту, без «запусти режим агента»
         ("напиши Ане в телеграме что буду в семь", True),
         ("создай в ворде документ с планом на неделю", True),
         ("ответь в дискорде Пете что всё готово", True),
-        ("как в телеграме создать папку?", False),
+        ("напиши маше что опоздаю на десять минут", True),
+        ("поставь будильник на семь тридцать", True),
+        ("нарисуй круг в фигме", True),
+        ("открой ворд и напиши письмо маме", True),
+        ("включи тёмную тему", True),
+        ("создай папку на рабочем столе", True),
+        ("зайди на озон и найди наушники", True),
+        ("установи vlc", True),
+        # что на экране, в окне, в почте — видит только агент, даже если это вопрос
+        ("что здесь написано", True),
+        ("что важного в почте", True),
+        ("проверь почту", True),
+        ("посмотри что на экране", True),
+        # лёгкое — чату: одна простая команда или цепочка таких
         ("открой телеграм", False),
+        ("Джарвис, открой калькулятор, пожалуйста", False),
+        ("не мог бы ты открыть ворд", False),
+        ("закрой это окно", False),
+        ("сделай погромче", False),
+        ("поставь на паузу", False),
+        ("выключи компьютер", False),
+        ("включи свет на кухне", False),
+        ("Сверни все окна и включи музыку", False),
+        # вопросы, сведения, память, заметки, напоминания — чату; неясное — чат переспросит
+        ("как в телеграме создать папку?", False),
         ("какая завтра погода", False),
         ("найди на ютубе обзор айфона", False),  # сайт чат откроет сам
+        ("расскажи анекдот", False),
+        ("напиши стих про осень", False),
+        ("напомни через пять минут выключить чайник", False),
+        ("удали последнюю заметку", False),
+        ("найди файл отчёт", False),
+        ("Сделай что-нибудь", False),
     ],
 )
 def test_app_task_detection(text: str, agent: bool) -> None:
@@ -199,6 +229,27 @@ async def test_app_task_goes_straight_to_agent(ctx: AppContext, llm: ScriptedLlm
     before = len(events.of("agent.state"))
     await ctx.ai.ask("напиши Ане в телеграме что буду в семь")  # type: ignore[attr-defined]
     assert len(events.of("agent.state")) == before  # теперь решает чат
+
+
+async def test_agent_from_voice_answers_at_once(
+    ctx: AppContext, llm: ScriptedLlm, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """С голоса агент работает секунды — «Сейчас сделаю» звучит сразу, итог — после."""
+    agent: Any = ctx.agent
+    agent.ui, agent.settle_s, agent.launch_settle_s, agent.pointer_delay_s = FakeUi(), 0.0, 0.0, 0.0
+    said: list[str] = []
+
+    async def say(text: str, **_: Any) -> None:
+        said.append(text)
+
+    monkeypatch.setattr(ctx.tts, "say", say)
+    llm.add(
+        reply('{"steps": ["Открыть будильник", "Добавить 7:30"]}'),
+        calls(("finish", {"status": "done", "summary": "Будильник на 7:30 поставлен."})),
+    )
+    result = await ctx.ai.ask("поставь будильник на семь тридцать", source="voice")  # type: ignore[attr-defined]
+    assert result.text == "Будильник на 7:30 поставлен."
+    assert said == ["Сейчас сделаю, сэр."]
 
 
 async def test_run_command_by_id_and_app_addresses(ctx: AppContext) -> None:
@@ -263,3 +314,15 @@ def test_codex_effort_follows_speed(ctx: AppContext) -> None:
     assert backend._effort("n", "text") == "high" and backend._agent_effort("n") == "high"
     ctx.settings.patch({"ai": {"speed": "balanced"}})
     assert backend._effort("n", "text") == "medium" and backend._effort("n", "voice") == "low"
+
+
+def test_telegram_chat_search_is_the_left_field_not_ctrl_f() -> None:
+    """Telegram Desktop: чаты ищет поле «Поиск» над списком слева; ctrl+f — поиск сообщений в чате."""
+    text = playbooks.render([p for p in playbooks.PLAYBOOKS if p.id == "telegram"])
+    assert "поле «Поиск» вверху левой колонки" in text
+    assert "ctrl+f его НЕ открывает" in text and "ctrl+f (поиск по чату)" in text
+    assert "ctrl+f (поиск по чатам)" not in text
+    pack = PackStore(paths.resource_dir() / "packs").get("telegram")
+    assert pack is not None
+    search = next(c for c in pack.commands if c.id == "pack.telegram.search")
+    assert search.name == "Telegram: поиск по чату"

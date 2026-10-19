@@ -75,6 +75,7 @@ const ICONS: Record<string, ReactNode> = {
   summaries: <AudioLines />,
   screenshots: <Image />,
   file_index: <FolderSearch />,
+  voice_cache: <AudioLines />,
   usage: <CircleDollarSign />,
   logs: <ScrollText />,
   secrets: <KeyRound />,
@@ -88,6 +89,7 @@ const UNITS: Record<string, [string, string, string]> = {
   summaries: ["запись", "записи", "записей"],
   screenshots: ["снимок", "снимка", "снимков"],
   file_index: ["файл", "файла", "файлов"],
+  voice_cache: ["фраза", "фразы", "фраз"],
   logs: ["файл", "файла", "файлов"],
   secrets: ["ключ", "ключа", "ключей"],
   models: ["модель", "модели", "моделей"],
@@ -132,6 +134,7 @@ function FlowCard({ settings }: { settings: Settings }) {
   const local = provider?.local || (custom && localUrl);
   const name = provider ? providerTitle(provider, true) : custom ? "ваш сервер" : settings.ai.provider;
   const cloudTts = CLOUD_TTS[settings.tts.engine];
+  const cloudAsr = settings.voice.asr_model === "elevenlabs";
   return (
     <Card icon={<ShieldCheck />} title="Что куда уходит" sub="Коротко и честно: что остаётся на компьютере, а что отправляется в сеть">
       <div className="priv-flow">
@@ -140,7 +143,11 @@ function FlowCard({ settings }: { settings: Settings }) {
             <HardDrive /> Остаётся на этом компьютере
           </div>
           <ul>
-            <li>Распознавание речи и слово-активатор: звук микрофона никуда не отправляется</li>
+            <li>
+              {cloudAsr
+                ? "Слово-активатор и чужие разговоры: этот звук никуда не отправляется"
+                : "Распознавание речи и слово-активатор: звук микрофона никуда не отправляется"}
+            </li>
             <li>Настройки, история команд, заметки, задачи, календарь, память — в папке данных Jarvis</li>
             <li>Ключи API и токены — зашифрованы средствами Windows (DPAPI)</li>
             <li>Записи созвонов для «Конспекта» — удаляются после конспекта (или по сроку ниже)</li>
@@ -168,6 +175,13 @@ function FlowCard({ settings }: { settings: Settings }) {
           )}
         </div>
       </div>
+      {cloudAsr && (
+        <Note icon={<Cloud />}>
+          Распознавание — ElevenLabs: звук фраз, обращённых к Jarvis (после «Джарвис», с клавишей «держи и говори», в
+          окне продолжения), отправляется этому сервису. Чтобы звук не уходил в сеть, выберите в настройках голоса
+          модель GigaAM или Vosk.
+        </Note>
+      )}
       {cloudTts && (
         <Note icon={<Cloud />}>
           Озвучка ответов — облачный голос {cloudTts}: текст, который Jarvis произносит, отправляется этому сервису.

@@ -383,6 +383,7 @@ export const useAi = create<AiState>((set, get) => {
           text: string;
           plan?: string[];
           outcome?: AgentRun["outcome"];
+          chat_id?: string;
         }>("/api/agent");
         if (!d?.run_id || !["planning", "running", "waiting"].includes(d.status)) return;
         const cur = get().agent;
@@ -398,6 +399,7 @@ export const useAi = create<AiState>((set, get) => {
             steps: [],
             plan: d.plan ?? [],
             outcome: d.outcome ?? "",
+            chatId: d.chat_id ?? "",
             startedAt: Date.now(),
           },
         });
@@ -637,6 +639,7 @@ export function bindAiEvents() {
     text: string;
     plan?: string[];
     outcome?: AgentRun["outcome"];
+    chat_id?: string;
   }>(
     "agent.state",
     (e) => {
@@ -656,6 +659,7 @@ export function bindAiEvents() {
               steps: [],
               plan: [],
               outcome: "",
+              chatId: d.chat_id ?? "",
               startedAt: Date.now(),
             };
       const run: AgentRun = {
@@ -667,6 +671,7 @@ export function bindAiEvents() {
         text: d.text ?? base.text,
         plan: d.plan ?? base.plan,
         outcome: d.outcome ?? base.outcome,
+        chatId: d.chat_id || base.chatId,
       };
       if (isTerminal(d.status)) {
         run.endedAt = base.endedAt ?? Date.now();
@@ -691,6 +696,7 @@ export function bindAiEvents() {
         steps: [],
         plan: [],
         outcome: "",
+        chatId: "",
         startedAt: Date.now(),
       };
     }

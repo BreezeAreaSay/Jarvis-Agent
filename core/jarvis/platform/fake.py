@@ -189,6 +189,19 @@ class FakePlatform:
     def screen_size(self) -> tuple[int, int]:
         return (1920, 1080)
 
+    def virtual_screen(self) -> tuple[int, int, int, int]:
+        return (0, 0, 1920, 1080)
+
+    def monitor_rect(self, hwnd: int) -> tuple[int, int, int, int] | None:
+        return (0, 0, 1920, 1080)
+
+    def screen_pixels(self, rect: tuple[int, int, int, int] | None = None) -> tuple[bytes, int, int]:
+        """Экран в 6 раз мельче настоящего (как картинка screenshot): 1920×1080 → 320×180."""
+        self._call("screen_pixels", rect)
+        left, top, right, bottom = rect or (0, 0, 1920, 1080)
+        width, height = max(1, (right - left) // 6), max(1, (bottom - top) // 6)
+        return bytes([38, 28, 24, 255]) * (width * height), width, height
+
     # --- программы --------------------------------------------------------------------------------
     def list_apps(self, refresh: bool = False) -> list[AppInfo]:
         return list(DEMO_APPS)

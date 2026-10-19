@@ -219,6 +219,8 @@ export function ChatView({ chatKey }: { chatKey: string }) {
     failure: null,
   };
   const agentActive = !!agent && !isTerminal(agent.status);
+  // агент работает над задачей из этого чата — сообщение ему: поправка или ответ на его вопрос
+  const toAgent = agentActive && !!agent?.chatId && agent.chatId === chatKey;
   const busy = t.sending || !!t.pending;
   const empty = t.loaded && !t.messages.length && !t.pending && !t.failure;
 
@@ -302,6 +304,7 @@ export function ChatView({ chatKey }: { chatKey: string }) {
         model={model}
         busy={busy}
         disabled={!configured}
+        toAgent={toAgent}
         onSend={onSend}
         onStop={() => stop(chatKey)}
         onMode={(m) => {

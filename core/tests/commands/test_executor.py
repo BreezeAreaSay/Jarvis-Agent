@@ -11,7 +11,7 @@ import pytest
 from jarvis.commands.model import CommandIn
 from jarvis.commands.service import Commands
 from jarvis.context import AppContext
-from jarvis.platform.base import PlatformError
+from jarvis.platform.base import MediaInfo, PlatformError
 from jarvis.services import AskResult, DynamicCommand, ExecResult
 from tests.commands.conftest import calls
 from tests.conftest import EventLog
@@ -66,8 +66,32 @@ async def test_media_respects_state(cmds: Commands, ctx: AppContext, monkeypatch
 
     monkeypatch.setattr("jarvis.commands.executor.asyncio.sleep", fast_sleep)
     result = await run(cmds, "включи музыку")
-    assert result.message == "Запускаю Spotify"
+    # программа запустилась, «Play» нажат, а музыка так и не заиграла (трек не выбран) — дело для агента
+    assert not result.ok and result.message == "Музыка не заиграла"
+    assert "в «Spotify»" in result.data["agent_task"]
     assert calls(ctx, "launch")[-1] == ("Spotify.exe", "") and calls(ctx, "media_key")[-1] == ("play_pause",)
+    playing = iter([None, *[MediaInfo(app="Spotify", status="playing")] * 20])
+    monkeypatch.setattr(ctx.platform, "now_playing", lambda: next(playing))
+    result = await run(cmds, "включи музыку")
+    assert result.ok and result.message == "Запускаю Spotify"
+
+
+async def test_play_key_that_plays_nothing_goes_to_agent(
+    cmds: Commands, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Яндекс Музыка открыта, но трек не выбран: медиаклавиша ничего не включает — честно «не заиграла»."""
+    ctx.platform.media = MediaInfo(app="Яндекс Музыка", status="paused")  # type: ignore[attr-defined]
+    monkeypatch.setattr(ctx.platform, "media_key", lambda key: None)
+
+    async def fast_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("jarvis.commands.executor.asyncio.sleep", fast_sleep)
+    result = await run(cmds, "включи музыку")
+    assert not result.ok and result.message == "Музыка не заиграла"
+    assert result.data["agent_task"].startswith("Включи музыку в «Яндекс Музыка»")
+    chain = await run(cmds, "включи музыку и сверни все окна")  # остаток фразы — агенту, по порядку
+    assert chain.data["agent_task"].endswith("Потом: сверни все окна.")
 
 
 async def test_now_playing_and_info(cmds: Commands) -> None:
@@ -402,3 +426,67 @@ async def test_missing_slot_and_disabled(cmds: Commands) -> None:
     cmds.set_enabled("builtin.volume.mute", False)
     result = await cmds.run_command("builtin.volume.mute")
     assert not result.ok and result.message == "Команда выключена"
+
+
+async def test_launch_then_more_actions_waits_for_the_window(
+    cmds: Commands, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Сценарий «запусти OBS → клавиши»: клавиши — когда окно программы появилось и догрузилось."""
+    from jarvis.commands import executor as ex
+
+    log: list[Any] = []
+
+    async def sleep(seconds: float) -> None:
+        log.append(seconds)
+
+    monkeypatch.setattr("jarvis.commands.executor.asyncio.sleep", sleep)
+    real_press = ctx.platform.press_keys
+    monkeypatch.setattr(ctx.platform, "press_keys", lambda combo: (log.append(combo), real_press(combo)))
+    cid = user(cmds, ("Launch.App", "OBS Studio"), ("Keys.Press", "ctrl+l"))
+    result = await cmds.run_command(cid)
+    assert result.ok
+    assert log[-2:] == [ex.LAUNCH_SETTLE_S, "ctrl+l"]  # окно появилось → догрузка → клавиши
+    # программа уже открыта — только дать окну выйти вперёд
+    log.clear()
+    assert (await cmds.run_command(cid)).ok
+    assert log == [ex.FOCUS_SETTLE_S, "ctrl+l"]
+    # последнее действие — запуск: ждать нечего
+    log.clear()
+    only = user(cmds, ("Launch.App", "Telegram"), phrases=["запусти телегу тест"])
+    assert (await cmds.run_command(only)).ok and log == []
+
+
+async def test_launch_waits_no_longer_than_limit(
+    cmds: Commands, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis.commands import executor as ex
+
+    slept: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr("jarvis.commands.executor.asyncio.sleep", sleep)
+    monkeypatch.setattr(ctx.platform, "launch", lambda target, args="": None)  # окна так и нет
+    cid = user(cmds, ("Launch.App", "OBS Studio"), ("Keys.Press", "ctrl+l"))
+    result = await cmds.run_command(cid)
+    assert result.ok and sum(slept) == pytest.approx(ex.LAUNCH_WAIT_S)
+    assert calls(ctx, "press_keys")[-1] == ("ctrl+l",)
+
+
+async def test_scenario_open_music_app_and_toggle_hands_over_when_silent(
+    cmds: Commands, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Сценарий «Яндекс Музыка → Media.PlayPause (переключить)»: «Моя волна» без выбранного трека не
+    включается клавишей — агенту, в этой программе."""
+
+    async def sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("jarvis.commands.executor.asyncio.sleep", sleep)
+    monkeypatch.setattr(ctx.platform, "now_playing", lambda: None)
+    cid = user(cmds, ("Launch.App", "Spotify"), ("Media.PlayPause", ""))  # «Переключить»
+    result = await cmds.run_command(cid)
+    assert not result.ok and result.message == "Музыка не заиграла"
+    assert result.data["agent_task"].startswith("Включи музыку в «Spotify»")
+    assert calls(ctx, "launch")[-1] == ("Spotify.exe", "")  # своя программа сценария, не другая

@@ -8,11 +8,24 @@
     2. Зависимости ядра (uv pip install --target) и пакет jarvis → build\core-win
     3. Интерфейс (npm run build) и установщик (electron-builder, NSIS)
     Нужны: uv (https://docs.astral.sh/uv/) и Node.js 22+.
+
+    Подпись: electron-builder подписывает Jarvis.exe, установщик и деинсталлятор — SmartScreen и антивирусы
+    не пугают. Сертификат на токене (так их теперь и выдают) — -CertificateSubject «имя из сертификата»:
+    signtool найдёт его в хранилище Windows; файл .pfx — -Certificate (пароль — -CertificatePassword или
+    спросит) или переменные CSC_LINK и CSC_KEY_PASSWORD. Без сертификата — как раньше, без подписи.
+
+.EXAMPLE
+    pwsh -File scripts\build-win.ps1 -CertificateSubject "Ivan Ivanov"
+.EXAMPLE
+    pwsh -File scripts\build-win.ps1 -Certificate C:\keys\jarvis.pfx
 #>
 [CmdletBinding()]
 param(
     [string]$PythonVersion = '3.12.10',
-    [switch]$SkipCore
+    [switch]$SkipCore,
+    [string]$Certificate = '',
+    [string]$CertificatePassword = '',
+    [string]$CertificateSubject = ''
 )
 
 Set-StrictMode -Version Latest
@@ -28,6 +41,28 @@ function Need([string]$Name, [string]$Hint) {
 }
 Need 'uv' 'Установите: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"'
 Need 'npm' 'Установите Node.js 22+ с https://nodejs.org'
+
+# подпись: сертификат из параметра — electron-builder берёт его из CSC_LINK / CSC_KEY_PASSWORD
+if ($Certificate) {
+    if (-not (Test-Path -LiteralPath $Certificate)) { throw "Нет файла сертификата $Certificate" }
+    $env:CSC_LINK = (Resolve-Path -LiteralPath $Certificate).Path
+    if ($CertificatePassword) {
+        $env:CSC_KEY_PASSWORD = $CertificatePassword
+    } elseif (-not $env:CSC_KEY_PASSWORD) {
+        $secure = Read-Host 'Пароль сертификата' -AsSecureString
+        $env:CSC_KEY_PASSWORD = (New-Object System.Net.NetworkCredential('', $secure)).Password
+    }
+}
+$SignArgs = @()
+if ($CertificateSubject) {
+    # сертификат на токене или в хранилище Windows — по имени; signtool спросит PIN токена сам
+    $SignArgs = @('--', "--config.win.signtoolOptions.certificateSubjectName=$CertificateSubject")
+    Write-Host "==> Подпись: сертификат «$CertificateSubject» из хранилища Windows"
+} elseif ($env:CSC_LINK -or $env:WIN_CSC_LINK) {
+    Write-Host '==> Подпись: установщик и Jarvis.exe будут подписаны сертификатом'
+} else {
+    Write-Host '==> Подпись: без сертификата — SmartScreen предупредит при установке (см. README, «Подпись установщика»)'
+}
 
 if (-not $SkipCore) {
     New-Item -ItemType Directory -Force $Cache | Out-Null
@@ -71,6 +106,6 @@ if (-not $SkipCore) {
 Write-Host '==> Интерфейс и установщик'
 Push-Location (Join-Path $Root 'desktop')
 npm ci
-npm run dist
+npm run dist @SignArgs
 Pop-Location
 Get-ChildItem (Join-Path $Root 'desktop\release') -Filter 'Jarvis-Setup-*.exe' | ForEach-Object { Write-Host "Готово: $($_.FullName)" }

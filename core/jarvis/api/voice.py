@@ -69,12 +69,15 @@ async def voice_enabled(body: EnabledIn, ctx: Ctx) -> dict[str, Any]:
 
 
 class ListenIn(BaseModel):
-    toggle: bool = False  # хоткей: если Jarvis уже слушает или отвечает — остановить
+    toggle: bool = False  # хоткей: если Jarvis уже слушает, отвечает или работает агент — остановить
 
 
 @router.post("/api/voice/listen")
 async def voice_listen(ctx: Ctx, body: ListenIn | None = None) -> dict[str, Any]:
-    if body is not None and body.toggle and ctx.voice.state in ("listening", "processing", "speaking"):
+    busy = ctx.voice.state in ("listening", "processing", "speaking") or bool(
+        getattr(ctx.agent, "busy", False)
+    )
+    if body is not None and body.toggle and busy:
         await ctx.dispatcher.stop()
         return {"ok": True, "stopped": True}
     await ctx.voice.listen_now()

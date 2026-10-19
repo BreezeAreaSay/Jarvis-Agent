@@ -100,6 +100,46 @@ class FakeSession:
         return self._text()
 
 
+class FakeCloud:
+    """Облачное распознавание фразы: копит блоки, итог — по сценарию из всего звука (result — свой итог)."""
+
+    def __init__(self, script: Script, result: str | None = "", *, fail: bool = False) -> None:
+        self.script = script
+        self.result = result
+        self.fail = fail
+        self.frames: list[np.ndarray] = []
+        self.pauses = 0
+        self.resumes = 0
+        self.finished: list[bool] = []  # punct каждого finish()
+        self.closed = False
+
+    def feed(self, frame: np.ndarray) -> None:
+        self.frames.append(frame)
+
+    def pause(self) -> None:
+        self.pauses += 1
+
+    def resume(self) -> None:
+        self.resumes += 1
+
+    def partial(self) -> str:
+        return ""
+
+    def failed(self) -> bool:
+        return self.fail
+
+    def finish(self, timeout: float, *, punct: bool = False) -> str | None:
+        self.finished.append(punct)
+        if self.fail:
+            return None
+        if self.result:
+            return self.result
+        return self.script.text_for(np.concatenate(self.frames)) if self.frames else ""
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class FakeHost:
     """Host слушателя: записывает события, команды, сигналы."""
 
@@ -111,9 +151,13 @@ class FakeHost:
         self.activities: list[str] = []
         self.speaking = False
         self.silenced = 0
+        self.busy = False  # работает агент или ждёт ответа «Разрешить?»
 
     def settings(self) -> VoiceSettings:
         return self.voice
+
+    def stoppable(self) -> bool:
+        return self.busy or self.speaking
 
     def publish(self, type: str, data: dict[str, Any]) -> None:
         self.events.append((type, data))

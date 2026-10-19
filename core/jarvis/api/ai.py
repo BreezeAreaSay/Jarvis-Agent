@@ -227,3 +227,14 @@ async def agent_run(body: AgentIn, ctx: Ctx) -> dict[str, Any]:
 async def agent_stop(ctx: Ctx) -> dict[str, Any]:
     await ctx.agent.stop_run()
     return {"ok": True}
+
+
+class AgentScenarioIn(BaseModel):
+    chat_id: str = ""
+    message_id: str = ""
+
+
+@router.post("/api/agent/scenario")
+async def agent_scenario(body: AgentScenarioIn, ctx: Ctx) -> dict[str, Any]:
+    """Удачный прогон агента (итог в чате с meta.recipe; пусто — последний) → сценарий с теми же шагами."""
+    return {"scenario": ctx.agent.save_scenario(body.chat_id, body.message_id)}

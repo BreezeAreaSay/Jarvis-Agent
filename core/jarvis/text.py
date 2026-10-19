@@ -138,6 +138,7 @@ def strip_wake(text: str, wake_words: list[str]) -> str:
 
 STOP_PHRASES = (
     "стоп",
+    "стой",
     "хватит",
     "замолчи",
     "помолчи",
@@ -148,8 +149,20 @@ STOP_PHRASES = (
     "отмена",
     "stop",
 )
+_STOP_FILLER = frozenset({"пожалуйста", "немедленно", "срочно", "уже", "же", "все", "сейчас"})
+# первым словом фразы — «стоп» наверняка («стоп, не надо»); «тихо» и «отмена» первым словом — бывает и не стоп
+STRONG_STOP = frozenset({"стоп", "стой", "stop", "хватит", "прекрати", "остановись"})
 
 
 def is_stop(text: str) -> bool:
-    t = normalize(text)
-    return t in STOP_PHRASES or any(t == f"{p} пожалуйста" for p in STOP_PHRASES)
+    """«Стоп», «стоп стоп стоп», «хватит уже», «стой, пожалуйста» — вся фраза — просьба остановиться."""
+    words = normalize(text).split()
+    if not words or words[0] not in STOP_PHRASES:
+        return False
+    return all(w in STOP_PHRASES or w in _STOP_FILLER for w in words)
+
+
+def starts_with_stop(text: str) -> bool:
+    """Фраза начинается со «стоп» («стоп, не надо», «хватит, я сам») — не «стоп-кран» и не «тихо включи…»."""
+    first = clean(text).split()[0].strip(_EDGE).casefold() if clean(text) else ""
+    return is_stop(text) or first in STRONG_STOP

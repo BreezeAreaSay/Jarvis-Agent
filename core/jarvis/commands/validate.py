@@ -80,8 +80,15 @@ def action_error(action: Action, *, user: bool) -> str | None:
         return f"«{spec.title}»: нужно число секунд (или «5m», «1h»)"
     if t in _NUMERIC and not _NUMBER.match(value):
         return f"«{spec.title}»: нужно число"
+    if t == "Mouse.MoveInWindow":
+        name, sep, point = value.partition("|")
+        if not sep or not name.strip() or not _COORDS.match(point):
+            return f"«{spec.title}»: нужно «программа | x y», например «Telegram.exe | 150 60»"
+        return None
     if t.startswith("Mouse.") and t != "Mouse.Scroll" and not _is_point(value):
         return f"«{spec.title}»: координаты пишутся как «960 540»"
+    if t == "Ui.Type" and "|" not in value:
+        return f"«{spec.title}»: нужно «поле | текст», например «Кому | ivan@example.com»"
     if t == "Jarvis.Reminder" and "|" not in value:
         return f"«{spec.title}»: нужно «через | текст», например «10m | Позвонить маме»"
     if t in _CHOICES and value.casefold() not in _CHOICES[t]:

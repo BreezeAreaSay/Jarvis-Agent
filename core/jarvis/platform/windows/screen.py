@@ -72,8 +72,9 @@ def encode_png(bgra: bytes, width: int, height: int, box: tuple[int, int, int, i
     return out.getvalue()
 
 
-def grab_screen(rect: Rect | None = None) -> bytes:
-    """PNG виртуального экрана (все мониторы) или прямоугольника экрана."""
+def grab_pixels(rect: Rect | None = None) -> tuple[bytes, int, int, Any]:
+    """Пиксели (BGRA) виртуального экрана (все мониторы) или прямоугольника экрана: (байты, ширина, высота,
+    снимок mss). Из любого потока: у каждого вызова свой mss."""
     try:
         import mss
     except ImportError as e:
@@ -90,11 +91,15 @@ def grab_screen(rect: Rect | None = None) -> bytes:
                     "height": rect[3] - rect[1],
                 }
             shot = sct.grab(region)
-            width, height = int(shot.size[0]), int(shot.size[1])
-            bgra = bytes(shot.bgra)
+            return bytes(shot.bgra), int(shot.size[0]), int(shot.size[1]), shot
     except Exception as e:
         log.warning("снимок экрана: %r", e)
         raise PlatformError("Не удалось снять экран") from e
+
+
+def grab_screen(rect: Rect | None = None) -> bytes:
+    """PNG виртуального экрана (все мониторы) или прямоугольника экрана."""
+    bgra, width, height, shot = grab_pixels(rect)
     try:
         return encode_png(bgra, width, height)
     except Exception:

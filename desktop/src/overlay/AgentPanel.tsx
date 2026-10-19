@@ -110,8 +110,8 @@ export function AgentPanel({ hidden }: { hidden: boolean }) {
 
   const finished = !!run && FINISHED.has(run.status);
   const active = (!!run && !gone) || !!approval;
-  // над полноэкранной игрой — только если ждём разрешения
-  const show = active && (!hidden || !!approval);
+  // над полноэкранной игрой — только если агент ждёт человека: разрешения или ответа на свой вопрос
+  const show = active && (!hidden || !!approval || run?.status === "waiting");
   const status = run?.status ?? "waiting";
   const stepLabel = run && run.total > 0 ? `Шаг ${Math.max(1, Math.min(run.step || 1, run.total))} из ${run.total}` : "";
   const recent = steps.slice(-3);

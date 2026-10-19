@@ -180,6 +180,11 @@ class WindowsPlatform:
         точка снимка (px, py) — это точка экрана (left + px, top + py)."""
         return self._input().virtual_screen()
 
+    @_guard("Не удалось узнать монитор окна")
+    def monitor_rect(self, hwnd: int) -> tuple[int, int, int, int] | None:
+        """Монитор, на котором окно (или ближайший к нему): left, top, right, bottom — в точках снимка."""
+        return self._win().monitor_rect(int(hwnd))
+
     # --- звук ---------------------------------------------------------------------------------------------
 
     def _volume_keys(self, down: int, up: int) -> None:
@@ -683,6 +688,12 @@ class WindowsPlatform:
             self._later(max(delay, 0.3), lambda: system.suspend(hibernate), "сон")
             return
         raise PlatformError(f"Неизвестное действие питания: {action}")
+
+    @_guard("Не удалось снять экран")
+    def screen_pixels(self, rect: tuple[int, int, int, int] | None = None) -> tuple[bytes, int, int]:
+        """BGRA экрана или прямоугольника — без PNG (агент смотрит на экран после каждого действия)."""
+        bgra, width, height, _shot = screen.grab_pixels(rect)
+        return bgra, width, height
 
     @_guard("Не удалось сделать снимок")
     def screenshot(self, window: int | None = None) -> bytes:

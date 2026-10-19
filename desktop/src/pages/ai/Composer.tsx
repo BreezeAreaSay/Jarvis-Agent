@@ -1,5 +1,6 @@
 // Строка ввода: [+] (картинка / новый чат / режим агента), растущее поле, модель, режим, микрофон
-// (диктовка через /api/voice/capture с живым текстом voice.partial) и «Отправить» / «■ Стоп».
+// (диктовка через /api/voice/capture с живым текстом voice.partial) и «Отправить» / «■ Стоп». Пока в этом чате
+// работает агент (toAgent), текст уходит ему — поправкой или ответом на его вопрос; без текста — «■ Стоп».
 import { Bot, ImagePlus, MessageSquare, Mic, Plus, SendHorizontal, Settings2, Sparkles, Square, SquarePen, X } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/api/client";
@@ -29,12 +30,13 @@ export const Composer = forwardRef<
     model: string;
     busy: boolean;
     disabled?: boolean;
+    toAgent?: boolean;
     onSend: (text: string, images: string[]) => void;
     onStop: () => void;
     onMode: (mode: Mode) => void;
     onModel: (model: string) => void;
   }
->(function Composer({ chatKey, mode, model, busy, disabled, onSend, onStop, onMode, onModel }, ref) {
+>(function Composer({ chatKey, mode, model, busy, disabled, toAgent, onSend, onStop, onMode, onModel }, ref) {
   // «Авто» — картинки можно прикреплять; модель без зрения получит вместо них пометку (ядро решает по модели)
   const vision = useApp((s) => (s.settings?.ai.vision ?? "auto") !== "off");
   const defaultMode = useApp((s) => s.settings?.ai.mode ?? "all");
@@ -99,8 +101,15 @@ export const Composer = forwardRef<
   };
 
   const submit = () => {
-    if (busy || disabled) return;
+    if (disabled || (busy && !toAgent)) return;
     const value = text.trim();
+    if (toAgent) {
+      // агенту — только текст; картинки остаются для следующего запроса
+      if (!value) return;
+      onSend(value, []);
+      setText("");
+      return;
+    }
     if (!value && !images.length) return;
     onSend(value || "Что на изображении?", images);
     setText("");
@@ -166,9 +175,12 @@ export const Composer = forwardRef<
 
   const placeholder = disabled
     ? "Сначала подключите ИИ"
-    : mode === "agent"
-      ? "Опишите задачу для агента…"
-      : "Введите ваш запрос…";
+    : toAgent
+      ? "Поправка или ответ агенту…"
+      : mode === "agent"
+        ? "Опишите задачу для агента…"
+        : "Введите ваш запрос…";
+  const stopButton = busy && !(toAgent && text.trim());
 
   return (
     <div className={cx("ai-composer", disabled && "disabled")}>
@@ -283,7 +295,7 @@ export const Composer = forwardRef<
         >
           {capturing ? <Square /> : <Mic />}
         </button>
-        {busy ? (
+        {stopButton ? (
           <button type="button" className="ai-send stop" aria-label="Остановить ответ" title="Остановить" onClick={onStop}>
             <Square />
           </button>
@@ -291,8 +303,8 @@ export const Composer = forwardRef<
           <button
             type="button"
             className="ai-send"
-            aria-label="Отправить"
-            title="Отправить (Enter)"
+            aria-label={toAgent ? "Отправить агенту" : "Отправить"}
+            title={toAgent ? "Отправить агенту (Enter)" : "Отправить (Enter)"}
             disabled={disabled || (!text.trim() && !images.length)}
             onClick={submit}
           >

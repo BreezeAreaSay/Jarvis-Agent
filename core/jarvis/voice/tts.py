@@ -11,7 +11,10 @@ say(text) → текст для голоса (jarvis.voice.textprep: без mark
 прослушивание в настройках снимает паузу.
 
 Короткие фразы облачных движков (cacheable) помнятся в памяти: повторное «Готово, сэр.» не тратит кредиты
-и не ждёт сеть. На диск не пишутся — в фразах бывает личное.
+и не ждёт сеть. На диск (cache/tts) — только фразы без личного: частые ответы (add_stock: «Готово, сэр.»,
+«Сейчас сделаю.», «Понял, учту.» — их звук готовится заранее, при запуске и смене голоса) и те, что модули
+пометили сами (keep: «Открываю Telegram.»); после перезапуска они звучат сразу. Остальное — только в памяти:
+в фразах бывает личное.
 
 События: tts.state {speaking, text?}, tts.level {level} ~20 Гц — аватар пульсирует в такт речи.
 speaking — правда с момента say() до конца звука: голосовой сервис в это время не слушает без «Джарвис» (эхо).
@@ -19,16 +22,21 @@ speaking — правда с момента say() до конца звука: г
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import logging
+import os
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from jarvis import paths
 from jarvis.service_base import BaseService
 from jarvis.services import UserFacingError
 from jarvis.settings import Settings
@@ -51,6 +59,8 @@ ERROR_EVERY_S = 30.0
 FALLBACKS = ("piper", "windows")
 CACHE_MAX_CHARS = 160  # помнить только короткие фразы: подтверждения и ответы в одно предложение
 CACHE_MAX_BYTES = 24 * 1024 * 1024
+DISK_MAX_FILES = 300  # фраз на диске (по свежести использования)
+WARM_DELAY_S = 3.0  # частые ответы готовим не сразу: ползунок темпа двигают несколько раз подряд
 
 
 class PhraseCache:
@@ -143,20 +153,28 @@ class Tts(BaseService):
         self._error_at: dict[str, float] = {}
         self.cache = PhraseCache()
         self._unsubs: list[Callable[[], None]] = []
+        self._stock: list[Callable[[], Iterable[str]]] = []  # источники частых ответов (add_stock)
+        self._keep: set[str] = set()  # предложения без личного — их звук можно хранить на диске
+        self._warm_task: asyncio.Task[None] | None = None
+        self.warm_delay_s = WARM_DELAY_S
 
     # --- жизненный цикл ----------------------------------------------------------------------------
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._unsubs.append(self.ctx.settings.on_change(self._on_settings))
         self._unsubs.append(self.models.add_listener(self._on_model_event))
-        self._unsubs.append(self.ctx.bus.on("secrets.changed", lambda _e: self._failed_until.clear()))
+        self._unsubs.append(self.ctx.bus.on("secrets.changed", self._on_secrets))
         self._prepare_voice()
+        self._schedule_warm()
 
     async def stop(self) -> None:
         for unsub in self._unsubs:
             with contextlib.suppress(Exception):
                 unsub()
         self._unsubs.clear()
+        warm, self._warm_task = self._warm_task, None
+        if warm is not None:
+            warm.cancel()
         self.silence()
         worker, self._worker = self._worker, None
         if worker is not None:
@@ -225,6 +243,18 @@ class Tts(BaseService):
             await asyncio.shield(job.done)
 
     # --- сверх протокола: API и голосовой сервис ---------------------------------------------------
+    def add_stock(self, source: Callable[[], Iterable[str]]) -> None:
+        """Частые короткие ответы («Готово, сэр.»): звук облачного голоса готовится заранее и хранится
+        на диске — звучат сразу, без сети. source зовут при запуске и при смене голоса или обращения."""
+        self._stock.append(source)
+        self._stock_sentences()  # с диска — сразу, ещё до подготовки (её ждём warm_delay_s)
+        self._schedule_warm()
+
+    def keep(self, text: str) -> None:
+        """В фразе нет личного («Открываю Telegram.»): её звук можно хранить на диске — и после перезапуска
+        она прозвучит сразу."""
+        self._keep.update(split_sentences(prepare(text, russian=False)))
+
     def play_earcon(self, name: str) -> None:
         """Короткий сигнал (wake | done | error) вне очереди речи; речью не считается (из любого потока)."""
         try:
@@ -415,6 +445,11 @@ class Tts(BaseService):
         opts = SynthOptions(voice, settings.tts.speed, settings.tts.pitch, settings)
         key = self._cache_key(engine, voice, text, settings)
         cached = self.cache.get(key) if key is not None else None
+        stored = key is not None and sentence in self._keep  # можно на диск: фраза без личного
+        if cached is None and key is not None and stored:
+            cached = await asyncio.to_thread(self._disk_get, key)
+            if cached is not None:
+                self.cache.put(key, *cached)
         if cached is not None:
             x, rate = cached
         else:
@@ -428,6 +463,8 @@ class Tts(BaseService):
             x = as_mono(samples)
             if key is not None and len(x):
                 self.cache.put(key, x, int(rate))
+                if stored:
+                    await asyncio.to_thread(self._disk_put, key, x, int(rate))
         if settings.tts.effect > 0.01:
             x = electronic(x, rate, settings.tts.effect)
         return fade(x, rate), int(rate)
@@ -441,6 +478,97 @@ class Tts(BaseService):
         extra = fingerprint(settings) if callable(fingerprint) else ""
         tts = settings.tts
         return (engine.name, voice, extra, round(tts.speed, 2), round(tts.pitch, 2), text)
+
+    # --- частые ответы на диске --------------------------------------------------------------------
+    @staticmethod
+    def _disk_dir() -> Path:
+        return paths.cache_dir() / "tts"
+
+    def _disk_path(self, key: tuple[Any, ...]) -> Path:
+        return self._disk_dir() / (hashlib.sha256(repr(key).encode("utf-8")).hexdigest()[:40] + ".pcm")
+
+    def _disk_get(self, key: tuple[Any, ...]) -> tuple[np.ndarray, int] | None:
+        """Звук фразы с диска: строка JSON {key, rate}, затем PCM 16 бит. Нет или чужой — None."""
+        path = self._disk_path(key)
+        try:
+            raw = path.read_bytes()
+            os.utime(path)  # свежесть использования: старые фразы удаляются первыми
+        except OSError:
+            return None
+        head, sep, data = raw.partition(b"\n")
+        try:
+            meta = json.loads(head)
+        except ValueError:
+            return None
+        rate = int(meta.get("rate") or 0) if isinstance(meta, dict) else 0
+        if not sep or not data or rate <= 0 or meta.get("key") != repr(key):
+            return None
+        return pcm16_to_float(data), rate
+
+    def _disk_put(self, key: tuple[Any, ...], samples: np.ndarray, rate: int) -> None:
+        path = self._disk_path(key)
+        head = json.dumps({"key": repr(key), "rate": int(rate)}, ensure_ascii=False).encode("utf-8")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_bytes(head + b"\n" + float_to_pcm16(samples))
+            tmp.replace(path)
+            files = sorted(path.parent.glob("*.pcm"), key=lambda f: f.stat().st_mtime)
+            for old in files[:-DISK_MAX_FILES]:
+                old.unlink(missing_ok=True)
+        except OSError as e:
+            log.info("голос: фраза не сохранена на диск: %s", e)
+
+    def _schedule_warm(self) -> None:
+        """Подготовить частые ответы заново (после паузы; новый вызов отменяет прежний) — из любого потока."""
+        loop = self._loop
+        if loop is None or loop.is_closed() or not self._stock:
+            return
+
+        def start() -> None:
+            if self._warm_task is not None:
+                self._warm_task.cancel()
+            self._warm_task = loop.create_task(self._warm())
+
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            start()
+        else:
+            loop.call_soon_threadsafe(start)
+
+    async def _warm(self) -> None:
+        """Частые ответы — заранее: с диска в память или, если их ещё нет, синтезом выбранного облачного
+        голоса (раз на голос и его настройки; локальный голос и так быстрый)."""
+        await asyncio.sleep(self.warm_delay_s)
+        settings = self.ctx.settings.value
+        engine = self.engines.get(settings.tts.engine)
+        if engine is None or not getattr(engine, "cacheable", False):
+            return
+        voice = engine.voice(settings)
+        for sentence in self._stock_sentences():
+            if engine.available() or self._failed_until.get(engine.name, 0.0) > time.monotonic():
+                return
+            try:
+                await self._synth_with(engine, sentence, voice, settings, strict=True)
+            except UserFacingError as e:
+                log.info("голос: частые ответы заранее не озвучены: %s", e)
+                return
+
+    def _stock_sentences(self) -> list[str]:
+        """Предложения частых ответов (по нынешнему обращению); их звук можно хранить на диске."""
+        phrases: list[str] = []
+        for source in self._stock:
+            try:
+                phrases.extend(source())
+            except Exception:
+                log.debug("частые ответы не получены", exc_info=True)
+        split = (x for phrase in phrases for x in split_sentences(prepare(phrase, russian=False)))
+        sentences = list(dict.fromkeys(split))
+        self._keep.update(sentences)
+        return sentences
 
     def _report(
         self, name: str, engine: Any, message: str, *, primary: bool = True, cooldown: float | None = None
@@ -505,8 +633,14 @@ class Tts(BaseService):
             with contextlib.suppress(Exception):
                 self.models.start(voice_id)
 
+    def _on_secrets(self, _event: Any) -> None:
+        self._failed_until.clear()
+        self._schedule_warm()  # появился ключ облачного голоса — частые ответы готовим заранее
+
     def _on_settings(self, old: Settings, new: Settings) -> None:
         o, n = old.tts, new.tts
+        if o != n or old.profile.address != new.profile.address:
+            self._schedule_warm()  # другой голос, темп или обращение — другие частые ответы
         if o.volume != n.volume:
             self.player.volume = n.volume / 100
         if o.output_device != n.output_device:

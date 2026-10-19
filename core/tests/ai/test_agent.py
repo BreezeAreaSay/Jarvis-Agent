@@ -54,6 +54,7 @@ def _mail_script(llm: ScriptedLlm, final: str) -> None:
         ),
         calls(("ui_click", {"id": "e4", "step": 4})),
         calls(("finish", {"summary": final})),
+        calls(("finish", {"summary": final})),  # после проверки по свежему снимку
     )
 
 
@@ -72,6 +73,10 @@ async def test_agent_sends_mail_after_approval(
     ]
     assert ui.clicks == ["Написать", "Отправить"]
     assert ui.typed == [("Кому", "ivan@example.com"), ("Текст письма", "Отчёт готов, смотри вложение")]
+    # прежде чем «готово» — проверка по свежему снимку окна
+    verify = [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"][-1]
+    assert verify["content"].startswith("Проверка перед итогом. Задача: «Напиши Ивану письмо")
+    assert "[Снимок окна]" in verify["content"]
 
     states = events.of("agent.state")
     assert (states[0]["status"], states[0]["text"]) == ("planning", "Составляю план…")
@@ -128,8 +133,8 @@ async def test_agent_respects_denial(ctx: AppContext, llm: ScriptedLlm, ui: Fake
     result = await ctx.agent.wait(await ctx.agent.run(TASK))  # type: ignore[attr-defined]
     assert len(asked) == 1
     assert ui.clicks == ["Написать"]  # «Отправить» не нажата
-    denial = [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"][-1]
-    assert "Пользователь отклонил" in denial["content"]
+    tools = [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"]
+    assert any("Пользователь отклонил" in m["content"] for m in tools)
     assert result.status == "done" and "отклонили" in result.summary
     assert result.actions[-1] == {"title": "Нажать «Отправить»", "ok": False, "detail": "Отклонено"}
 
@@ -166,6 +171,7 @@ async def test_agent_step_limit_and_always_confirm(ctx: AppContext, llm: Scripte
         PLAN,
         calls(("ui_click", {"id": "e2"})),
         calls(("press_keys", {"combo": "ctrl+r"})),
+        calls(("finish", {"summary": "Готово"})),
         calls(("finish", {"summary": "Готово"})),
     )
     result = await ctx.agent.wait(await ctx.agent.run("Обнови входящие"))  # type: ignore[attr-defined]
@@ -246,6 +252,7 @@ async def test_agent_other_actions(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
         ),
         calls(("screenshot", {})),
         calls(("wait", {"seconds": 0.5})),
+        calls(("finish", {"summary": "Готово"})),
         calls(("finish", {"summary": "Готово"})),
     )
     result = await ctx.agent.wait(await ctx.agent.run("Разное"))  # type: ignore[attr-defined]

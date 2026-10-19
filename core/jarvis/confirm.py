@@ -57,6 +57,10 @@ class Confirmations:
     def pending(self) -> list[dict[str, Any]]:
         return [c.to_json() for c, _ in self._pending.values()]
 
+    def waiting(self) -> bool:
+        """Есть открытый запрос «Разрешить?» (из любого потока: только длина словаря)."""
+        return len(self._pending) > 0
+
     async def request(
         self,
         title: str,

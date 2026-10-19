@@ -5,7 +5,8 @@
 шаблоны со слотами — выравниванием по словам: слова шаблона сравниваются нечётко, слот забирает часть фразы
 ({number} — число, {app} — программа, {site} — сайт, {desk} — стол, {text}/{query} — свободный хвост,
 {keys} — клавиши словами). Фраза из нескольких команд («сверни все окна и включи музыку») делится на части,
-только если каждая часть — команда со «Связывать».
+только если каждая часть — команда со «Связывать»; без запятых и «и» («включи музыку открой вс код») — ещё и
+перед повелительным глаголом, если целиком фраза ни на что не похожа.
 
 Лишние слова снижают похожесть, поэтому вопросы и длинные просьбы уходят к ИИ.
 """
@@ -56,6 +57,13 @@ SOFT_WORDS = frozenset(
 _DECIMAL_COMMA = re.compile(r"(\d),(\d)")
 _SPLIT = re.compile(
     r"\s*[,;]\s*|\s+(?:и потом|а потом|и затем|а затем|после этого|после чего|потом|затем|и)\s+",
+    re.IGNORECASE,
+)
+# без запятых (распознавание на ПК их не ставит) части цепочки начинаются с повелительного глагола:
+# «включи музыку | открой вс код | и запусти фигму»
+_VERB_SPLIT = re.compile(
+    r"\s+(?=(?:открой|запусти|включи|выключи|закрой|сверни|разверни|сделай|поставь|покажи|перейди|переключи|"
+    r"убавь|прибавь|увеличь|уменьши|выдели|скопируй|вставь|удали|сохрани|найди)(?!\w))",
     re.IGNORECASE,
 )
 
@@ -227,6 +235,11 @@ class Matcher:
                 return CommandMatch(whole_text, [self._part(index, c) for c in parts])
         if whole is not None:
             return CommandMatch(whole_text, [self._part(index, whole)])
+        by_verbs = [q for p in pieces for q in _VERB_SPLIT.split(p) if q and q.strip()]
+        if len(pieces) < len(by_verbs) <= MAX_PARTS:
+            parts = self._compound(index, by_verbs, wake)
+            if parts:
+                return CommandMatch(whole_text, [self._part(index, c) for c in parts])
         return None
 
     def _compound(self, index: Index, pieces: list[str], wake: frozenset[str]) -> list[Candidate] | None:

@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from jarvis import paths
+from jarvis import netproxy, paths
 from jarvis.ai.chatgpt import prompt as context_prompt
 from jarvis.ai.chatgpt.backend import CHAT_MODE_DENIED
 from jarvis.ai.cli import errors, locate, prompt
@@ -304,8 +304,10 @@ class CliBackend:
         for name in list(env):
             if name.upper() in stripped:
                 env.pop(name)
-        proxy = self.ctx.settings.value.ai.proxy.strip()
+        proxy = self.proxy()
         if proxy:
+            for name in [k for k in env if k.upper() in ("HTTPS_PROXY", "HTTP_PROXY")]:
+                env.pop(name)  # https_proxy в нижнем регистре Claude Code предпочёл бы нашему
             env.update(HTTPS_PROXY=proxy, HTTP_PROXY=proxy)
         # к серверу MCP ядра (127.0.0.1) — всегда напрямую, мимо прокси
         current = next((v for k, v in env.items() if k.upper() == "NO_PROXY"), "")
@@ -320,6 +322,36 @@ class CliBackend:
             env["no_proxy"] = env["NO_PROXY"]
         env.update(extra or {})
         return env
+
+    def proxy(self) -> str:
+        """Прокси для программы: из настроек Jarvis AI, иначе системный прокси Windows ("" — напрямую).
+
+        Node.js (Claude Code, Gemini CLI, Qwen Code) не читает системный прокси, который включает
+        VPN-программа, — без него запросы шли бы мимо VPN («недоступен из вашего региона»). SOCKS Claude Code
+        не понимает, а поймёт ли системный SOCKS другая программа, неизвестно: такой прокси не передаём, а
+        ошибку связи объясняем (_socks_problem).
+        """
+        proxy, system = self._wanted_proxy()
+        if netproxy.is_socks(proxy) and (system or not self.info.socks):
+            return ""
+        return proxy
+
+    def _wanted_proxy(self) -> tuple[str, bool]:
+        """(прокси из настроек или системный, системный ли он)."""
+        proxy = self.ctx.settings.value.ai.proxy.strip()
+        if proxy:
+            return proxy, False
+        if any(k.upper() in ("HTTPS_PROXY", "HTTP_PROXY") for k in os.environ):
+            return "", False  # прокси уже задан в окружении — программа возьмёт его сама
+        return netproxy.system_https(), True
+
+    def _socks_problem(self) -> str:
+        """Почему, возможно, нет связи: SOCKS-прокси, который программе не передан ("" — не в этом дело)."""
+        proxy, system = self._wanted_proxy()
+        if not netproxy.is_socks(proxy) or self.proxy():
+            return ""
+        text = errors.SYSTEM_SOCKS if system else errors.NO_SOCKS
+        return text.format(program=self.info.name, proxy=proxy)
 
     async def _short(self, launch: Launch, args: list[str]) -> tuple[int | None, str, str]:
         """Короткий запуск (--version, auth status): (код выхода, stdout, stderr)."""
@@ -539,7 +571,7 @@ class CliBackend:
             hint = re.sub(r'[&|<>^%!"]', "", self.info.terminal_hint or self.info.login_hint)
             lines = ["@echo off", "chcp 65001 >nul", 'cd /d "%~dp0"', f"title {self.info.name}"]
             lines += [f'set "{name}="' for name in PRIVATE_ENV]
-            proxy = self.ctx.settings.value.ai.proxy.strip()
+            proxy = self.proxy()
             if proxy and locate.shell_safe(proxy):
                 lines += [f'set "HTTPS_PROXY={proxy}"', f'set "HTTP_PROXY={proxy}"']
             lines += [f"echo {hint}.", "echo.", f'{call}"{target}"']
@@ -682,6 +714,8 @@ class CliBackend:
         )
         if reason in ("auth", "gemini_consumer", "qwen_oauth", "plan", "org", "hold"):
             self._remember_auth(False, message)
+        if reason in ("region", "network"):
+            message = self._socks_problem() or message
         return reason, message
 
     def _record_usage(self, out: CliOutcome, model: str) -> Usage:

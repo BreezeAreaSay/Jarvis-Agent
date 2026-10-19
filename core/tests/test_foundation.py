@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -159,6 +160,71 @@ async def test_dispatcher_runs_command_and_records_history(ctx: AppContext, even
 
     unknown = await ctx.dispatcher.handle("спой песню", "text")
     assert unknown["kind"] == "unknown"
+
+
+class FakeAi:
+    """ИИ для диспетчера: настроен; ask записывает, с какой задачей звали агента."""
+
+    configured = True
+
+    def __init__(self) -> None:
+        self.asked: list[tuple[str, str]] = []
+
+    async def ask(self, text: str, **kw: Any) -> Any:
+        from jarvis.services import AskResult
+
+        self.asked.append((text, kw.get("agent_task", "")))
+        return AskResult("chat-1", "Включил «Мою волну».")
+
+    def stop_all(self) -> None:
+        return None
+
+
+async def test_command_that_could_not_do_it_hands_over_to_agent(ctx: AppContext, events: EventLog) -> None:
+    """«Включи музыку», а музыка не заиграла (трек не выбран) — дело сразу берёт агент."""
+    ai = FakeAi()
+    ctx.ai = ai  # type: ignore[assignment]
+    part = MatchedPart("builtin.media.play", "Включить музыку", "включи музыку", 100.0)
+    ctx.commands.match = lambda text: CommandMatch(text, [part])  # type: ignore[method-assign]
+
+    async def execute(m: CommandMatch, source: str) -> ExecResult:
+        task = {"agent_task": "Включи музыку"}
+        return ExecResult(False, "Включить музыку", "Музыка не заиграла", data=task)
+
+    ctx.commands.execute = execute  # type: ignore[method-assign]
+    result = await ctx.dispatcher.handle("включи музыку", "text")
+    assert result["kind"] == "ai" and ai.asked == [("включи музыку", "Включи музыку")]
+    assert any("передаю агенту" in t["message"] for t in events.of("toast"))
+    ctx.settings.patch({"ai": {"auto_agent": False}})  # агенту сразу нельзя — честная ошибка команды
+    result = await ctx.dispatcher.handle("включи музыку", "text")
+    assert result["kind"] == "command" and not result["result"]["ok"] and len(ai.asked) == 1
+
+
+async def test_taught_rule_beats_ready_command(ctx: AppContext) -> None:
+    """В памяти «когда я прошу включить музыку, надо…» — «включи музыку» сразу агенту с этим правилом."""
+    ai = FakeAi()
+    ctx.ai = ai  # type: ignore[assignment]
+    ran: list[str] = []
+
+    async def execute(m: CommandMatch, source: str) -> ExecResult:
+        ran.append(m.text)
+        return ExecResult(True, "Включить музыку", "Выполнено")
+
+    ctx.commands.execute = execute  # type: ignore[method-assign]
+    ctx.notes.memory_add(
+        "Запомни, что когда я прошу включить музыку, надо открывать Яндекс Музыку и нажать в приложении плей",
+        source="user",
+    )
+    await ctx.dispatcher.handle("Джарвис, включи музыку", "voice")
+    assert ran == [] and len(ai.asked) == 1
+    text, task = ai.asked[0]
+    assert text == "Джарвис, включи музыку"
+    assert task.endswith(
+        "Пользователь просил делать это так: когда я прошу включить музыку, надо открывать "
+        "Яндекс Музыку и нажать в приложении плей"
+    )
+    await ctx.dispatcher.handle("сверни все окна", "text")  # правило не про эту команду — она сама
+    assert ran == ["сверни все окна"]
 
 
 async def test_stop_phrase_stops_speech_and_listening(

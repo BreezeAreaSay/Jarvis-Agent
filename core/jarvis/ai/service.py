@@ -338,9 +338,12 @@ class Ai(BaseService):
         source: Source = "text",
         mode: str | None = None,
         images: list[str] | None = None,
+        agent_task: str = "",
     ) -> AskResult:
         try:
-            turn = self._begin(text, chat_id=chat_id, source=source, mode=mode, images=images)
+            turn = self._begin(
+                text, chat_id=chat_id, source=source, mode=mode, images=images, agent_task=agent_task
+            )
         except UserFacingError as e:
             return AskResult(chat_id or "", "", error=str(e))
         return await self._spawn(turn)
@@ -409,15 +412,16 @@ class Ai(BaseService):
         source: Source,
         mode: str | None,
         images: list[str] | None,
+        agent_task: str = "",
     ) -> Turn:
         text = (text or "").strip()
         pictures = self._check_images(images)
         if not text and not pictures:
             raise UserFacingError("Пустое сообщение")
         chat = self._chat_for(chat_id, source, mode)
-        agent_task = ""
+        agent_task = agent_task.strip()
         found = AGENT_PHRASE.match(text)
-        if found and found["task"].strip():
+        if not agent_task and found and found["task"].strip():
             agent_task = found["task"].strip()
         if agent_task:
             turn_mode = "agent"

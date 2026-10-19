@@ -64,6 +64,13 @@ remote_token`.
 Итог `/api/dispatch`: `{kind: "command", result: ExecResult, history}` | `{kind: "ai", chat_id, text, actions,
 sources, error, history}` | `{kind: "unknown", history}` | `{kind: "stop"}` | `{kind: "empty"}`.
 
+Готовая команда уступает агенту (если ИИ настроен, режим не «Чат» и включено «Сразу запускать агента»): когда
+она не справилась (`ExecResult.data.agent_task` — исключение `NeedsAgent`: «включи музыку», а трек не выбран и
+музыка не заиграла; остаток цепочки — в той же задаче, «Потом: …») — тост «… — передаю агенту» и сразу агент с этой
+задачей (`ai.ask(text, agent_task=…)`, итог — `{kind: "ai", …}`); и когда человек сам научил, как это делать: в
+памяти правило «когда я прошу включить музыку, надо…» и его начало («включить музыку») — та же команда, — агент
+получает фразу вместе с правилом, команда не выполняется.
+
 `HistoryItem = {id, ts, source, text, kind: command|ai|unknown|system|confirm, title, status: ok|error|pending|cancelled|
 denied, detail, icon, command_id}` — `confirm`: итог подтверждения (`title` — вопрос, `status`: `ok` разрешено, `denied`
 отклонено, `cancelled` нет ответа или отменено «Стопом»; `detail` — «Разрешено · Будет отправлено: …», секреты
@@ -151,8 +158,12 @@ Info.Battery, Info.System, Jarvis.Timer, Jarvis.Reminder`. Каталог с о�
 
 Значения: `Keys.Press` — «ctrl+shift+s», несколько через пробел («ctrl+k ctrl+s»), повтор «down*3»; `Wait`,
 `System.Shutdown`/`Restart` — секунды или «5m», «1h»; `System.VolumeSet`/`BrightnessSet` — 0–100 или «+10»/«-10»;
-`Mouse.*` — «x y» (пусто — где курсор, `center` — центр экрана); `Media.PlayPause` — «» (переключить), `play`,
-`pause`; `Web.Search` — «google: запрос» (`google, yandex, youtube, bing, duckduckgo, wikipedia, images, maps` или
+`Mouse.*` — «x y» (пусто — где курсор, `center` — центр экрана); `Media.PlayPause` — «» (переключить: играет —
+пауза, нет — включить), `play`, `pause`; включить — с проверкой, что заиграло (до ≈2,4 с по сеансу воспроизведения
+Windows): ничего не играет и плеера нет — сначала запускается своя музыкальная программа (или та, что сценарий
+только что открыл), не заиграло — `NeedsAgent` (агент откроет программу и нажмёт кнопку сам); `Launch.App`, за
+которым в команде или сценарии есть ещё действия, ждёт окно программы (до 15 с, новое окно — ещё 1,5 с на
+догрузку, уже открытое — 0,3 с), последнее действие — без ожидания; `Web.Search` — «google: запрос» (`google, yandex, youtube, bing, duckduckgo, wikipedia, images, maps` или
 сайт с поиском: `avito, ozon…`); `Launch.Folder` — путь или `downloads, documents, desktop, pictures, music, videos,
 screenshots`; `Launch.Shell` — только в своих командах; значение слота со спецсимволами оболочки (`&`, `|`, `<`,
 `>`, `^`, `%`, `!`, `$`, `;`, кавычки, скобки, обратная кавычка, перевод строки) не подставляется — команда не

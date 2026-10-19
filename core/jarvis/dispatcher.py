@@ -3,10 +3,16 @@
 Порядок: «стоп» → команды (быстро, без сети) → ИИ (вопросы, сложные просьбы, «сверни окна и расскажи…») →
 «не понял». Каждая фраза попадает в историю (history.*) и даёт тост (toast) в оверлее; на голосовую фразу
 Jarvis отвечает голосом (если не включён тихий режим).
+
+Агент важнее готовой команды, когда команда не справилась (NeedsAgent: «включи музыку», а трек не выбран
+и музыка не заиграла) или человек сам научил, как это делать: в памяти правило «когда я прошу включить
+музыку — открой Яндекс Музыку и нажми плей», и его начало — та же команда. Тогда дело сразу берёт агент
+с этим правилом (если ИИ настроен, режим не «Чат» и включено «Сразу запускать агента»).
 """
 
 import logging
 import random
+import re
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +28,14 @@ log = logging.getLogger(__name__)
 OK_PHRASES = ("Готово, {address}.", "Сделано, {address}.", "Выполнено.", "Есть, {address}.")
 UNKNOWN_SAY = "Не понял команду, {address}."
 NO_AI_SAY = "Такой команды нет, а ИИ не настроен, {address}."
+# правило из памяти: «когда я прошу включить музыку, надо…» — «включить музыку» до запятой или «надо»
+_RULE = re.compile(
+    r"(?<!\w)(?:когда|если|как только)\s+(?:я\s+)?(?:прошу|попрошу|говорю|скажу|хочу|захочу)\s+"
+    r"(?P<what>.+?)(?=\s*[,.;:!?—–]|\s+(?:то|надо|нужно|ты|сначала|делай|открывай|нажимай)(?!\w)|$)",
+    re.I,
+)
+_REMEMBER = re.compile(r"^\s*(?:запомни|не забудь)\s*,?\s*(?:что\s+)?", re.I)
+MAX_RULES = 30  # записей памяти с правилами, которые сверяем с командой
 
 
 class MainDispatcher:
@@ -127,6 +141,10 @@ class MainDispatcher:
         except Exception:
             log.exception("разбор команды упал: %r", raw)
         if match is not None:
+            rule = self._taught_rule(match) if self._agent_ready() else ""
+            if rule:  # человек научил, как это делать, — агенту с его правилом
+                task = f"{raw}. Пользователь просил делать это так: {rule}"
+                return await self._run_ai(raw, source, speak, agent_task=task)
             return await self._run_command(raw, source, match, speak)
 
         # ИИ
@@ -155,6 +173,15 @@ class MainDispatcher:
         except Exception as e:
             log.exception("команда упала: %r", raw)
             result = ExecResult(False, title, f"Ошибка: {e}", icon="error")
+        handoff = str(result.data.get("agent_task") or "")
+        if not result.ok and handoff and self._agent_ready():
+            # готовая команда не справилась (музыка не заиграла) — дело берёт агент
+            self._history_update(item, status="error", title=result.title or title, detail=result.message)
+            self.ctx.bus.publish(
+                "command.executed", {"text": raw, "source": source, "result": result.to_json()}
+            )
+            self.toast(result.title or title, f"{result.message} — передаю агенту", status="info", icon="ai")
+            return await self._run_ai(raw, source, speak, agent_task=handoff)
         status = "ok" if result.ok else ("cancelled" if result.data.get("cancelled") else "error")
         self._history_update(
             item,
@@ -183,13 +210,48 @@ class MainDispatcher:
         self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "command", "ok": result.ok})
         return {"kind": "command", "result": result.to_json(), "history": item}
 
-    async def _run_ai(self, raw: str, source: Source, speak: bool) -> dict[str, Any]:
+    def _agent_ready(self) -> bool:
+        """Дело можно сразу отдать агенту: ИИ включён и настроен, режим не «Чат», «Сразу запускать агента»."""
+        ai = self.ctx.settings.value.ai
+        if not (ai.enabled and ai.auto_agent and ai.mode != "chat"):
+            return False
+        try:
+            return bool(self.ctx.ai.configured)
+        except Exception:
+            return False
+
+    def _taught_rule(self, match: Any) -> str:
+        """Правило из памяти для этой команды («когда я прошу включить музыку, надо…»); "" — такого нет.
+
+        Начало правила сверяется разбором команд: «включить музыку» — та же команда, что «включи музыку».
+        """
+        ids = {p.command_id for p in match.parts}
+        try:
+            items = self.ctx.notes.memory_list()
+        except Exception:
+            return ""
+        checked = 0
+        for item in items:
+            text = str(item.get("text") or "").strip()
+            for found in _RULE.finditer(text):
+                checked += 1
+                if checked > MAX_RULES:
+                    return ""
+                try:
+                    trigger = self.ctx.commands.match(found["what"])
+                except Exception:
+                    trigger = None
+                if trigger is not None and ids & {p.command_id for p in trigger.parts}:
+                    return _REMEMBER.sub("", text).strip()
+        return ""
+
+    async def _run_ai(self, raw: str, source: Source, speak: bool, *, agent_task: str = "") -> dict[str, Any]:
         item = self._history_add(source, raw, "ai", "pending", title=raw, icon="ai")
         chat_id = None
         if source in ("voice", "telegram", "remote"):
             chat_id = self.ctx.db.kv_get(f"voice_chat:{source}")
         try:
-            result = await self.ctx.ai.ask(raw, chat_id=chat_id, source=source)
+            result = await self.ctx.ai.ask(raw, chat_id=chat_id, source=source, agent_task=agent_task)
         except Exception as e:
             log.exception("ИИ упал: %r", raw)
             self._history_update(item, status="error", detail=str(e))

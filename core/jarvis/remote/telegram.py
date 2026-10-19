@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from jarvis import netproxy
 from jarvis.platform.base import PlatformError
 from jarvis.remote import audio
 from jarvis.remote.actions import Outcome
@@ -191,6 +192,7 @@ class TelegramBot:
         self._task: asyncio.Task[Any] | None = None
         self._jobs: set[asyncio.Task[Any]] = set()
         self._config: tuple[str, str] | None = None
+        self._system: tuple[tuple[str, str], ...] = ()  # системный прокси, с которым создан клиент
         self._bot_id = ""  # чей username показываем: сменился токен — имя бота узнаём заново
         self._offset = 0
         self._strangers: dict[int, float] = {}
@@ -233,10 +235,29 @@ class TelegramBot:
         )
         self.api = TelegramApi(token, self._client)
         self._config = (token, proxy)
+        self._system = self._system_proxy()
         if self.api.bot_id != self._bot_id:
             self._bot_id = self.api.bot_id
             self.username = ""
         self._offset = int(self.ctx.db.kv_get(self._offset_key(), 0) or 0)
+
+    def _system_proxy(self) -> tuple[tuple[str, str], ...]:
+        """Системный прокси, через который пойдёт клиент без своего прокси (() — свой прокси или тесты)."""
+        if self._config is None or self._config[1] or self.transport is not None:
+            return ()
+        return tuple(sorted(netproxy.system_proxies().items()))
+
+    def _follow_system_proxy(self) -> None:
+        """Связи нет, а VPN тем временем включили или выключили (сменился системный прокси) — новый клиент.
+
+        Прежний не закрываем: им ещё могут отвечать задания (_jobs).
+        """
+        if self._config is not None and self._system_proxy() != self._system:
+            log.info("telegram: сменился системный прокси — переподключаюсь")
+            try:
+                self.connect(*self._config)
+            except Exception as e:
+                log.warning("telegram: клиент не пересоздан: %s", e)
 
     async def stop(self) -> None:
         task, self._task = self._task, None
@@ -304,10 +325,16 @@ class TelegramBot:
             except httpx.HTTPError as e:
                 log.info("telegram: нет связи (%s)", type(e).__name__)
                 proxy = self._config[1] if self._config else ""
-                hint = (
-                    " — проверьте прокси" if proxy else " — возможно, нужен прокси (Настройки → ИИ → Прокси)"
-                )
+                used = dict(self._system)  # системный прокси, с которым создан клиент
+                system = used.get("https") or used.get("all") or ""
+                if proxy:
+                    hint = " — проверьте прокси"
+                elif system:
+                    hint = f" — запросы идут через системный прокси {system}: проверьте, что VPN включён"
+                else:
+                    hint = " — возможно, нужен прокси (Настройки → ИИ → Прокси)"
                 self._set_status("error", "Нет связи с Telegram" + hint)
+                self._follow_system_proxy()
             except Exception:
                 log.exception("telegram: опрос упал")
                 self._set_status("error", "Сбой бота — перезапускаю")

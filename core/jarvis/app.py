@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from jarvis import crashguard, paths
+from jarvis import crashguard, netproxy, paths
 from jarvis.bus import EventBus
 from jarvis.confirm import Confirmations
 from jarvis.context import AppContext
@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 
 
 def build_context(platform_name: str = "auto") -> AppContext:
+    netproxy.install()  # системный прокси от VPN (socks= в реестре) не ломает клиенты httpx
     bus = EventBus()
     data = paths.data_dir()
     settings = SettingsStore(data / "settings.json", bus)

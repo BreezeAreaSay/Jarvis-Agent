@@ -37,6 +37,7 @@ class CliInfo:
     note: str = ""  # важное о входе и тарифах
     images: bool = False  # видит картинки из сообщения
     terminal_hint: str = ""  # что сделать в открытом окне терминала (без символов & | < > ^ %)
+    socks: bool = True  # понимает SOCKS-прокси в HTTPS_PROXY
 
 
 @dataclass
@@ -126,6 +127,7 @@ class ClaudeCode(CliKind):
             "ни пароль, ни токены. Другой вариант — провайдер «Anthropic (Claude)» по ключу API."
         ),
         images=True,
+        socks=False,  # code.claude.com/docs/en/network-config: «Claude Code does not support SOCKS proxies»
     )
 
     def args(self, run: CliRun) -> list[str]:

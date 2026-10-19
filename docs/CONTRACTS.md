@@ -33,7 +33,9 @@ desktop/ (Electron + React)                     core/ (Python 3.12, FastAPI)
 - Ошибка для человека — `raise UserFacingError("…")` (API отдаст 400 с этим текстом).
 - База — `ctx.db` (таблицы в `jarvis/db.py`; новые таблицы не заводить — для своего состояния есть `kv`
   с ключами `<область>:<имя>` и JSON-файлы в `paths.sub_dir("<область>")`).
-- Сеть — `httpx.AsyncClient` (прокси для ИИ — `settings.ai.proxy`). В тестах сети нет: `httpx.MockTransport`.
+- Сеть — `httpx.AsyncClient` (прокси для ИИ — `settings.ai.proxy`; системный прокси Windows от VPN httpx берёт
+  через `jarvis.netproxy.system_proxies()` — негодный пропускается, а не роняет клиента). В тестах сети нет:
+  `httpx.MockTransport`.
 - Тесты — `core/tests/<область>/`, фикстуры из `tests/conftest.py` (`ctx`, `running_ctx`, `client`,
   `events`). Тесты проходят на Linux без микрофона, моделей и сети.
 - Новая зависимость: `uv pip install <пакет>` в `.venv` и строка в отчёте (pyproject правит интегратор).

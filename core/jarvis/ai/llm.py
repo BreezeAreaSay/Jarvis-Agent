@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from jarvis import __version__
+from jarvis import __version__, netproxy
 from jarvis.ai.providers import PRESETS, ProviderPreset, estimate_cost, get_preset, price_for
 from jarvis.ai.vision import sees_images
 from jarvis.services import UserFacingError
@@ -52,7 +52,10 @@ NO_URL = "Укажите адрес сервера ИИ в настройках 
 NO_MODEL = "Укажите модель в настройках Jarvis AI"
 BAD_FORMAT = "Модель ответила не в нужном формате — попробуйте ещё раз или выберите другую модель"
 TOO_LONG = "Разговор слишком длинный для модели — начните новый чат"
-BAD_PROXY = "Неверный адрес прокси в настройках Jarvis AI"
+BAD_PROXY = (
+    "Неверный адрес прокси в настройках Jarvis AI — нужен вид http://127.0.0.1:10809 "
+    "или socks5://127.0.0.1:10808"
+)
 NO_FOLDER = "Укажите ID каталога Yandex Cloud в настройках Jarvis AI"
 # Gemini 3 требует подпись рассуждений у вызовов инструментов в истории; у вызовов других моделей её нет —
 # для них документация Gemini разрешает служебное значение-заглушку
@@ -797,16 +800,20 @@ def _user_error(err: _ApiError, cfg: LlmConfig) -> LlmError:
     return LlmError(text, status=status, code=err.code)
 
 
-def _network_error(e: Exception, cfg: LlmConfig) -> LlmError:
+def _network_error(e: Exception, cfg: LlmConfig, system: str = "") -> LlmError:
+    """system — системный прокси, через который шёл запрос ("" — свой прокси или напрямую)."""
     if isinstance(e, httpx.TimeoutException) and not isinstance(e, httpx.ConnectTimeout | httpx.PoolTimeout):
         return LlmError(TIMEOUT)
-    if isinstance(e, httpx.ProxyError):
-        return LlmError(f"{NETWORK} — прокси не отвечает, проверьте его в настройках Jarvis AI")
     if cfg.local:
         name = cfg.preset.title.split(" (", 1)[0] if cfg.preset.local else "сервер ИИ"
         return LlmError(f"{NETWORK} — проверьте, что {name} запущен на этом компьютере")
     if cfg.proxy:
+        if isinstance(e, httpx.ProxyError):
+            return LlmError(f"{NETWORK} — прокси не отвечает, проверьте его в настройках Jarvis AI")
         return LlmError(f"{NETWORK} — проверьте прокси в настройках Jarvis AI")
+    if system:
+        # VPN-программа включила системный прокси Windows, а сама не отвечает (выключена или упала)
+        return LlmError(f"{NETWORK} — запросы идут через системный прокси {system}: проверьте VPN")
     return LlmError(NETWORK)
 
 
@@ -935,7 +942,8 @@ class LlmClient:
         self.transport: httpx.AsyncBaseTransport | None = None  # тесты подменяют сеть (httpx.MockTransport)
         self.sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep
         self.max_retries = 2
-        self._clients: dict[tuple[str, bool, int], httpx.AsyncClient] = {}
+        # (прокси, локальный, транспорт) → (системный прокси на момент создания, клиент)
+        self._clients: dict[tuple[str, bool, int], tuple[tuple[tuple[str, str], ...], httpx.AsyncClient]] = {}
         self._quirks: dict[tuple[str, str], set[str]] = {}
 
     # --- настройки ------------------------------------------------------------------------------------
@@ -953,11 +961,17 @@ class LlmClient:
             log.exception("настройки ИИ не читаются")
             return False
 
+    def _uses_system(self, cfg: LlmConfig) -> bool:
+        """Запросы идут через системный прокси (если он есть): своего прокси нет, сервер не локальный."""
+        return not cfg.proxy and not cfg.local and self.transport is None
+
     def _client(self, cfg: LlmConfig) -> httpx.AsyncClient:
         key = (cfg.proxy, cfg.local, id(self.transport))
-        client = self._clients.get(key)
-        if client is not None and not client.is_closed:
-            return client
+        # без своего прокси клиент идёт через системный: VPN включили или выключили — нужен новый клиент
+        system = tuple(sorted(netproxy.system_proxies().items())) if self._uses_system(cfg) else ()
+        cached = self._clients.get(key)
+        if cached is not None and cached[0] == system and not cached[1].is_closed:
+            return cached[1]
         kwargs: dict[str, Any] = {"timeout": httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0)}
         if self.transport is not None:
             kwargs["transport"] = self.transport
@@ -969,7 +983,7 @@ class LlmClient:
             client = httpx.AsyncClient(**kwargs)
         except (ValueError, TypeError, httpx.InvalidURL) as e:
             raise LlmError(BAD_PROXY) from e
-        self._clients[key] = client
+        self._clients[key] = (system, client)  # прежний не закрываем: им ещё может идти ответ
         return client
 
     def _headers(self, cfg: LlmConfig, *, stream: bool) -> dict[str, str]:
@@ -1177,7 +1191,8 @@ class LlmClient:
                     attempt += 1
                     continue
                 log.warning("ИИ (%s): нет связи: %r", cfg.provider, e)
-                raise _network_error(e, cfg) from None
+                system = netproxy.system_https() if self._uses_system(cfg) else ""
+                raise _network_error(e, cfg, system) from None
 
     async def _send(self, cfg: LlmConfig, body: dict[str, Any]) -> LlmResponse:
         client = self._client(cfg)
@@ -1339,7 +1354,7 @@ class LlmClient:
         return {"ok": True, "latency_ms": int((time.perf_counter() - started) * 1000), "model": cfg.model}
 
     async def aclose(self) -> None:
-        clients, self._clients = list(self._clients.values()), {}
+        clients, self._clients = [client for _, client in self._clients.values()], {}
         for client in clients:
             with contextlib.suppress(Exception):
                 await client.aclose()

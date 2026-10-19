@@ -1,6 +1,7 @@
 """Подсказки модели о программах: приёмы программ и браузеров, готовые команды паков (по id), свои команды,
 рецепт Telegram через MCP и инструкции серверов; сразу агент для дел в программах; скорость ответа."""
 
+import dataclasses
 from typing import Any
 
 import pytest
@@ -268,7 +269,7 @@ async def test_app_task_goes_straight_to_agent(ctx: AppContext, llm: ScriptedLlm
 
 
 async def test_browser_in_front_sends_page_tasks_to_agent(
-    ctx: AppContext, llm: ScriptedLlm, events: EventLog
+    ctx: AppContext, llm: ScriptedLlm, events: EventLog, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Впереди браузер — «открой первое видео» про открытую страницу: сразу агенту. Впереди другое окно —
     лёгкая просьба, решает чат."""
@@ -288,6 +289,12 @@ async def test_browser_in_front_sends_page_tasks_to_agent(
         window.foreground = window.exe == "explorer.exe"
     llm.add(reply("Какое видео открыть?"))
     before = len(events.of("agent.state"))
+    await ctx.ai.ask("открой первое видео")  # type: ignore[attr-defined]
+    assert len(events.of("agent.state")) == before
+    # впереди окно Jarvis, браузер за ним (платформа отдаёт его с foreground=False) — тоже не про страницу
+    chrome = next(w for w in platform.windows if w.exe == "chrome.exe")
+    monkeypatch.setattr(platform, "foreground_window", lambda: dataclasses.replace(chrome, foreground=False))
+    llm.add(reply("Какое видео открыть?"))
     await ctx.ai.ask("открой первое видео")  # type: ignore[attr-defined]
     assert len(events.of("agent.state")) == before
 

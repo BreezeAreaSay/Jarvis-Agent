@@ -4,6 +4,10 @@
 «не понял». Каждая фраза попадает в историю (history.*) и даёт тост (toast) в оверлее; на голосовую фразу
 Jarvis отвечает голосом (если не включён тихий режим).
 
+Пока работает агент, фраза, которая не готовая команда (или любая, если агент задал вопрос), — ему: поправка
+к задаче («нет, не Ане, а Маше»), ответ на его вопрос или «да» / «нет», когда он ждёт разрешения, а не новый
+запрос («стоп» — как всегда, стоп).
+
 Агент важнее готовой команды, когда команда не справилась (NeedsAgent: «включи музыку», а трек не выбран
 и музыка не заиграла) или человек сам научил, как это делать: в памяти правило «когда я прошу включить
 музыку — открой Яндекс Музыку и нажми плей», и его начало — та же команда. Тогда дело сразу берёт агент
@@ -36,6 +40,12 @@ _RULE = re.compile(
 )
 _REMEMBER = re.compile(r"^\s*(?:запомни|не забудь)\s*,?\s*(?:что\s+)?", re.I)
 MAX_RULES = 30  # записей памяти с правилами, которые сверяем с командой
+# чем стала фраза, пока работает агент (Agent.interject), — для истории
+AGENT_REPLY = {
+    "answer": "Ответ агенту",
+    "approval": "Решение для агента",
+    "note": "Агенту — поправка к задаче",
+}
 
 
 class MainDispatcher:
@@ -140,6 +150,9 @@ class MainDispatcher:
             match = self.ctx.commands.match(raw)
         except Exception:
             log.exception("разбор команды упал: %r", raw)
+        agent = getattr(self.ctx, "agent", None)
+        if getattr(agent, "busy", False) and (match is None or getattr(agent, "waiting_answer", False)):
+            return await self._to_agent(raw, source, speak)
         if match is not None:
             rule = self._taught_rule(match) if self._agent_ready() else ""
             if rule:  # человек научил, как это делать, — агенту с его правилом
@@ -209,6 +222,28 @@ class MainDispatcher:
             await self._say(result.message or "Не получилось.", speak)
         self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "command", "ok": result.ok})
         return {"kind": "command", "result": result.to_json(), "history": item}
+
+    async def _to_agent(self, raw: str, source: Source, speak: bool) -> dict[str, Any]:
+        """Фраза, пока агент работает: ему — ответом на вопрос, решением о разрешении или поправкой
+        (на поправку — «Понял, учту» вслух)."""
+        agent = self.ctx.agent
+        kind = str(agent.interject(raw) or "")
+        delivered = bool(kind)
+        detail = AGENT_REPLY.get(kind, "Агент уже закончил")
+        item = self._history_add(source, raw, "ai", "ok" if delivered else "error", title=raw, detail=detail)
+        if kind == "note":
+            await self._say("Понял, учту.", speak)
+        self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "ai", "ok": delivered})
+        current = getattr(agent, "current", None)
+        return {
+            "kind": "ai",
+            "chat_id": getattr(current, "chat_id", "") or "",
+            "text": detail,
+            "actions": [],
+            "sources": [],
+            "error": "" if delivered else detail,
+            "history": item,
+        }
 
     def _agent_ready(self) -> bool:
         """Дело можно сразу отдать агенту: ИИ включён и настроен, режим не «Чат», «Сразу запускать агента»."""

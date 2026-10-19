@@ -1004,21 +1004,7 @@ class CliBackend:
             async with one_at_a_time:
                 return await act(name, args)
 
-        async def act(name: str, args: dict[str, Any]) -> McpResult:
-            call = ToolCall("call_" + new_id(), name, json.dumps(args, ensure_ascii=False))
-            if name == "finish":
-                finish["summary"] = agent.finish_summary(run, args)
-                return McpResult("ok")
-            if finish["summary"] is not None:
-                return McpResult("Пропущено: работа уже завершена", is_error=True)
-            if run.count >= limit:
-                finish["limit"] = True
-                proc = holder.get("proc")
-                if proc is not None:
-                    holder["killed"] = True
-                    proc.kill()
-                return McpResult(f"Лимит шагов ({limit}) исчерпан", is_error=True)
-            content, extras = await agent._act(run, call)
+        def result(content: str, extras: list[dict[str, Any]]) -> McpResult:
             texts: list[str] = [content]
             images: list[str] = []
             for extra in extras:
@@ -1033,6 +1019,25 @@ class CliBackend:
                     elif part.get("type") == "text" and part.get("text"):
                         texts.append(str(part["text"]))
             return McpResult("\n\n".join(texts), is_error=content.startswith("Ошибка"), images=images)
+
+        async def act(name: str, args: dict[str, Any]) -> McpResult:
+            call = ToolCall("call_" + new_id(), name, json.dumps(args, ensure_ascii=False))
+            if name == "finish":
+                check = await agent.check_finish(run, args)
+                if check is not None:  # реплика пользователя или проверка по снимку — работа продолжается
+                    return result(*check)
+                finish["summary"] = agent.finish_summary(run, args)
+                return McpResult("ok")
+            if finish["summary"] is not None:
+                return McpResult("Пропущено: работа уже завершена", is_error=True)
+            if run.count >= limit:
+                finish["limit"] = True
+                proc = holder.get("proc")
+                if proc is not None:
+                    holder["killed"] = True
+                    proc.kill()
+                return McpResult(f"Лимит шагов ({limit}) исчерпан", is_error=True)
+            return result(*await agent._act(run, call))
 
         tools = [
             {

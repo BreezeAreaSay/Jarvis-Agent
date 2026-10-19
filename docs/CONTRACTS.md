@@ -71,6 +71,13 @@ sources, error, history}` | `{kind: "unknown", history}` | `{kind: "stop"}` | `{
 памяти правило «когда я прошу включить музыку, надо…» и его начало («включить музыку») — та же команда, — агент
 получает фразу вместе с правилом, команда не выполняется.
 
+Пока агент работает, фраза — ему, а не новый запрос (`Agent.interject`), если это не готовая команда или агент
+задал вопрос (`ask_user`; тогда любая фраза — ответ): ответ на вопрос, «да» / «нет», когда он ждёт разрешения (как
+кнопка на карточке; «нет, напиши лучше Маше» — ещё и поправка), иначе поправка к задаче («нет, не Ане, а Маше»:
+вслух «Понял, учту.»). Итог — `{kind: "ai", chat_id, text: "Ответ агенту" | "Решение для агента" | "Агенту —
+поправка к задаче", …}`; «стоп» — как всегда, стоп. Так же — сообщение в чат, где работает агент
+(`POST /api/chats/{id}/messages` без картинок, `reply_id` — будущий итог агента).
+
 `HistoryItem = {id, ts, source, text, kind: command|ai|unknown|system|confirm, title, status: ok|error|pending|cancelled|
 denied, detail, icon, command_id}` — `confirm`: итог подтверждения (`title` — вопрос, `status`: `ok` разрешено, `denied`
 отклонено, `cancelled` нет ответа или отменено «Стопом»; `detail` — «Разрешено · Будет отправлено: …», секреты
@@ -305,7 +312,7 @@ label, placeholder?, options?, required}], description}`.
 | `GET /api/chats/{id}` | — | `{chat: Chat, messages: UiMessage[]}` |
 | `PATCH /api/chats/{id}` | `{title?, pinned?, mode?, model?}` | `Chat` |
 | `DELETE /api/chats/{id}` | — | `{ok}` |
-| `POST /api/chats/{id}/messages` | `{text, images?: [dataURL], mode?}` | `{chat_id, message_id, reply_id}` — ответ идёт событиями (`chat.delta` с `message_id = reply_id`) |
+| `POST /api/chats/{id}/messages` | `{text, images?: [dataURL], mode?}` | `{chat_id, message_id, reply_id}` — ответ идёт событиями (`chat.delta` с `message_id = reply_id`); пока в этом чате работает агент, текст — ему (ответ на вопрос, поправка), `reply_id` — его итог |
 | `POST /api/chats/{id}/stop` | — | `{ok}` |
 | `POST /api/agent/run` | `{task}` | `{run_id}` — задача агенту в новом чате; из открытого чата агент запускается сообщением с `mode: "agent"` |
 | `POST /api/agent/stop` | — | `{ok}` |
@@ -363,7 +370,7 @@ error|disabled, error, tools: [{name, description}]}` — секретные `en
 | `memory.cleared` | `{count}` — память очищена целиком |
 | `notes.changed` / `tasks.changed` / `events.changed` / `reminders.changed` | `{op: add\|update\|delete, item?, id?}` |
 | `reminder.fired` | `{item: {…, kind: reminder\|event, missed}}` |
-| `agent.state` | `{run_id, task, status: planning\|running\|waiting\|done\|stopped\|error, step, total, text, plan: string[], outcome: ""\|done\|partial\|failed}` — `outcome` — как оценил итог сам агент (finish): «Готово» в интерфейсе только при `done` |
+| `agent.state` | `{run_id, task, status: planning\|running\|waiting\|done\|stopped\|error, step, total, text, plan: string[], outcome: ""\|done\|partial\|failed, chat_id}` — `outcome` — как оценил итог сам агент (finish): «Готово» в интерфейсе только при `done`; `waiting` — ждёт разрешения или ответа на вопрос (`text`: «Жду ответа: …»); `chat_id` — чат, куда агент пишет итог (сообщение туда, пока он работает, — ему) |
 | `agent.step` | `{run_id, index, title, status: running\|ok\|error}` |
 | `agent.pointer` | `{run_id, kind: click\|double\|right\|type\|keys\|scroll\|focus, x, y, label, rect?: [l,t,r,b], ts}` — куда агент жмёт и что вводит, в физических точках экрана (оверлей рисует «курсор агента»; основной монитор: точка оверлея = физическая / масштаб − начало рабочей области) |
 | `mcp.status` | `{server_id, status, error?, tools_count}` |
@@ -397,10 +404,20 @@ Telegram через MCP по настоящим именам инструмен�
 окно сдвинули — пересчёт), `type_text {text, field?}` (туда, где фокус), `scroll {direction, amount, x?, y?}`,
 `press_keys`, `launch_app`, `open_url` (`https:`, `tg:`, `ms-settings:`, `spotify:`, `mailto:`, `whatsapp:`),
 `run_command {text, id?}`,
-`wait`, `finish {status: done|partial|failed, summary, attention?}` и инструменты подключённых серверов MCP
-(имя `mcp__…`, ответы помечены как данные). Видит окно впереди (никогда не окно Jarvis): элементы UI Automation и,
-если модель понимает картинки (`settings.ai.vision`: `auto` — по провайдеру и модели, `on`, `off`) и элементов мало,
-картинку только этого окна с метками `e…` и сеткой через 100 точек (`jarvis/ai/vision.py`). Перед каждым вводом —
+`wait`, `ask_user {question}`, `finish {status: done|partial|failed, summary, attention?}` и инструменты подключённых
+серверов MCP (имя `mcp__…`, ответы помечены как данные). Видит окно впереди (никогда не окно Jarvis): элементы
+UI Automation и, если модель понимает картинки (`settings.ai.vision`: `auto` — по провайдеру и модели, `on`,
+`off`), после каждого действия — картинку всего экрана (монитор окна впереди: `platform.monitor_rect`; окно
+обведено, его элементы с метками `e…`, сетка через 100 точек; `jarvis/ai/vision.py` `render_screen`); `screenshot` —
+крупно одно окно (и когда экран не снять). Первый `finish` со `status: done` после действий, которые что-то меняют,
+не принимается сразу: модель получает свежий снимок и «Проверка перед итогом» — сверить с задачей и снова вызвать
+`finish` (или доделать); так во всех трёх циклах агента (ключ API, Codex, программы-провайдеры —
+`Agent.check_finish`). Реплика человека посреди работы (`Agent.interject`: фраза Jarvis, сообщение в чат агента)
+приходит модели в ответе на ближайшее действие («Пользователь перебил: «…»», до снимка — не вырезается вместе
+со старыми снимками) или вместо итога, если пришла перед `finish`. `ask_user` — вопрос сообщением в чат (и вслух,
+если задачу дали голосом: ответ слушается сразу, без «Джарвис», 20 с), ответ — голосом, сообщением в этот чат или
+любой фразой Jarvis; нет ответа за 2 минуты — «Пользователь не ответил», модель решает сама или заканчивает
+`partial`. Перед каждым вводом —
 окно той же программы, что при последнем снимке (впереди окно Jarvis — фокус окну задачи; другая программа —
 действие не выполняется); мышь не жмёт, если точку закрывает чужое окно; курсор человека возвращается на место.
 Подсказки по программам и сайтам (≈30: мессенджеры, браузеры и YouTube, карты, магазины, почта, Office, Zoom,

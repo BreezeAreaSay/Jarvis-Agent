@@ -88,6 +88,8 @@ AGENT_ACTIONS: list[dict[str, Any]] = [
     {"name": "run_command", "title": "Команды Jarvis", "risk": "act",
      "description": "Выполняет команду Jarvis, как голосом"},
     {"name": "wait", "title": "Подождать", "risk": "read", "description": "Ждёт, пока окно догрузится"},
+    {"name": "ask_user", "title": "Спрашивать вас", "risk": "read",
+     "description": "Когда неясно, что именно или кому, задаёт короткий вопрос и ждёт ответа"},
     {"name": "finish", "title": "Отчёт", "risk": "read",
      "description": "Заканчивает задачу и пишет, что сделано"},
 ]  # fmt: skip

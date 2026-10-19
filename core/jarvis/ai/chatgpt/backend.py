@@ -1431,24 +1431,7 @@ class ChatGpt:
             async with one_at_a_time:
                 return await act(params)
 
-        async def act(params: dict[str, Any]) -> dict[str, Any]:
-            call = self._call_of(params)
-            if call.name == "finish":
-                try:
-                    finish_args = call.parse_arguments()
-                except ValueError:
-                    finish_args = {}
-                finish["summary"] = agent.finish_summary(run, finish_args)
-                return {"contentItems": [{"type": "inputText", "text": "ok"}], "success": True}
-            if finish["summary"] is not None:
-                return tool_failure("Пропущено: работа уже завершена")
-            if run.count >= limit:
-                finish["limit"] = True
-                current = run_ref["run"]
-                if current is not None:
-                    _background(current.interrupt, "interrupt")
-                return tool_failure(f"Лимит шагов ({limit}) исчерпан")
-            content, extras = await agent._act(run, call)
+        def result(content: str, extras: list[dict[str, Any]]) -> dict[str, Any]:
             items: list[dict[str, Any]] = [{"type": "inputText", "text": content}]
             for extra in extras:
                 parts = extra.get("content") if isinstance(extra.get("content"), list) else []
@@ -1460,6 +1443,28 @@ class ChatGpt:
                         if isinstance(url, str):
                             items.append({"type": "inputImage", "imageUrl": url})
             return {"contentItems": items, "success": not content.startswith("Ошибка")}
+
+        async def act(params: dict[str, Any]) -> dict[str, Any]:
+            call = self._call_of(params)
+            if call.name == "finish":
+                try:
+                    finish_args = call.parse_arguments()
+                except ValueError:
+                    finish_args = {}
+                check = await agent.check_finish(run, finish_args)
+                if check is not None:  # реплика пользователя или проверка по снимку — работа продолжается
+                    return result(*check)
+                finish["summary"] = agent.finish_summary(run, finish_args)
+                return {"contentItems": [{"type": "inputText", "text": "ok"}], "success": True}
+            if finish["summary"] is not None:
+                return tool_failure("Пропущено: работа уже завершена")
+            if run.count >= limit:
+                finish["limit"] = True
+                current = run_ref["run"]
+                if current is not None:
+                    _background(current.interrupt, "interrupt")
+                return tool_failure(f"Лимит шагов ({limit}) исчерпан")
+            return result(*await agent._act(run, call))
 
         active = ActiveTurn(handler)
         self._active[thread_id] = active

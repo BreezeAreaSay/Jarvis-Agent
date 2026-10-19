@@ -10,7 +10,15 @@ if TYPE_CHECKING:
 
 
 class TtsEngineError(RuntimeError):
-    """Движок не смог озвучить (нет ключа, сети, голоса); текст — для человека."""
+    """Движок не смог озвучить (нет ключа, сети, голоса); текст — для человека.
+
+    cooldown_s — сколько не звать движок после такой ошибки (кончились кредиты — до их обновления, неверный
+    ключ — пока человек не поправит); None — обычная пауза синтеза (tts.FAIL_COOLDOWN_S).
+    """
+
+    def __init__(self, message: str = "", *, cooldown_s: float | None = None) -> None:
+        super().__init__(message)
+        self.cooldown_s = cooldown_s
 
 
 @dataclass

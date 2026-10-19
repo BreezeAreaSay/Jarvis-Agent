@@ -139,6 +139,15 @@ async def tts_voices(ctx: Ctx, engine: str | None = None) -> dict[str, Any]:
     return {"items": await tts.voices(engine or None)}
 
 
+@router.get("/api/tts/account")
+async def tts_account(ctx: Ctx, engine: str | None = None) -> dict[str, Any]:
+    """Счёт облачного движка: остаток кредитов ElevenLabs и модели; без счёта — {supported: false}."""
+    tts = _tts(ctx)
+    if tts is None:
+        return {"supported": False}
+    return await tts.account(engine or None)
+
+
 class SayIn(BaseModel):
     text: str
 

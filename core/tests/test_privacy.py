@@ -35,6 +35,7 @@ NOW = time.time()
         ("пин-код 1234", "пин-код •••"),
         ('{"password": "s3cr3tpass", "user": "anna"}', '{"password": "•••", "user": "anna"}'),
         ("ключ sk-proj-abcdefghijklmnopqrstuvwx123", "ключ sk-proj-•••"),
+        ("ElevenLabs sk_0123456789abcdef0123456789abcdef0123456789abcdef", "ElevenLabs sk_•••"),
         ("Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456", "Authorization: Bearer •••"),
         ("token=ghp_abcdefghijklmnopqrstuvwxyz0123456789", "token=ghp_•••"),
         ("TELEGRAM_SESSION_STRING=1BVtsOKkBu3v8Xyz-abcdefg", "TELEGRAM_SESSION_STRING=•••"),

@@ -514,7 +514,9 @@ async def _run_agent(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
     task = _str(args, "task")
     if not task:
         return ToolOutput.fail("не описана задача")
-    run_id = await env.ctx.agent.run(task, env.source, chat_id=env.chat_id or None)
+    run_id = await env.ctx.agent.run(
+        task, env.source, chat_id=env.chat_id or None, request=env.user_text or None
+    )
     return ToolOutput(
         f"Агент запущен (id {run_id}) и работает сам; ход виден на экране, итог он напишет в этот чат. "
         "Скажи пользователю, что агент взялся за задачу.",

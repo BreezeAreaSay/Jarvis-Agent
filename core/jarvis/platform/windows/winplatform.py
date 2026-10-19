@@ -689,6 +689,12 @@ class WindowsPlatform:
             return
         raise PlatformError(f"Неизвестное действие питания: {action}")
 
+    @_guard("Не удалось снять экран")
+    def screen_pixels(self, rect: tuple[int, int, int, int] | None = None) -> tuple[bytes, int, int]:
+        """BGRA экрана или прямоугольника — без PNG (агент смотрит на экран после каждого действия)."""
+        bgra, width, height, _shot = screen.grab_pixels(rect)
+        return bgra, width, height
+
     @_guard("Не удалось сделать снимок")
     def screenshot(self, window: int | None = None) -> bytes:
         if window is None:

@@ -59,11 +59,15 @@ from jarvis.ai.policy import (
     tool_risk,
 )
 from jarvis.ai.tools import SHELL_RE, Tool, launch_app, mcp_tool, run_jarvis_command, untrusted
-from jarvis.ai.uia import SNAPSHOT_LIMIT, UiBackend, UiSnapshot, create_ui, format_snapshot
+from jarvis.ai.uia import SNAPSHOT_LIMIT, UiBackend, UiElement, UiSnapshot, create_ui, format_snapshot
 from jarvis.ai.web import site_name
+from jarvis.commands.validate import MAX_ACTIONS as MAX_RECIPE
 from jarvis.confirm import parse_yes_no
 from jarvis.db import new_id
 from jarvis.platform.base import PlatformError, WindowInfo
+from jarvis.redact import redact
+from jarvis.scenarios.model import MAX_NAME as MAX_SCENARIO_NAME
+from jarvis.scenarios.model import MAX_PHRASE as MAX_SCENARIO_PHRASE
 from jarvis.service_base import BaseService
 from jarvis.services import Source, UserFacingError
 
@@ -79,6 +83,7 @@ POOR_ELEMENTS = 6  # меньше интерактивных элементов 
 OPAQUE_EXES = frozenset({"telegram.exe", "ayugram.exe", "kotatogram.exe", "64gram.exe"})
 URL_SCHEMES = ("http://", "https://", *APP_SCHEMES)
 MAX_MCP_RESULT = 8000
+RECENT_RECIPE_S = 15 * 60.0  # «запомни это» — про дело агента, если оно было не раньше 15 минут назад
 ASK_TIMEOUT_S = APPROVAL_TIMEOUT  # ask_user: ответ (голосом, в чате, фразой) ждём, как решение о разрешении
 MAX_MCP_TOOLS = 64  # больше инструментов провайдеры не принимают (вместе с действиями агента)
 
@@ -175,7 +180,14 @@ VERIFY_PROMPT = """Проверка перед итогом. Задача: «{ta
 со status=done и в summary назови, что это подтверждает. Чего-то не видно или не сделано — продолжай работу \
 или finish со status=partial."""
 
+CONTINUE_PROMPT = """Продолжение той же задачи: «{task}». Уже сделано: {done}. Ты закончил без finish, \
+а пользователь тем временем перебил тебя:
+{notes}
+Учти это и продолжай работу; в конце вызови finish."""
+
 STEP_PARAM = {"type": "integer", "description": "Номер шага плана, который ты сейчас выполняешь"}
+# что снимать агенту (монитор окна впереди или весь экран: left, top, right, bottom) и виртуальный экран
+ScreenArea = tuple[vision.Rect, tuple[int, int, int, int]]
 
 
 class AgentLimit(UserFacingError):
@@ -233,6 +245,12 @@ class AgentRun:
     question: "asyncio.Future[str] | None" = None  # ask_user ждёт ответа
     changed: bool = False  # было действие, которое что-то меняет на экране, — итог «done» проверить по снимку
     verified: bool = False  # проверка перед итогом уже была
+    closing: bool = False  # итог (finish) принят: реплика человека — уже новый запрос, а не агенту
+    request: str = ""  # слова человека: фраза сценария, если прогон запомнят
+    recipe: list[dict[str, str]] = field(default_factory=list)  # удачные действия — шагами сценария
+    replayable: bool = True  # всё, что меняло экран, сценарий повторит (нет MCP, безымянных кнопок, секретов)
+    pointer: tuple[int, int] | None = None  # куда (экран) агент последний раз нажал мышью или крутил колесо
+    windows: dict[int, str] | None = None  # окна на экране при прошлом снимке: hwnd → «заголовок» (exe)
     usage: Usage = field(default_factory=Usage)
     started: float = field(default_factory=time.time)
     deadline: float = field(default_factory=lambda: time.monotonic() + RUN_DEADLINE_S)
@@ -355,6 +373,7 @@ class Agent(BaseService):
         self.pointer_delay_s = 0.2  # курсор агента долетает до цели — потом действие (видно, что он делает)
         self._run: AgentRun | None = None
         self._runs: dict[str, AgentRun] = {}
+        self._last_recipe: tuple[str, str, float] | None = None  # (чат, итог, когда) — можно запомнить
         self._actions: dict[str, Action] = {a.name: a for a in self._make_actions()}
 
     # --- управление ------------------------------------------------------------------------------------
@@ -364,8 +383,10 @@ class Agent(BaseService):
 
     @property
     def busy(self) -> bool:
-        """Агент сейчас работает (реплику человека — ему, а не новым запросом)."""
-        return self._run is not None and not self._run.finished
+        """Агент сейчас работает (реплику человека — ему, а не новым запросом). Итог уже принят — нет:
+        реплика тогда — новый запрос, иначе она бы потерялась."""
+        run = self._run
+        return run is not None and not run.finished and not run.closing
 
     @property
     def waiting_answer(self) -> bool:
@@ -379,7 +400,7 @@ class Agent(BaseService):
         модель получит её с ответом на ближайшее действие (и до итога); "" — агент не работает."""
         run = self._run
         text = " ".join((text or "").split())
-        if run is None or run.finished or not text:
+        if run is None or run.finished or run.closing or not text:
             return ""
         log.info("агент: реплика пользователя посреди работы — %s", one_line(text, 80))
         if run.question is not None and not run.question.done():
@@ -471,9 +492,10 @@ class Agent(BaseService):
         turn_id: str | None = None,
         reply_id: str | None = None,
         speak: bool | None = None,
+        request: str | None = None,
     ) -> str:
         """Запустить агента; ход — события agent.*, итог — сообщение в чат (режим «Агент» или тот, откуда
-        позвали)."""
+        позвали). request — слова человека, если задачу для агента переписали (фраза будущего сценария)."""
         task = " ".join((task or "").split())
         if not task:
             raise UserFacingError("Опишите задачу для агента")
@@ -496,6 +518,7 @@ class Agent(BaseService):
             turn_id=turn_id or "",
             reply_id=reply_id or new_id(),
             speak=(source == "voice") if speak is None else speak,
+            request=" ".join((request or task).split()),
         )
         run.done = asyncio.get_running_loop().create_future()
         self._run = run
@@ -645,6 +668,11 @@ class Agent(BaseService):
             meta["error"] = error
         if status == "stopped":
             meta["stopped"] = True
+        recipe = self._recipe(run, status)
+        if recipe is not None:  # «Запомнить как сценарий»: кнопка у итога, голосом — «запомни это»
+            meta["recipe"] = recipe
+        # «запомни это» — только про последнее дело: его не повторить — прежнее тоже не запоминаем
+        self._last_recipe = (run.chat_id, run.reply_id, time.monotonic()) if recipe is not None else None
         try:
             row = self.chats.add_message(
                 run.chat_id, "assistant", summary, meta=meta, message_id=run.reply_id
@@ -822,7 +850,13 @@ class Agent(BaseService):
         first, extras = await self._first_message(run, windows)
         if chatgpt is not None:
             # у Codex и программ человека первое сообщение — только текст: картинку модель попросит сама
-            return str(await chatgpt.run_agent(self, run, system=system, first=first, specs=self._specs(run)))
+            specs = self._specs(run)
+            summary = str(await chatgpt.run_agent(self, run, system=system, first=first, specs=specs))
+            while run.notes and not run.closing and run.count < limit and time.monotonic() < run.deadline:
+                # модель закончила без finish, а человек тем временем перебил — ещё заход с его репликой
+                again = await self._continuation(run)
+                summary = str(await chatgpt.run_agent(self, run, system=system, first=again, specs=specs))
+            return summary
         assert llm is not None
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system},
@@ -889,8 +923,126 @@ class Agent(BaseService):
                 return summary
             messages.extend(extras)
 
+    # --- удачный прогон → сценарий ---------------------------------------------------------------------
+    def _record(self, run: AgentRun, name: str, args: dict[str, Any], element: UiElement | None) -> None:
+        """Удачное действие — шагами сценария (вдруг прогон запомнят); не повторить сценарием — прогон
+        не запоминается."""
+        steps = self._recipe_steps(run, name, args, element)
+        if steps is None:
+            run.replayable = False
+        else:
+            run.recipe.extend(steps)
+
+    def _recipe_steps(
+        self, run: AgentRun, name: str, args: dict[str, Any], element: UiElement | None
+    ) -> list[dict[str, str]] | None:
+        """Действие агента → шаги сценария (Ui.Click «Отправить», Keys.Press ctrl+f…): [] — повторять нечего
+        (снимок, вопрос), None — сценарием не повторить (MCP, безымянная кнопка, пароль и другие секреты)."""
+        if name in ("ui_snapshot", "screenshot", "ask_user", "finish"):
+            return []
+        text = str(args.get("text") or "")
+        if text and redact(text) != text:
+            return None  # номер карты, пароль: в сценарий (он хранится на диске) не записываем
+        if name == "ui_click":
+            if element is None or not element.name or args.get("double"):
+                return None
+            return [_step("Ui.Click", element.name)]
+        if name == "ui_type":
+            if element is None or not element.name or element.password or "|" in element.name:
+                return None
+            return [_step("Ui.Type", f"{element.name} | {text}")]
+        if name == "type_text":
+            return [_step("Keys.Paste" if "\n" in text or len(text) > 300 else "Keys.Type", text)]
+        if name == "press_keys":
+            combo = normalize_combo(_arg(args, "combo"))
+            return [_step("Keys.Press", combo)] if combo else None
+        if name == "launch_app":
+            return [_step("Launch.App", _arg(args, "name"))]
+        if name == "open_url":
+            return [_step("Launch.Url", _arg(args, "url"))]
+        if name == "focus_window":
+            target = run.target
+            return [_step("App.Focus", target.exe or target.title)] if target is not None else None
+        if name == "run_command":
+            value = _arg(args, "id") or _arg(args, "text")
+            return [_step("Jarvis.Command", value)] if value else None
+        if name == "wait":
+            seconds = _num(args, "seconds") or 1.0
+            return [_step("Wait", f"{max(0.5, min(seconds, 15.0)):g}")]
+        if name in ("click_point", "scroll") and run.pointer is not None:
+            point = f"{run.pointer[0]} {run.pointer[1]}"
+            if name == "scroll":
+                amount = int(max(1, min(_num(args, "amount") or 5, 30)))
+                up = (_arg(args, "direction") or "down").casefold() == "up"
+                return [_step("Mouse.Move", point), _step("Mouse.Scroll", str(amount if up else -amount))]
+            button = _arg(args, "button") or "left"
+            if args.get("double"):
+                return [_step("Mouse.DoubleClick", point)]
+            if button in ("left", "right"):
+                return [_step("Mouse.ClickRight" if button == "right" else "Mouse.ClickLeft", point)]
+        return None  # инструменты MCP и всё, чего сценарий не умеет
+
+    @staticmethod
+    def _recipe(run: AgentRun, status: str) -> dict[str, Any] | None:
+        """Что запомнить сценарием: только удачный прогон, все действия которого сценарий повторит."""
+        actions = run.recipe
+        if status != "done" or run.outcome != "done" or not run.replayable or len(actions) > MAX_RECIPE:
+            return None
+        if not any(a["type"] != "Wait" for a in actions):
+            return None
+        return {"request": run.request or run.task, "actions": [dict(a) for a in actions]}
+
+    def recent_recipe(self, within_s: float = RECENT_RECIPE_S) -> bool:
+        """Агент только что (за within_s) удачно сделал дело, которое можно запомнить сценарием."""
+        last = self._last_recipe
+        return last is not None and time.monotonic() - last[2] <= within_s
+
+    def save_scenario(self, chat_id: str = "", message_id: str = "") -> dict[str, Any]:
+        """Удачный прогон → сценарий с теми же шагами и фразой человека: в следующий раз — сразу, без ИИ
+        (не сработал шаг — дело снова берёт агент). Без chat_id и message_id — последний прогон («запомни
+        это»)."""
+        if not (chat_id and message_id):
+            if self._last_recipe is None:
+                raise UserFacingError("Запоминать нечего: агент ещё не закончил ни одного дела")
+            chat_id, message_id, _ = self._last_recipe
+        row = self.chats.message(chat_id, message_id)
+        meta = dict(row["meta"]) if row is not None else {}
+        recipe = meta.get("recipe")
+        if not isinstance(recipe, dict) or not recipe.get("actions"):
+            raise UserFacingError("Этот прогон агента сценарием не повторить")
+        scenarios = self.ctx.scenarios
+        saved = scenarios.get(str(recipe.get("scenario_id") or ""))
+        if saved is not None:
+            return saved
+        request = " ".join(str(recipe.get("request") or "").split()).rstrip(" .!?")
+        base = (request[:1].upper() + request[1:]) or "Дело агента"
+        if len(base) > MAX_SCENARIO_NAME:
+            base = base[: MAX_SCENARIO_NAME - 1].rstrip() + "…"
+        name = scenarios.unique_name(base)
+        phrase = request.casefold()
+        triggers = [{"type": "phrase", "phrases": [phrase]}] if 2 < len(phrase) <= MAX_SCENARIO_PHRASE else []
+        item = scenarios.create(
+            {"name": name, "icon": "sparkles", "triggers": triggers, "actions": recipe["actions"]}
+        )
+        meta["recipe"] = {**recipe, "scenario_id": item["id"]}
+        updated = self.chats.set_meta(chat_id, message_id, meta)
+        if updated is not None:
+            self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(updated)})
+        log.info("агент: прогон сохранён сценарием «%s»", name)
+        return item
+
+    async def _continuation(self, run: AgentRun) -> str:
+        """Первое сообщение нового захода (Codex, программы человека): задача, что сделано, реплика
+        человека и свежий снимок."""
+        notes = self._take_notes(run)
+        done = ", ".join(a["title"] for a in run.actions if a.get("ok")) or "ничего"
+        text, _ = await self._look(run)
+        head = CONTINUE_PROMPT.format(task=one_line(run.task, 300), done=one_line(done, 600), notes=notes)
+        return f"{head}\n\n{text}"
+
     def finish_summary(self, run: AgentRun, args: dict[str, Any]) -> str:
         """Итог из finish: текст для чата и оценка (done / partial / failed); зовут и бэкенды Codex и CLI."""
+        run.closing = True
         status = _arg(args, "status").casefold()
         run.outcome = status if status in OUTCOMES else "done"
         summary = _arg(args, "summary")
@@ -930,8 +1082,9 @@ class Agent(BaseService):
         ):
             run.step = int(step)
         doing = action.doing(run, args)
-        # заголовок карточки — по снимку до действия: после клика id элементов указывают на другое
+        # заголовок карточки и элемент для сценария — по снимку до действия: после клика id — уже другое
         card_title = action.card(run, args) if action.card is not None else ""
+        element = run.snapshot.find(_arg(args, "id")) if run.snapshot is not None and "id" in args else None
         run.count += 1
         index = run.count
         self.ctx.bus.publish(
@@ -954,6 +1107,8 @@ class Agent(BaseService):
         status = "ok" if outcome.ok else "error"
         if outcome.ok and call.name in self._actions and AGENT_RISK.get(call.name, "act") != "read":
             run.changed = True
+        if outcome.ok:
+            self._record(run, call.name, args, element)
         self.ctx.bus.publish(
             "agent.step", {"run_id": run.id, "index": index, "title": doing, "status": status}
         )
@@ -962,16 +1117,17 @@ class Agent(BaseService):
             if outcome.detail:
                 card["detail"] = outcome.detail
             run.actions.append(card)
-        content = outcome.content
+        # реплика человека посреди работы (модель узнаёт сразу, с ответом на это действие) и план (составлялся
+        # параллельно) — до снимка окна: устаревшие снимки вырезаются (_prune), а они должны остаться
+        head: list[str] = []
         notes = self._take_notes(run)
-        if notes:  # человек перебил посреди работы — модель узнаёт сразу, с ответом на это действие; до
-            # снимка окна: устаревшие снимки из контекста вырезаются (_prune), а реплика должна остаться
-            content = f"{notes}\n\n{content}"
+        if notes:
+            head.append(notes)
         if run.plan and not run.plan_sent:
             run.plan_sent = True
             steps = "\n".join(f"{i}. {s}" for i, s in enumerate(run.plan, 1))
-            content += f"\n\nПлан работы (номер шага — параметр step в действиях):\n{steps}"
-        return content, outcome.extras
+            head.append(f"План работы (номер шага — параметр step в действиях):\n{steps}")
+        return "\n\n".join([*head, outcome.content]), outcome.extras
 
     # --- подтверждения ----------------------------------------------------------------------------------
     @property
@@ -1145,50 +1301,110 @@ class Agent(BaseService):
             hint = self._new_playbook(run, fg)
             if hint:
                 parts.append(hint)  # до снимка: устаревшие снимки скрываются, подсказка остаётся
+        changed = await self._windows_change(run)
+        if changed:
+            parts.append(changed)
+        # картинка экрана снимается (пул ввода-вывода), пока поток платформы читает элементы окна
+        area = await self._screen_area(fg) if run.vision and not force_shot else None
+        grab = asyncio.ensure_future(self._grab(area)) if area is not None else None
         snapshot: UiSnapshot | None = None
         try:
             snapshot = await self.ctx.run_platform(self.ui.snapshot, SNAPSHOT_LIMIT, fg.hwnd if fg else None)
         except PlatformError as e:
             parts.append(f"{SNAPSHOT_HEADER}\n(Элементы окна недоступны: {e}.)")
+        except BaseException:
+            if grab is not None:
+                grab.cancel()
+            raise
         else:
             run.snapshot = snapshot
             parts.append(f"{SNAPSHOT_HEADER}\n{untrusted('Снимок окна', format_snapshot(snapshot))}")
         extras: list[dict[str, Any]] = []
         if run.vision:
             # весь экран — после каждого действия; крупно окно — по screenshot или когда экран не снять
-            shot = None if force_shot else await self._screen(run, fg, snapshot)
+            shot = await self._screen(run, fg, snapshot, grab, area) if grab is not None and area else None
             if shot is None and fg is not None and (force_shot or self._poor(snapshot, fg)):
                 shot = await self._shot(run, fg, snapshot)
             if shot is not None:
                 extras.append(vision.message(shot))
         return "\n\n".join(parts), extras
 
-    async def _screen(
-        self, run: AgentRun, fg: WindowInfo | None, snapshot: UiSnapshot | None
-    ) -> vision.Shot | None:
-        """Снимок всего экрана (монитора с окном впереди) с обведённым окном и метками его элементов; окна
-        впереди нет (рабочий стол) — весь экран."""
-        platform = self.ctx.platform
+    async def _windows_change(self, run: AgentRun) -> str:
+        """Экран текстом (и для моделей без картинок): какие окна появились и закрылись с прошлого снимка —
+        новое окно программы, закрытый мессенджер. Первый снимок только запоминает окна."""
         try:
-            png = await self.ctx.run_platform(platform.screenshot, None)
-            left, top, width, height = await self.ctx.run_platform(platform.virtual_screen)
+            windows = await self.ctx.run_platform(self.ctx.platform.list_windows)
+        except Exception:
+            return ""
+        current = {w.hwnd: f"«{one_line(w.title, 60)}» ({w.exe})" for w in windows if w.title}
+        seen, run.windows = run.windows, current
+        if seen is None:
+            return ""
+        opened = [title for hwnd, title in current.items() if hwnd not in seen][:5]
+        closed = [title for hwnd, title in seen.items() if hwnd not in current][:5]
+        lines = ([f"появилось: {', '.join(opened)}"] if opened else []) + (
+            [f"закрылось: {', '.join(closed)}"] if closed else []
+        )
+        return untrusted("Окна на экране с прошлого снимка", "\n".join(lines)) if lines else ""
+
+    def _area_sync(self, hwnd: int | None) -> ScreenArea:
+        """Что снимать (монитор окна впереди или весь экран) и виртуальный экран — одним вызовом платформы."""
+        platform = self.ctx.platform
+        left, top, width, height = (int(v) for v in platform.virtual_screen())
+        virtual = (left, top, width, height)
+        monitor: vision.Rect | None = None
+        if hwnd:
+            with contextlib.suppress(PlatformError, AttributeError, TypeError, ValueError):
+                found = platform.monitor_rect(hwnd)
+                monitor = (int(found[0]), int(found[1]), int(found[2]), int(found[3])) if found else None
+        return vision.screen_part(virtual, monitor), virtual
+
+    async def _screen_area(self, fg: WindowInfo | None) -> ScreenArea | None:
+        try:
+            return await self.ctx.run_platform(self._area_sync, fg.hwnd if fg is not None else None)
+        except (PlatformError, AttributeError, TypeError, ValueError) as e:
+            log.info("экран для агента не определён: %s", e)
+            return None
+
+    async def _grab(self, area: ScreenArea) -> tuple[str, Any]:
+        """Пиксели только нужного монитора (без PNG) — в пуле ввода-вывода; платформа без них — PNG экрана."""
+        platform = self.ctx.platform
+        pixels = getattr(platform, "screen_pixels", None)
+        if callable(pixels):
+            return "pixels", await self.ctx.run_io(pixels, area[0])
+        return "png", await self.ctx.run_platform(platform.screenshot, None)
+
+    async def _screen(
+        self,
+        run: AgentRun,
+        fg: WindowInfo | None,
+        snapshot: UiSnapshot | None,
+        grab: "asyncio.Future[tuple[str, Any]]",
+        area: ScreenArea,
+    ) -> vision.Shot | None:
+        """Снимок экрана (монитора с окном впереди) с обведённым окном и метками его элементов; окна впереди
+        нет (рабочий стол) — весь экран."""
+        try:
+            kind, data = await grab
         except (PlatformError, AttributeError, TypeError, ValueError) as e:
             log.info("снимок экрана для агента не получился: %s", e)
             return None
-        monitor: vision.Rect | None = None
-        if fg is not None:
-            with contextlib.suppress(PlatformError, AttributeError, TypeError, ValueError):
-                found = await self.ctx.run_platform(platform.monitor_rect, fg.hwnd)
-                monitor = (int(found[0]), int(found[1]), int(found[2]), int(found[3])) if found else None
+        part, virtual = area
         elements = snapshot.elements if snapshot is not None and fg is not None else []
-        screen = (int(left), int(top), int(width), int(height))
         focus, title = (fg.rect, fg.title) if fg is not None else (None, "")
-        try:
-            shot = await self.ctx.run_io(
-                lambda: vision.render_screen(
-                    png, screen, monitor=monitor, focus=focus, elements=elements, title=title
+
+        def render() -> vision.Shot:
+            if kind == "pixels":
+                bgra, width, height = data
+                return vision.render_pixels(
+                    bgra, (int(width), int(height)), part, focus=focus, elements=elements, title=title
                 )
+            return vision.render_screen(
+                data, virtual, monitor=part, focus=focus, elements=elements, title=title
             )
+
+        try:
+            shot = await self.ctx.run_io(render)
         except Exception:
             log.exception("снимок экрана не подготовлен")
             return None
@@ -1379,6 +1595,7 @@ class Agent(BaseService):
         what = _arg(args, "what")
         fg = await self._target(run)
         sx, sy = self._point_of(run, fg, x, y)
+        run.pointer = (sx, sy)
         owner_pid, owner_title = await self.ctx.run_platform(self.ui.owner_at, sx, sy)
         if owner_pid and fg.pid and owner_pid != fg.pid:
             raise WindowChanged(
@@ -1433,6 +1650,7 @@ class Agent(BaseService):
             sx, sy = self._point_of(run, fg, x, y)
         else:
             sx, sy = _center(fg.rect)
+        run.pointer = (sx, sy)
         await self._point(run, "scroll", sx, sy, "вверх" if direction == "up" else "вниз")
         saved: tuple[int, int] | None = None
         with contextlib.suppress(PlatformError):
@@ -1759,6 +1977,11 @@ class Agent(BaseService):
         finally:
             for task in waits:
                 task.cancel()
+
+
+def _step(kind: str, value: str) -> dict[str, str]:
+    """Шаг сценария — как действие команды: {type, value}."""
+    return {"type": kind, "value": value}
 
 
 def _prune(messages: list[dict[str, Any]]) -> None:

@@ -88,6 +88,33 @@ class UiBackend(Protocol):
     def owner_at(self, x: int, y: int) -> tuple[int, str]: ...  # (pid, заголовок окна) под точкой экрана
 
 
+def _plain(name: str) -> str:
+    return " ".join(name.casefold().replace("ё", "е").strip(" «»\"'").split())
+
+
+def find_by_name(elements: list[UiElement], name: str) -> UiElement | None:
+    """Элемент по названию (шаг сценария «Нажать кнопку в окне»): точное совпадение без учёта регистра,
+    потом название, которое начинается с него или содержит его (самое короткое), потом похожее. Доступные —
+    первыми."""
+    want = _plain(name)
+    if not want:
+        return None
+    named = sorted((e for e in elements if e.name), key=lambda e: (not e.enabled, len(e.name)))
+    for test in (
+        lambda n: n == want,
+        lambda n: n.startswith(want),
+        lambda n: want in n,
+    ):
+        found = next((e for e in named if test(_plain(e.name))), None)
+        if found is not None:
+            return found
+    from rapidfuzz import fuzz
+
+    scored = [(fuzz.ratio(want, _plain(e.name)), e) for e in named]
+    best = max(scored, key=lambda item: item[0], default=None)
+    return best[1] if best is not None and best[0] >= 85 else None
+
+
 def format_snapshot(snapshot: UiSnapshot) -> str:
     """Снимок окна для модели: строка на элемент — «e3 Button «Написать» [x,y,w×h] фокус»."""
     head = f"Активное окно: «{snapshot.window}»" + (f" ({snapshot.app})" if snapshot.app else "")

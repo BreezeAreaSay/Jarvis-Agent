@@ -68,7 +68,10 @@ async def test_window_picture_and_click_point(
     caption = images[0]["content"][0]["text"]
     assert caption.startswith("Снимок экрана") and "обведено жёлтым" in caption
     assert "Сетка — через каждые 100 точек" in caption
-    assert ("screenshot", (None,)) in ctx.platform.calls  # type: ignore[attr-defined]
+    # снимается только монитор окна, пикселями — без PNG (быстрее)
+    calls_made = ctx.platform.calls  # type: ignore[attr-defined]
+    assert ("screen_pixels", ((0, 0, 1920, 1080),)) in calls_made
+    assert not any(name == "screenshot" for name, _ in calls_made)
     # точка картинки 320×180 → экран 1920×1080 (внутри окна Telegram); курсор человека вернулся
     platform_calls = ctx.platform.calls  # type: ignore[attr-defined]
     click = platform_calls.index(("mouse_click", (600, 300, "left", False)))
@@ -78,6 +81,33 @@ async def test_window_picture_and_click_point(
     assert pointer[0]["label"] == "поле поиска"
     # подсказка по Telegram — в первом сообщении
     assert "Как работать в «Telegram»" in first[1]["content"]
+
+
+async def test_screen_of_the_second_monitor_and_png_fallback(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx.settings.patch({"ai": {"vision": "on"}})
+    _telegram(ui)
+    platform: Any = ctx.platform
+    # слева 1920×1080, справа 2560×1440 — Telegram на правом: снимается только он
+    monkeypatch.setattr(platform, "virtual_screen", lambda: (0, 0, 4480, 1440))
+    monkeypatch.setattr(platform, "monitor_rect", lambda hwnd: (1920, 0, 4480, 1440))
+    llm.add(
+        PLAN,
+        calls(("click_point", {"x": 100, "y": 50, "what": "поле поиска"})),
+        calls(("finish", {"status": "partial", "summary": "Нажал поиск."})),
+    )
+    await _run(ctx, "Найди чат «Мама» в Telegram")
+    assert ("screen_pixels", ((1920, 0, 4480, 1440),)) in platform.calls
+    # картинка 426×240 (правый монитор) → точка экрана на правом мониторе
+    assert ("mouse_click", (2521, 300, "left", False)) in platform.calls
+
+    # платформа без пикселей экрана — снимок PNG всех мониторов, обрезанный до нужного
+    monkeypatch.setattr(platform, "screen_pixels", None)
+    platform.calls.clear()
+    llm.add(PLAN, calls(("finish", {"status": "partial", "summary": "Посмотрел."})))
+    await _run(ctx, "Посмотри Telegram")
+    assert ("screenshot", (None,)) in platform.calls
 
 
 async def test_input_refused_when_another_program_comes_forward(

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from jarvis import paths
+from jarvis.ai.uia import find_by_name
 from jarvis.commands import keys as keyops
 from jarvis.commands import numbers
 from jarvis.commands.matcher import display_title
@@ -73,6 +74,11 @@ LAUNCH_WAIT_S = 15.0
 LAUNCH_POLL_S = 0.25
 LAUNCH_SETTLE_S = 1.5
 FOCUS_SETTLE_S = 0.3
+# Ui.Click / Ui.Type: элемент окна впереди ждём, пока окно догружается; после нажатия — мгновение окну
+UI_WAIT_S = 8.0
+UI_POLL_S = 0.3
+UI_SETTLE_S = 0.4
+UI_LIMIT = 300
 MUSIC_TASK = (
     "Включи музыку{where}: открой окно программы и нажми кнопку воспроизведения. Если трек не выбран — "
     "запусти подборку на главной (например, «Моя волна» в Яндекс Музыке) и проверь, что музыка заиграла."
@@ -295,6 +301,8 @@ class Executor:
             "Jarvis.Timer": self._timer,
             "Jarvis.Reminder": self._reminder,
             "Jarvis.Briefing": self._briefing,
+            "Ui.Click": self._ui_click,
+            "Ui.Type": self._ui_type,
         }
 
     # --- вход ---------------------------------------------------------------------------------------
@@ -553,6 +561,44 @@ class Executor:
                 raise UserFacingError(f"{name} не запущен") from None
             raise
         await asyncio.sleep(0.15)  # окну нужно мгновение, чтобы выйти на передний план
+
+    # --- элементы окна (шаги, записанные агентом) ---------------------------------------------------
+    async def _ui_click(self, value: str, st: RunState) -> None:
+        ui, element = await self._ui_element(value, st)
+        await self._platform(ui.click, element.id)
+        await asyncio.sleep(UI_SETTLE_S)
+
+    async def _ui_type(self, value: str, st: RunState) -> None:
+        name, sep, text = value.partition("|")
+        if not sep or not name.strip():
+            raise UserFacingError("«Ввести текст в поле»: нужно «поле | текст», например «Кому | Иван»")
+        ui, element = await self._ui_element(name.strip(), st)
+        await self._platform(ui.set_text, element.id, text.strip())
+        await asyncio.sleep(UI_SETTLE_S)
+
+    async def _ui_element(self, name: str, st: RunState) -> tuple[Any, Any]:
+        """Элемент окна впереди по названию; пока его нет — ждём (окно догружается). Так и не появился —
+        NeedsAgent: дело берёт агент, задача — сам сценарий (его название — это и есть просьба человека)."""
+        if not name:
+            raise UserFacingError("Не указано, какой элемент окна нужен")
+        task = f"{st.entry.command.name}. (Готовый сценарий не справился: {{why}}.)"
+        ui = getattr(getattr(self.ctx, "agent", None), "ui", None)
+        if ui is None:
+            raise NeedsAgent("Элементы окон недоступны", task.format(why="элементы окон недоступны"))
+        deadline = time.monotonic() + UI_WAIT_S
+        while True:
+            try:
+                fg = await self._platform(self.ctx.platform.foreground_window)
+                snapshot = await self._platform(ui.snapshot, UI_LIMIT, fg.hwnd if fg is not None else None)
+            except PlatformError as e:
+                raise NeedsAgent(f"Окно не читается: {e}", task.format(why=str(e))) from e
+            element = find_by_name(snapshot.elements, name)
+            if element is not None:
+                return ui, element
+            if time.monotonic() >= deadline:
+                why = f"в окне «{snapshot.window}» нет «{name}»"
+                raise NeedsAgent(why[:1].upper() + why[1:], task.format(why=why))
+            await asyncio.sleep(UI_POLL_S)
 
     # --- клавиатура и мышь --------------------------------------------------------------------------
     async def _keys_press(self, value: str, st: RunState) -> None:

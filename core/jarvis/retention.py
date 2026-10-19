@@ -41,6 +41,7 @@ LOG_KEEP = 1_000_000
 ACTIVE_LOGS = ("core.log", "crash.log")  # открыты ядром всё время: только обрезаем, не удаляем
 CLIPBOARD_KEY = "clipboard:items"
 FILE_INDEX = "file_search_index.json"
+VOICE_CACHE = "tts"  # cache/tts — звук частых ответов голосом (jarvis.voice.tts)
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,7 @@ CATEGORIES: tuple[Category, ...] = (
     Category("summaries", "Записи созвонов", "Звук для «Конспекта видео и созвонов»"),
     Category("screenshots", "Снимки экрана Jarvis", "Папка данных Jarvis; снимки в «Изображениях» — ваши"),
     Category("file_index", "Индекс «Поиска по ПК»", "Список путей к файлам — соберётся заново сам"),
+    Category("voice_cache", "Готовые ответы голосом", "Звук частых ответов («Готово», «Открываю…»)"),
     Category("usage", "Учёт расходов ИИ", "Сколько токенов и денег ушло на ИИ"),
     Category("logs", "Журналы ядра", "Что делал Jarvis и какие были ошибки — для поиска причин сбоев"),
     Category("secrets", "Ключи API и токены", "Ключи ИИ, Telegram, умного дома, пароль пульта (зашифрованы)"),
@@ -227,6 +229,9 @@ class Retention(BaseService):
         if cid == "file_index":
             files = _files(paths.cache_dir(), FILE_INDEX)
             return len(files), _size(files)
+        if cid == "voice_cache":
+            files = _files(paths.cache_dir() / VOICE_CACHE, "*.pcm")
+            return len(files), _size(files)
         if cid == "usage":
             return self._count("SELECT COUNT(*) FROM usage"), 0
         if cid == "logs":
@@ -324,6 +329,11 @@ class Retention(BaseService):
             return sum(_unlink(f) for f in _files(self.screenshots_dir()))
         if cid == "file_index":
             return sum(_unlink(f) for f in _files(paths.cache_dir(), FILE_INDEX))
+        if cid == "voice_cache":
+            cache = getattr(getattr(self.ctx, "tts", None), "cache", None)
+            if cache is not None:
+                cache.clear()
+            return sum(_unlink(f) for f in _files(paths.cache_dir() / VOICE_CACHE, "*.pcm"))
         if cid == "usage":
             return db.execute("DELETE FROM usage").rowcount
         if cid == "logs":

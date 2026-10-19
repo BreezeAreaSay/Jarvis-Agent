@@ -206,6 +206,9 @@ class Ai(BaseService):
         self.chats = ChatStore(ctx)
         self.tools = ToolRegistry(ctx)
         self.chatgpt = ChatGpt(self)  # провайдер «ChatGPT (подписка)» через Codex
+        add_stock = getattr(getattr(ctx, "tts", None), "add_stock", None)
+        if callable(add_stock):  # «Сейчас сделаю» — частый ответ: звук готов заранее
+            add_stock(lambda: [self._ack_text()])
         self.mcp_server = JarvisMcpServer(ctx)  # инструменты Jarvis для программ-провайдеров (/api/ai/mcp)
         # «Claude (подписка)», «Gemini CLI», «Qwen Code» через программы человека
         self.cli = CliProviders(self)
@@ -746,6 +749,7 @@ class Ai(BaseService):
                 turn_id=turn.user_id,
                 reply_id=turn.reply_id,
                 speak=False,
+                request=turn.text,
             )
         except UserFacingError as e:
             return self._finish(turn, error=str(e))
@@ -767,14 +771,16 @@ class Ai(BaseService):
             error=result.error,
         )
 
+    def _ack_text(self) -> str:
+        address = self.ctx.settings.value.profile.address.strip()
+        return f"Сейчас сделаю, {address}." if address else "Сейчас сделаю."
+
     async def _agent_ack(self) -> None:
         """Агент работает секунды — с голоса сразу короткий ответ, чтобы не было тишины; итог — в конце."""
-        settings = self.ctx.settings.value
-        if settings.voice.silent_mode:
+        if self.ctx.settings.value.voice.silent_mode:
             return
-        address = settings.profile.address.strip()
         try:
-            await self.ctx.tts.say(f"Сейчас сделаю, {address}." if address else "Сейчас сделаю.")
+            await self.ctx.tts.say(self._ack_text())
         except Exception:
             log.debug("ответ «сейчас сделаю» не прозвучал", exc_info=True)
 

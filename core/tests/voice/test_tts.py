@@ -9,8 +9,10 @@ from typing import Any
 import numpy as np
 import pytest
 
+from jarvis import paths
 from jarvis.context import AppContext
 from jarvis.services import UserFacingError
+from jarvis.voice import tts as tts_module
 from jarvis.voice.engines import TtsEngineError
 from jarvis.voice.player import Chunk, Player
 from jarvis.voice.tts import Tts
@@ -190,6 +192,40 @@ async def test_phrase_cache_saves_cloud_credits(rig: Rig, ctx: AppContext) -> No
     await tts.say("Готово, сэр.", wait=True)
     await tts.say("Готово, сэр.", wait=True)
     assert len(engines["piper"].calls) == 2  # локальный голос — без памяти
+
+
+async def test_stock_phrases_are_ready_in_advance_and_kept_on_disk(
+    rig: Rig, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tts, _sink, engines = rig
+    edge = engines["edge"]
+    edge.cacheable = True  # type: ignore[attr-defined]
+    tts.warm_delay_s = 0.0
+    ctx.settings.patch({"tts": {"engine": "edge"}})
+    tts.add_stock(lambda: ["Готово, сэр.", "Сейчас сделаю."])
+    await wait_for(lambda: len(edge.calls) == 2)  # частые ответы подготовлены заранее
+    await tts.say("Готово, сэр.", wait=True)
+    assert len(edge.calls) == 2  # прозвучало сразу, без сети
+    disk = paths.cache_dir() / "tts"
+    assert len(list(disk.glob("*.pcm"))) == 2
+
+    tts.cache.clear()  # как после перезапуска: память пуста, звук — с диска
+    await tts.say("Сейчас сделаю.", wait=True)
+    assert len(edge.calls) == 2
+    await tts.say("Напоминаю, сэр: к врачу в пять.", wait=True)  # личное — только в памяти
+    assert len(list(disk.glob("*.pcm"))) == 2
+    tts.keep("Открываю Telegram.")  # название программы — можно и на диск
+    await tts.say("Открываю Telegram.", wait=True)
+    assert len(list(disk.glob("*.pcm"))) == 3
+
+    monkeypatch.setattr(tts_module, "DISK_MAX_FILES", 2)
+    tts.keep("Открываю Steam.")
+    await tts.say("Открываю Steam.", wait=True)
+    assert len(list(disk.glob("*.pcm"))) == 2  # старые фразы удаляются первыми
+    # другой темп — другой звук: ответы готовятся заново
+    ctx.settings.patch({"tts": {"speed": 1.2}})
+    await wait_for(lambda: len(edge.calls) == 7)
+    assert [c[0] for c in edge.calls[-2:]] == ["Готово, сэр.", "Сейчас сделаю."]
 
 
 async def test_engine_cooldown_from_error_and_test_clears_it(rig: Rig, ctx: AppContext) -> None:

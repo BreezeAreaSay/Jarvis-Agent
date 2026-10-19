@@ -1,4 +1,5 @@
-"""Синтез речи: очередь фраз, interrupt/silence, wait, события, запасной движок, сигналы, прослушивание."""
+"""Синтез речи: очередь фраз, interrupt/silence, wait, события, запасной движок и его пауза, память фраз
+облачных движков, сигналы, прослушивание, счёт движка."""
 
 import asyncio
 import time
@@ -10,6 +11,7 @@ import pytest
 
 from jarvis.context import AppContext
 from jarvis.services import UserFacingError
+from jarvis.voice.engines import TtsEngineError
 from jarvis.voice.player import Chunk, Player
 from jarvis.voice.tts import Tts
 from tests.conftest import EventLog
@@ -165,6 +167,68 @@ async def test_say_empty_and_status(rig: Rig) -> None:
     assert sink.samples == 0 and not tts.speaking
     status = tts.status()
     assert status["engine"] == "piper" and status["speaking"] is False
+
+
+async def test_phrase_cache_saves_cloud_credits(rig: Rig, ctx: AppContext) -> None:
+    tts, sink, engines = rig
+    engines["edge"].cacheable = True  # type: ignore[attr-defined]  # облачный движок: фразы помнятся
+    ctx.settings.patch({"tts": {"engine": "edge"}})
+    await tts.say("Готово, сэр.", wait=True)
+    await tts.say("Готово, сэр.", wait=True)
+    assert [c[0] for c in engines["edge"].calls] == ["Готово, сэр."]  # второй раз — из памяти
+    assert sink.samples >= 2 * int(0.3 * 16000) * 0.99  # но прозвучала дважды
+    assert len(tts.cache) == 1
+    ctx.settings.patch({"tts": {"speed": 1.2}})
+    await tts.say("Готово, сэр.", wait=True)
+    assert len(engines["edge"].calls) == 2  # другой темп — другой звук
+    long = "Очень длинное предложение " + "и ещё немного слов " * 9 + "в конце."
+    assert 160 < len(long) <= 220
+    await tts.say(long, wait=True)
+    await tts.say(long, wait=True)
+    assert len(engines["edge"].calls) == 4  # длинные фразы не помним
+    ctx.settings.patch({"tts": {"engine": "piper"}})
+    await tts.say("Готово, сэр.", wait=True)
+    await tts.say("Готово, сэр.", wait=True)
+    assert len(engines["piper"].calls) == 2  # локальный голос — без памяти
+
+
+async def test_engine_cooldown_from_error_and_test_clears_it(rig: Rig, ctx: AppContext) -> None:
+    tts, _, engines = rig
+
+    class OutOfCredits(FakeEngine):
+        async def synthesize(self, text: str, opts: Any) -> tuple[np.ndarray, int]:
+            self.calls.append((text, opts.voice))
+            if self.fail:
+                raise TtsEngineError(self.fail, cooldown_s=3600.0)
+            return await super().synthesize(text, opts)
+
+    engines["openai"] = OutOfCredits("openai", fail="закончились кредиты")
+    tts.engines["openai"] = engines["openai"]
+    ctx.settings.patch({"tts": {"engine": "openai"}})
+    await tts.say("Привет.", wait=True)
+    assert tts._failed_until["openai"] - time.monotonic() > 3000  # ждём обновления кредитов, а не минуту
+    assert [c[0] for c in engines["piper"].calls] == ["Привет."]  # пока говорит запасной
+    await tts.say("Ещё раз.", wait=True)
+    assert len(engines["openai"].calls) == 1  # упавший движок не дёргаем
+    engines["openai"].fail = ""
+    await tts.test("Проверка", "openai")  # прослушивание в настройках удалось — снова главный
+    assert "openai" not in tts._failed_until
+    await wait_for(lambda: not tts.speaking)
+    await tts.say("Снова я.", wait=True)
+    assert engines["openai"].calls[-1][0] == "Снова я."
+
+
+async def test_account_of_engines(rig: Rig) -> None:
+    tts, _, engines = rig
+    assert await tts.account("piper") == {"supported": False}
+    with pytest.raises(UserFacingError):
+        await tts.account("nope")
+
+    async def account() -> dict[str, Any]:
+        return {"supported": True, "used": 10, "limit": 100}
+
+    engines["edge"].account = account  # type: ignore[attr-defined]
+    assert (await tts.account("edge"))["limit"] == 100
 
 
 def test_player_stop_interrupts_and_calls_markers() -> None:

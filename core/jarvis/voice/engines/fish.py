@@ -50,6 +50,7 @@ def fish_error(resp: httpx.Response) -> str:
 class FishEngine:
     name = "fish"
     title = "Fish Audio (интернет, по ключу)"
+    cacheable = True  # короткие фразы Tts помнит: повтор не тратит деньги и не ждёт сеть
 
     def __init__(self, ctx: "AppContext", transport: httpx.AsyncBaseTransport | None = None) -> None:
         self.ctx = ctx
@@ -66,6 +67,9 @@ class FishEngine:
 
     def russian(self, voice: str) -> bool:
         return False
+
+    def cache_key(self, settings: "Settings") -> str:
+        return settings.tts.fish_model
 
     def _client(self, timeout: float) -> httpx.AsyncClient:
         return httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0), transport=self.transport)

@@ -101,6 +101,18 @@ def test_tts_voices(client: TestClient) -> None:
     assert client.get("/api/tts/voices").json()["items"][0]["id"] == "ruslan"  # движок из настроек
     assert client.get("/api/tts/voices", params={"engine": "openai"}).json()["items"][0]["id"] == "onyx"
     assert client.get("/api/tts/voices", params={"engine": "nope"}).status_code == 400
+    assert client.get("/api/tts/voices", params={"engine": "elevenlabs"}).json() == {"items": []}  # нет ключа
+
+
+def test_tts_account(client: TestClient) -> None:
+    assert client.get("/api/tts/account", params={"engine": "piper"}).json() == {"supported": False}
+    eleven = client.get("/api/tts/account", params={"engine": "elevenlabs"}).json()
+    assert eleven["supported"] is True and "ключа ElevenLabs" in eleven["error"]  # без ключа — без запросов
+    assert eleven["used"] is None and eleven["models"] == []
+    assert client.get("/api/tts/account", params={"engine": "nope"}).status_code == 400
+    r = client.post("/api/tts/test", json={"engine": "elevenlabs"})
+    assert r.status_code == 400 and "ключа ElevenLabs" in r.json()["detail"]
+    assert client.get("/api/status").status_code == 200
 
 
 def test_tts_say_test_stop(client: TestClient) -> None:

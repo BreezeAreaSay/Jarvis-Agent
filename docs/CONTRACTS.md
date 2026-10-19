@@ -56,7 +56,8 @@ desktop/ (Electron + React)                     core/ (Python 3.12, FastAPI)
 | `POST /api/confirm/{id}` | `{allow: bool}` | `{ok}` |
 
 Settings — модель `jarvis/settings.py` (в интерфейсе — `desktop/src/api/types.ts`). Секреты:
-`ai_api_key, openai_api_key, fish_api_key, telegram_token, ha_token, yandex_iot_token, remote_token`.
+`ai_api_key, openai_api_key, fish_api_key, elevenlabs_api_key, telegram_token, ha_token, yandex_iot_token,
+remote_token`.
 
 Итог `/api/dispatch`: `{kind: "command", result: ExecResult, history}` | `{kind: "ai", chat_id, text, actions,
 sources, error, history}` | `{kind: "unknown", history}` | `{kind: "stop"}` | `{kind: "empty"}`.
@@ -214,6 +215,14 @@ label, placeholder?, options?, required}], description}`.
 - Слово-активатор: своё слово узнаётся и с окончаниями («пятницу»), фраза из нескольких слов — целиком
   («эй, Джарвис»), латиница — на слух («Jarvis» = «джарвис»).
 
+Голос Jarvis (`tts.engine`): `piper` (локально), `windows`, `edge`, `openai`, `fish`, `elevenlabs`. ElevenLabs —
+по ключу `elevenlabs_api_key` (бесплатный тариф — около 10 000 кредитов в месяц): `tts.elevenlabs_voice_id`
+(пусто — стандартный George), `elevenlabs_model` (`eleven_flash_v2_5` по умолчанию), `elevenlabs_stability`,
+`elevenlabs_similarity`, `elevenlabs_style` (0–1). Движок может сказать, сколько его не звать (кончились кредиты —
+до их обновления, неверный ключ или отключённый за VPN бесплатный тариф — 10 минут, обычный сбой — минуту); удачное
+прослушивание (`POST /api/tts/test`) снимает паузу. Короткие (до 160 символов) фразы облачных движков
+(edge, openai, fish, elevenlabs) Jarvis помнит в памяти — повтор не тратит кредиты; на диск они не пишутся.
+
 Окно продолжения (`Voice.follow_up(seconds=None, *, question=False)`): после ответа Jarvis следующая фраза — без
 активатора; подряд — не больше 2 таких команд, ответы на уточняющие вопросы (`question=True`, окно не короче 8 с)
 в этот счёт не входят, но всего окон подряд — не больше 4.
@@ -229,7 +238,8 @@ label, placeholder?, options?, required}], description}`.
 | `GET /api/voice/models` | — | `{items: [{id, kind: asr\|stream\|vad\|tts\|whisper, title, description, size_mb, installed, downloading, progress, required, error}]}` |
 | `POST /api/voice/models/{id}/download` | — | `{ok}` (прогресс — события) |
 | `DELETE /api/voice/models/{id}` | — | `{ok}` |
-| `GET /api/tts/voices?engine=` | — | `{items: [{id, name, lang, gender}]}` |
+| `GET /api/tts/voices?engine=` | — | `{items: [{id, name, lang, gender, category?}]}` (у ElevenLabs без ключа — пусто) |
+| `GET /api/tts/account?engine=` | — | `{supported: false}` — у движка нет счёта; ElevenLabs: `{supported: true, tier, status, used, limit, reset_at: ISO\|null, models: [{id, name, cost?}], error}` — израсходовано и лимит кредитов, когда обновятся, модели с русским |
 | `POST /api/tts/say` | `{text}` | `{ok}` |
 | `POST /api/tts/test` | `{text?, engine?, voice?}` | `{ok}` — прослушать голос |
 | `POST /api/tts/stop` | — | `{ok}` |
@@ -244,7 +254,7 @@ label, placeholder?, options?, required}], description}`.
 | `model.download` | `{id, progress: 0..1, done: bool, error?: str}` |
 | `tts.state` | `{speaking: bool, text?}` |
 | `tts.level` | `{level: 0..1}` — громкость речи Jarvis (~20 Гц), для пульсации аватара |
-| `tts.error` | `{error, engine}` — выбранный голос не сработал, Jarvis говорит запасным (piper или Windows) |
+| `tts.error` | `{error, engine}` — выбранный голос не сработал (нет ключа или сети, кончились кредиты ElevenLabs…), Jarvis говорит запасным (piper или Windows) |
 
 ## 4. ИИ, агент, память, заметки (`jarvis/ai`, `jarvis/notes`, `jarvis/mcp`)
 

@@ -118,7 +118,12 @@ function amount(item: DataItem): string {
 
 // --- что куда уходит --------------------------------------------------------------------------------------
 
-const CLOUD_TTS: Record<string, string> = { edge: "Microsoft Edge", openai: "OpenAI", fish: "Fish Audio" };
+const CLOUD_TTS: Record<string, string> = {
+  edge: "Microsoft Edge",
+  openai: "OpenAI",
+  fish: "Fish Audio",
+  elevenlabs: "ElevenLabs",
+};
 
 function FlowCard({ settings }: { settings: Settings }) {
   const provider = FALLBACK_PROVIDERS.find((p) => p.id === settings.ai.provider);

@@ -926,6 +926,35 @@
   max-width: 260px;
 }
 
+/* остаток кредитов ElevenLabs */
+.tts-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line);
+}
+
+.tts-usage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tts-usage .set-progress {
+  flex: none; /* в колонке flex: 1 сжал бы полоску до нуля */
+}
+
+.tts-usage.err {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: rgba(251, 191, 36, 0.28);
+}
+
 .play-round {
   display: inline-flex;
   align-items: center;

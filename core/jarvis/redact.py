@@ -32,6 +32,7 @@ _ASSIGN_RE = re.compile(
 )
 _TOKEN_RES = (
     re.compile(r"\b(sk-(?:ant-|proj-)?)[A-Za-z0-9_-]{16,}"),  # OpenAI, Anthropic
+    re.compile(r"\b(sk_)[A-Za-z0-9]{32,}"),  # ElevenLabs
     re.compile(r"\b(gh[pousr]_)[A-Za-z0-9]{20,}"),  # GitHub
     re.compile(r"\b(github_pat_)[A-Za-z0-9_]{20,}"),
     re.compile(r"\b(xox[abposr]-)[A-Za-z0-9-]{10,}"),  # Slack

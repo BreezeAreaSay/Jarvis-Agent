@@ -733,6 +733,8 @@ class Ai(BaseService):
         except UserFacingError as e:
             return self._finish(turn, error=str(e))
         turn.finished = True  # итог в чат запишет агент
+        if turn.source == "voice":
+            await self._agent_ack()
         try:
             result = await agent.wait(run_id)
         except asyncio.CancelledError:
@@ -747,6 +749,17 @@ class Ai(BaseService):
             actions=result.actions,
             error=result.error,
         )
+
+    async def _agent_ack(self) -> None:
+        """Агент работает секунды — с голоса сразу короткий ответ, чтобы не было тишины; итог — в конце."""
+        settings = self.ctx.settings.value
+        if settings.voice.silent_mode:
+            return
+        address = settings.profile.address.strip()
+        try:
+            await self.ctx.tts.say(f"Сейчас сделаю, {address}." if address else "Сейчас сделаю.")
+        except Exception:
+            log.debug("ответ «сейчас сделаю» не прозвучал", exc_info=True)
 
     # --- события ---------------------------------------------------------------------------------------
     def _status(self, turn: Turn, status: str, text: str) -> None:

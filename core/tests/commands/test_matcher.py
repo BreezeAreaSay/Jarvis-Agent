@@ -181,6 +181,14 @@ def test_compound_phrases(ctx: AppContext) -> None:
     # глагол переносится на следующую часть: «закрой хром и (закрой) телеграм»
     assert ids("закрой хром и телеграм") == ["builtin.app.chrome.close", "builtin.app.telegram.close"]
     assert ids("найди котиков и включи музыку") == ["builtin.search.default", "builtin.media.play"]
+    # без запятых — по глаголам (распознавание на ПК не ставит знаков): «Сам разделит фразу»
+    assert ids("включи музыку открой вс код и запусти фигму") == [
+        "builtin.media.play",
+        "builtin.app.vscode.open",
+        "builtin.app.figma.open",
+    ]
+    assert ids("сверни все окна сделай тише") == ["builtin.windows.minimize_all", "builtin.volume.down"]
+    assert ctx.commands.match("поставь будильник на семь открой вс код") is None  # часть — не команда: к ИИ
     # «и» внутри свободного текста не делит фразу
     match = ctx.commands.match("найди в гугле кошки и собаки")
     assert match is not None and len(match.parts) == 1

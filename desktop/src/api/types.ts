@@ -48,7 +48,7 @@ export interface Settings {
     silent_mode: boolean;
     input_device: string;
     sensitivity: number;
-    asr_model: "gigaam-v3" | "gigaam-v3-punct" | "vosk-small";
+    asr_model: "gigaam-v3" | "gigaam-v3-punct" | "vosk-small" | "elevenlabs";
     /** Язык команд: ru — GigaAM; другой или auto — Whisper. */
     language: "ru" | "auto" | "en" | "uk" | "de" | "fr" | "es" | "it" | "pt" | "pl" | "tr" | "ja" | "ko" | "zh";
     /** Тишина после речи, по которой фраза закончилась, мс. */

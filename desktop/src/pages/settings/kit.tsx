@@ -83,6 +83,8 @@ export interface VoiceStatus {
   models_ready: boolean;
   input_device: string;
   ptt_error?: string;
+  /** выбрано распознавание ElevenLabs, но сейчас его звать нельзя: нет ключа, пауза после ошибки */
+  cloud_error?: string;
 }
 
 /** GET /api/voice: ошибка голоса («модели не скачаны»), ошибка клавиши «держи и говори», готовность моделей. */
@@ -90,7 +92,8 @@ export function useVoiceStatus() {
   const q = useApi<VoiceStatus>("/api/voice");
   const { reload } = q;
   const v = useApp((s) => s.settings?.voice);
-  const key = v ? [v.enabled, v.input_device, v.ptt_key, v.asr_model].join("|") : "";
+  const elevenKey = useApp((s) => !!s.secrets.elevenlabs_api_key);
+  const key = v ? [v.enabled, v.input_device, v.ptt_key, v.asr_model, elevenKey].join("|") : "";
   const soon = useDebounced(() => void reload(), 500);
   useEffect(() => onEvent("voice.state", () => soon()), [soon]);
   useEffect(() => onEvent<{ done: boolean }>("model.download", (e) => e.data.done && soon()), [soon]);

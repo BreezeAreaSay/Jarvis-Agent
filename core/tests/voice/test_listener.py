@@ -5,7 +5,7 @@ import pytest
 
 from jarvis.voice import listener as lst
 from jarvis.voice.listener import Listener, find_wake_anywhere, match_wake
-from tests.voice.helpers import BLOCK_S, Clock, FakeHost, FakeVad, Script, feed
+from tests.voice.helpers import BLOCK_S, Clock, FakeCloud, FakeHost, FakeVad, Script, feed
 
 Rig = tuple[Listener, FakeHost, Script, Clock]
 
@@ -411,3 +411,114 @@ def test_preroll_is_part_of_utterance(rig: Rig) -> None:
     speech_and_tail = int((0.5 + 3 * BLOCK_S) / BLOCK_S) * 512
     assert captured and captured[0] > speech_and_tail  # плюс ≈0,3 с тишины до VAD — первые звуки целы
     assert np.isfinite(captured[0])
+
+
+# --- итог заранее: облако и распознавание на паузе ---------------------------------------------------------
+
+
+def phrase(script: Script, text: str) -> list[np.ndarray]:
+    return script.silence(0.3) + script.utter(text, 1.0) + script.silence(0.6)
+
+
+def cloud_rig(*, pause_vad: bool = False, **cloud: object) -> tuple[Listener, FakeHost, Script, Clock, list]:
+    host, script, clock = FakeHost(), Script(), Clock()
+    clouds: list[FakeCloud] = []
+
+    def factory() -> FakeCloud:
+        clouds.append(FakeCloud(script, **cloud))  # type: ignore[arg-type]
+        return clouds[-1]
+
+    listener = Listener(
+        host,
+        vad=FakeVad(),
+        stream_factory=script.session,
+        final=script.final,
+        clock=clock,
+        pause_vad=FakeVad(end_frames=1) if pause_vad else None,
+        cloud_factory=factory,
+    )
+    return listener, host, script, clock, clouds
+
+
+def test_cloud_recognizes_addressed_phrase_from_its_first_sound() -> None:
+    """«Джарвис» услышан по ходу речи — в облако уходит вся фраза с самого начала, итог — его."""
+    listener, host, script, clock, clouds = cloud_rig()
+    feed(listener, phrase(script, "джарвис включи музыку"), clock)
+    assert host.commands == ["включи музыку"]
+    assert len(clouds) == 1 and clouds[0].closed and clouds[0].finished == [False]
+    assert len(clouds[0].frames) > int(1.0 / BLOCK_S)  # кольцо до VAD + вся речь
+    assert script.finals == []  # на ПК итог не считали
+
+
+def test_cloud_not_used_for_background_speech() -> None:
+    listener, host, script, clock, clouds = cloud_rig()
+    feed(listener, phrase(script, "какая сегодня погода"), clock)
+    assert clouds == [] and host.commands == []
+
+
+def test_cloud_failure_falls_back_to_pc() -> None:
+    listener, host, script, clock, clouds = cloud_rig(fail=True)
+    feed(listener, phrase(script, "джарвис сверни все окна"), clock)
+    assert host.commands == ["сверни все окна"]
+    assert len(clouds) == 1 and clouds[0].closed
+    assert [t for t, _ in script.finals] == ["джарвис сверни все окна"]
+
+
+def test_cloud_text_with_punctuation_for_dictation() -> None:
+    listener, host, script, clock, clouds = cloud_rig(result="Купить хлеба, молока.")
+    got: list[str | None] = []
+    listener.request("text", 5.0, punct=True, on_done=got.append, source="capture")
+    feed(listener, phrase(script, "купить хлеба молока"), clock)
+    assert got == ["Купить хлеба, молока."] and clouds[0].finished == [True]
+    assert host.commands == []
+
+
+def test_pause_starts_pc_recognition_before_phrase_ends() -> None:
+    """VAD пауз: речь стихла — итог на ПК уже считается; к концу фразы готов, второй раз не считаем."""
+    listener, host, script, clock, _ = cloud_rig(pause_vad=True)
+    listener.cloud_factory = None
+    calls: list[int] = []
+    final = script.final
+    listener.final = lambda audio, punct: (calls.append(len(audio)), final(audio, punct))[1]
+    feed(listener, script.silence(0.3) + script.utter("джарвис открой браузер", 1.0), clock)
+    feed(listener, script.silence(BLOCK_S), clock)  # первый тихий блок: VAD пауз — «стихла», основной ждёт
+    assert listener.utt is not None and listener.utt.guess is not None
+    feed(listener, script.silence(0.6), clock)
+    assert host.commands == ["открой браузер"]
+    assert len(calls) == 1  # только распознавание на паузе
+
+
+def test_speech_after_pause_discards_early_result() -> None:
+    listener, host, script, clock, _ = cloud_rig(pause_vad=True)
+    listener.cloud_factory = None
+    calls: list[int] = []
+    final = script.final
+    listener.final = lambda audio, punct: (calls.append(len(audio)), final(audio, punct))[1]
+    speech = script.utter("джарвис открой браузер", 1.0)
+    half = len(speech) // 2
+    feed(listener, script.silence(0.3) + speech[:half] + script.silence(2 * BLOCK_S), clock)
+    first = listener.utt.guess if listener.utt is not None else None
+    assert first is not None
+    feed(listener, speech[half:] + script.silence(0.6), clock)  # договорил: итог — по всей фразе
+    assert host.commands == ["открой браузер"]
+    assert len(calls) == 2 and max(calls) - min(calls) >= (len(speech) - half) * 512
+
+
+def test_cloud_commits_on_pause_and_continues_after() -> None:
+    listener, host, script, clock, clouds = cloud_rig(pause_vad=True)
+    speech = script.utter("джарвис открой браузер", 1.0)
+    half = len(speech) // 2
+    feed(listener, script.silence(0.3) + speech[:half] + script.silence(2 * BLOCK_S), clock)
+    feed(listener, speech[half:] + script.silence(0.6), clock)
+    assert host.commands == ["открой браузер"]
+    cloud = clouds[0]
+    assert cloud.pauses == 2 and cloud.resumes == 1 and cloud.finished == [False]
+    assert script.finals == []
+
+
+def test_drop_closes_cloud() -> None:
+    listener, _host, script, clock, clouds = cloud_rig()
+    feed(listener, script.silence(0.3) + script.utter("джарвис открой браузер", 1.0), clock)
+    assert clouds and not clouds[0].closed
+    listener.drop()
+    assert clouds[0].closed and listener.utt is None

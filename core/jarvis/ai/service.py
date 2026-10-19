@@ -344,13 +344,30 @@ class Ai(BaseService):
         images: list[str] | None = None,
         agent_task: str = "",
     ) -> AskResult:
+        browser = await self._browser_front(agent_task)
         try:
             turn = self._begin(
-                text, chat_id=chat_id, source=source, mode=mode, images=images, agent_task=agent_task
+                text,
+                chat_id=chat_id,
+                source=source,
+                mode=mode,
+                images=images,
+                agent_task=agent_task,
+                browser=browser,
             )
         except UserFacingError as e:
             return AskResult(chat_id or "", "", error=str(e))
         return await self._spawn(turn)
+
+    async def _browser_front(self, agent_task: str = "") -> bool:
+        """Впереди браузер: просьба о деле на открытой странице уйдёт агенту (apphints.app_task)."""
+        if agent_task or not self.ctx.settings.value.ai.auto_agent:
+            return False
+        try:
+            return await apphints.browser_front(self.ctx)
+        except Exception:
+            log.debug("не узнать, впереди ли браузер", exc_info=True)
+            return False
 
     async def post_message(
         self,
@@ -377,7 +394,8 @@ class Ai(BaseService):
             row = self.chats.add_message(chat_id, "user", text.strip())
             self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
             return {"chat_id": chat_id, "message_id": row["id"], "reply_id": run.reply_id}
-        turn = self._begin(text, chat_id=chat_id, source=source, mode=mode, images=images)
+        browser = await self._browser_front()
+        turn = self._begin(text, chat_id=chat_id, source=source, mode=mode, images=images, browser=browser)
         self.ctx.spawn(self._spawn(turn), f"chat-{turn.chat_id}")
         return {"chat_id": turn.chat_id, "message_id": turn.user_id, "reply_id": turn.reply_id}
 
@@ -431,6 +449,7 @@ class Ai(BaseService):
         mode: str | None,
         images: list[str] | None,
         agent_task: str = "",
+        browser: bool = False,
     ) -> Turn:
         text = (text or "").strip()
         pictures = self._check_images(images)
@@ -453,9 +472,9 @@ class Ai(BaseService):
             turn_mode == "all"
             and not pictures
             and self.ctx.settings.value.ai.auto_agent
-            and apphints.app_task(text)
+            and apphints.app_task(text, browser=browser)
         ):
-            # «напиши Ане в телеграме…» — дело для агента: сразу ему, без лишнего ответа модели
+            # «напиши Ане в телеграме…», дело в браузере — для агента: сразу ему, без лишнего ответа модели
             agent_task, turn_mode = text, "agent"
         first = self.ctx.db.query_one(
             "SELECT 1 FROM messages WHERE chat_id=? AND role='user' LIMIT 1", (chat["id"],)

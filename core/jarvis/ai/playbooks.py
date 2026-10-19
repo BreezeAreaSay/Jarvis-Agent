@@ -27,6 +27,21 @@ def _w(pattern: str) -> re.Pattern[str]:
     return re.compile(pattern, re.I)
 
 
+# браузеры (имена процессов): Chrome, Edge, Firefox, Яндекс Браузер (browser.exe), Opera, Brave, Vivaldi, Arc
+BROWSER_EXES = frozenset(
+    {
+        "chrome.exe",
+        "msedge.exe",
+        "firefox.exe",
+        "browser.exe",
+        "opera.exe",
+        "brave.exe",
+        "vivaldi.exe",
+        "arc.exe",
+    }
+)
+
+
 PLAYBOOKS: tuple[Playbook, ...] = (
     Playbook(
         "telegram",
@@ -112,7 +127,7 @@ ctrl+f его НЕ открывает: в открытом чате ctrl+f ищ�
     Playbook(
         "browser",
         "Браузер",
-        ("chrome.exe", "msedge.exe", "firefox.exe", "browser.exe", "opera.exe", "brave.exe", "vivaldi.exe"),
+        tuple(sorted(BROWSER_EXES)),
         _w(
             r"браузер|сайт|страниц|вкладк|ссылк|\bинтернет|chrome|хром\w*|\bedge\b|эдж|firefox|фаерфокс|"
             r"файрфокс|\bопер[аеуы]\b|opera|brave|vivaldi"
@@ -126,17 +141,21 @@ ctrl+f его НЕ открывает: в открытом чате ctrl+f ищ�
 ctrl+plus, ctrl+minus и ctrl+0 — масштаб, f11 — во весь экран.
 - ctrl+h — история, ctrl+j — загрузки, ctrl+d — в закладки; инкогнито — ctrl+shift+n (в Firefox — \
 ctrl+shift+p).
-- Ссылки, поля и кнопки страниц в Chrome, Edge, Яндекс Браузере и Opera видны в снимке окна — жми по id \
-(ui_click, ui_type); в Firefox элементов бывает меньше — тогда по картинке.
-- Длинная страница — scroll или page_down и новый снимок. Окна про cookies и подписки закрывай, только \
-если мешают.
+- Снимок окна браузера: сначала кнопки самого браузера (вкладки, адресная строка), потом «Страница …» — \
+ссылки, поля и кнопки её видимой части (жми по id: ui_click, ui_type) — и «Текст страницы на экране»: \
+читай его, чтобы понять, что на странице. В Firefox элементов бывает меньше — тогда по картинке.
+- После open_url и перехода по ссылке страница грузится: wait 1–2 с, пока в снимке не появятся её элементы. \
+Заголовок открытой страницы — в названии окна и в строке «Страница …».
+- Нужного не видно — scroll (или page_down) и новый снимок; ctrl+f — найти слово на странице. Окна про \
+cookies и подписки закрывай, только если мешают.
 - Вход в аккаунт, коды из SMS, капча — не обходи: finish со статусом partial и что сделать пользователю.""",
         """\
 - Сайт или поиск — open_url: Google «https://www.google.com/search?q=…», Яндекс \
 «https://yandex.ru/search/?text=…», Википедия «https://ru.wikipedia.org/w/index.php?search=…».
 - Вкладки и навигация в открытом браузере — готовые команды браузера (run_command с id) или press_keys: \
 ctrl+t, ctrl+w, ctrl+shift+t, alt+left, f5.
-- Найти что-то на сайте, нажать кнопки, заполнить форму — сразу run_agent с полной задачей.""",
+- Любое дело на странице — найти на сайте, нажать кнопку, включить ролик, заполнить форму — сразу \
+run_agent с полной задачей: он видит страницу, ты — нет.""",
         ("chrome", "firefox", "yandex_browser"),
     ),
     Playbook(
@@ -145,8 +164,9 @@ ctrl+t, ctrl+w, ctrl+shift+t, alt+left, f5.
         (),
         _w(r"youtube|ютуб|ютьюб|ютюб"),
         """\
-- Поиск — open_url «https://www.youtube.com/results?search_query=запрос», потом открой видео щелчком \
-(ролики с пометкой «Реклама» пропускай).
+- Поиск — open_url «https://www.youtube.com/results?search_query=запрос», wait 1–2 с, потом ui_click по \
+ссылке ролика (Hyperlink с названием видео); ролики с пометкой «Реклама» или «Спонсировано» пропускай. \
+Играет ли — по картинке или по кнопке «Пауза (k)» в снимке.
 - Плеер (фокус на видео, не в поле поиска): k — пауза и пуск, j и l — на 10 с назад и вперёд, f — весь \
 экран, t — кинотеатр, m — звук, c — субтитры, shift+n — следующее видео, shift+period и shift+comma — \
 быстрее и медленнее, 0 — с начала.

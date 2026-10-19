@@ -283,7 +283,7 @@ _ACTION = re.compile(
     r"обнови|добавь|измени|поменяй|увеличь|уменьши|очисти|отметь|отправь|отправить|ответь|перешли|найди|найти|"
     r"проверь|посмотри|глянь|прочитай|прочти|запиши|подключи|отключи|позвони|войди|выйди|напиши|написать|"
     r"допиши|оформи|зарегистрируй|подпишись|отпишись|оплати|купи|закажи|отмени|исправь|вырежи|приложи|"
-    r"прикрепи|убери|верни)(?!\w)",
+    r"прикрепи|убери|верни|переведи|перевести)(?!\w)",
     re.I,
 )
 _QUESTION = re.compile(
@@ -296,7 +296,7 @@ _ORGANIZER = re.compile(r"напомн|напомин|запомн|забудь|
 # сведения: интернет, погода, новости, курсы, перевод, рассказ, поиск файлов
 _INFO = re.compile(
     r"погод|новост|курс\w* (?:доллар|евро|валют|юан|рубл|биткоин|крипт)|в интернете|в сети(?!\w)|загугли|"
-    r"погугли|поищи|найди в (?:интернете|гугле|яндексе|сети)|ютуб|youtube|переведи|перевод|расскажи|объясни|"
+    r"погугли|поищи|найди в (?:интернете|гугле|яндексе|сети)|переведи|перевод|расскажи|объясни|"
     r"посчитай|сколько будет|что такое|кто так(?:ой|ая|ие)|анекдот|шутк|стих|сказк|придумай|сочини|"
     r"найди (?:файл|документ|фото|картинк)|где (?:лежит|находится|хранится)",
     re.I,
@@ -308,6 +308,22 @@ _SCREEN = re.compile(
     r"в ватсап\w*|в дискорд\w*|в чате|в переписк\w*|письм\w*|сообщени\w*)"
     r"|(?:посмотри|глянь|прочитай|прочти|проверь|разбери)(?!\w).{0,30}?(?:экран|окн|почт|письм|сообщени|чат|"
     r"переписк)",
+    re.I,
+)
+# браузер, сайт, страница, вкладка, YouTube, адрес сайта: дело в браузере — всегда агенту (он видит страницу
+# и жмёт по ней), даже «открой …»: чат умеет только открыть ссылку
+_WEB = re.compile(
+    r"браузер|сайт|страниц|вкладк|ссылк|адресн\w* строк|chrome|(?<!\w)хром\w*|(?<!\w)edge(?!\w)|"
+    r"(?<!\w)эдж\w*|firefox|фаерфокс\w*|файрфокс\w*|(?<!\w)опер[аеуы](?!\w)|opera|youtube|ютуб\w*|ютьюб\w*|ютюб\w*|"
+    r"рутуб\w*|rutube|озон\w*|ozon|вайлдбер+из\w*|вал[ьд]?бер+из\w*|wildberries|авито|avito|госуслуг\w*|"
+    r"gosuslugi|(?<!\w)[a-z0-9-]+\.(?:ru|com|org|net|io|su|by|kz|ua|me|tv|app|dev|рф)(?!\w)",
+    re.I,
+)
+# в открытом браузере лёгкое — только громкость, звук, окна, свет: «открой первое видео», «включи видео»,
+# «закрой вкладку» — уже дело на странице
+_BROWSER_LIGHT = re.compile(
+    r"громк|тише|громче|звук|трек|песн|музык|окн|яркост|скриншот|снимок экрана|раскладк|компьютер|"
+    r"свет(?!\w)|ламп|розетк|кондиционер|обогревател|увлажнител|чайник|пылесос",
     re.I,
 )
 # «напиши стих» — текст в ответ; «напиши Маше, что…», «напиши в ворде…» — дело для агента
@@ -353,16 +369,19 @@ def _verbs(text: str) -> list[str]:
     return [m.group(0).casefold().replace("ё", "е") for m in _ACTION.finditer(text)]
 
 
-def _light(text: str) -> bool:
-    """Простые команды: открыть или закрыть программу, окно, громкость, медиа, свет — одна или цепочкой."""
+def _light(text: str, browser: bool = False) -> bool:
+    """Простые команды: открыть или закрыть программу, окно, громкость, медиа, свет — одна или цепочкой.
+    browser — впереди браузер: лёгкое только громкость, звук, окна и свет, остальное — дело на странице."""
     clauses = [c for c in _CLAUSES.split(text) if c and c.strip()]
-    return bool(clauses) and all(_light_clause(c) for c in clauses)
+    return bool(clauses) and all(_light_clause(c, browser) for c in clauses)
 
 
-def _light_clause(clause: str) -> bool:
+def _light_clause(clause: str, browser: bool = False) -> bool:
     verbs = _verbs(clause)
     if len(verbs) != 1 or verbs[0] not in _LIGHT_VERBS:
         return False
+    if browser:
+        return len(re.findall(r"\w+", clause)) <= 6 and bool(_BROWSER_LIGHT.search(clause))
     if _OPEN_CLOSE.search(clause):
         return True  # «открой калькулятор», «закрой это окно», «не мог бы ты открыть ворд»
     return len(re.findall(r"\w+", clause)) <= 6 and bool(_LIGHT.search(clause))
@@ -374,12 +393,14 @@ def _vague(text: str, verbs: list[str]) -> bool:
     return not [w for w in words if w.replace("ё", "е") not in verbs and w not in _VAGUE_WORDS]
 
 
-def app_task(text: str) -> bool:
+def app_task(text: str, *, browser: bool = False) -> bool:
     """Дело на компьютере не из лёгких — его сразу берёт агент, без лишнего ответа модели.
 
     Чату остаются одна простая команда (окно, громкость, медиа, открыть или закрыть программу), вопросы и
     сведения, память, заметки, задачи и напоминания. Вопрос о том, что на экране, в окне, в почте или
-    мессенджере, — тоже агенту: это видит только он.
+    мессенджере, — тоже агенту: это видит только он. Дело в браузере — всегда агенту: названы браузер, сайт,
+    страница, вкладка, YouTube или адрес сайта, или впереди браузер (browser) — тогда лёгкое только
+    громкость, звук, окна и свет.
     """
     text = (text or "").strip()
     if not text or len(text) > 600:
@@ -388,14 +409,24 @@ def app_task(text: str) -> bool:
         return False
     if _SCREEN.search(text):
         return True
-    if _QUESTION.search(text) or _INFO.search(text):
+    web = bool(_WEB.search(text))
+    if _QUESTION.search(text) or (_INFO.search(text) and not web):  # «открой в браузере погоду» — агенту
         return False
     verbs = _verbs(text)
     if not verbs or _vague(text, verbs):
         return False
     if all(v in _COMPOSE for v in verbs) and not (_MESSAGE.search(text) or _places(text)):
         return False
-    return not _light(" ".join(_FILLER.sub(" ", text).split()))
+    if web:
+        return True
+    return not _light(" ".join(_FILLER.sub(" ", text).split()), browser)
+
+
+async def browser_front(ctx: "AppContext") -> bool:
+    """Впереди (не считая окна Jarvis) — браузер: просьба, скорее всего, про открытую страницу."""
+    window = await _foreground(ctx)
+    exe = str(getattr(window, "exe", "") or "").casefold()
+    return exe in playbooks.BROWSER_EXES
 
 
 # --- сборка -----------------------------------------------------------------------------------------------

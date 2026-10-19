@@ -245,6 +245,33 @@ async def test_taught_rule_beats_ready_command(ctx: AppContext) -> None:
     assert ran == ["сверни все окна"]
 
 
+async def test_play_on_youtube_goes_to_agent(ctx: AppContext) -> None:
+    """«Включи на ютубе лофи»: команда поиска только откроет результаты — включить ролик дело агента. ИИ нет
+    или агенту сразу нельзя — как раньше, поиск."""
+    ai = FakeAi()
+    ctx.ai = ai  # type: ignore[assignment]
+    ran: list[str] = []
+
+    async def execute(m: CommandMatch, source: str) -> ExecResult:
+        ran.append(m.parts[0].command_id)
+        return ExecResult(True, "Поиск на YouTube", "Выполнено")
+
+    ctx.commands.execute = execute  # type: ignore[method-assign]
+    await ctx.dispatcher.handle("включи на ютубе лофи", "voice")
+    assert ran == [] and ai.asked == [
+        (
+            "включи на ютубе лофи",
+            "включи на ютубе лофи. Найди на YouTube видео по запросу «лофи» и включи его (не рекламу); "
+            "проверь, что оно играет.",
+        )
+    ]
+    await ctx.dispatcher.handle("найди на ютубе лофи", "voice")  # найти — и есть показать результаты
+    assert ran == ["builtin.search.youtube"] and len(ai.asked) == 1
+    ctx.settings.patch({"ai": {"auto_agent": False}})
+    await ctx.dispatcher.handle("включи на ютубе лофи", "voice")
+    assert ran == ["builtin.search.youtube"] * 2 and len(ai.asked) == 1
+
+
 async def test_stop_phrase_stops_speech_and_listening(
     ctx: AppContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:

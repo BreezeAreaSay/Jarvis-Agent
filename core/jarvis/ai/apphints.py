@@ -423,10 +423,12 @@ def app_task(text: str, *, browser: bool = False) -> bool:
 
 
 async def browser_front(ctx: "AppContext") -> bool:
-    """Впереди (не считая окна Jarvis) — браузер: просьба, скорее всего, про открытую страницу."""
+    """Впереди браузер — просьба, скорее всего, про открытую страницу. Впереди окно Jarvis (пишут в его чат) —
+    нет, даже если браузер за ним."""
     window = await _foreground(ctx)
-    exe = str(getattr(window, "exe", "") or "").casefold()
-    return exe in playbooks.BROWSER_EXES
+    if window is None or not getattr(window, "foreground", False):
+        return False
+    return str(getattr(window, "exe", "") or "").casefold() in playbooks.BROWSER_EXES
 
 
 # --- сборка -----------------------------------------------------------------------------------------------

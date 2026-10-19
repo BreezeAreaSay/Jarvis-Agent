@@ -180,6 +180,11 @@ class WindowsPlatform:
         точка снимка (px, py) — это точка экрана (left + px, top + py)."""
         return self._input().virtual_screen()
 
+    @_guard("Не удалось узнать монитор окна")
+    def monitor_rect(self, hwnd: int) -> tuple[int, int, int, int] | None:
+        """Монитор, на котором окно (или ближайший к нему): left, top, right, bottom — в точках снимка."""
+        return self._win().monitor_rect(int(hwnd))
+
     # --- звук ---------------------------------------------------------------------------------------------
 
     def _volume_keys(self, down: int, up: int) -> None:

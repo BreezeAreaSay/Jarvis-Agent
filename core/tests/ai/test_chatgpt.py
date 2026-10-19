@@ -591,6 +591,8 @@ async def test_agent_works_as_a_codex_turn(
     def work(t: FakeTurnScript) -> None:
         clicked = t.call("ui_click", {"id": "e1", "step": 1})
         assert "«Написать»: нажато" in text_of(clicked) and "[Снимок окна]" in text_of(clicked)
+        check = t.call("finish", {"summary": "Открыл новое письмо."})  # сначала — проверка по снимку
+        assert text_of(check).startswith("Проверка перед итогом") and "[Снимок окна]" in text_of(check)
         t.call("finish", {"summary": "Открыл новое письмо."})
         t.message("Готово.")
         t.complete()

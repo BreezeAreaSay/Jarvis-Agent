@@ -357,8 +357,21 @@ class Ai(BaseService):
         mode: str | None = None,
         source: Source = "ui",
     ) -> dict[str, Any]:
-        """Сообщение из окна чата: ответ идёт событиями, вернуть сразу id сообщения."""
+        """Сообщение из окна чата: ответ идёт событиями, вернуть сразу id сообщения. Пока в этом чате работает
+        агент, сообщение — ему (ответ на его вопрос или поправка), а не новый ход."""
         self.chats.require(chat_id)
+        agent = getattr(self.ctx, "agent", None)
+        run = getattr(agent, "current", None)
+        if (
+            run is not None
+            and not run.finished
+            and run.chat_id == chat_id
+            and not images
+            and agent.interject(text)  # type: ignore[union-attr]
+        ):
+            row = self.chats.add_message(chat_id, "user", text.strip())
+            self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
+            return {"chat_id": chat_id, "message_id": row["id"], "reply_id": run.reply_id}
         turn = self._begin(text, chat_id=chat_id, source=source, mode=mode, images=images)
         self.ctx.spawn(self._spawn(turn), f"chat-{turn.chat_id}")
         return {"chat_id": turn.chat_id, "message_id": turn.user_id, "reply_id": turn.reply_id}

@@ -83,6 +83,8 @@ export interface AgentRun {
   /** План шагов (agent.state plan) и оценка итога самим агентом. */
   plan: string[];
   outcome: "" | "done" | "partial" | "failed";
+  /** Чат, куда агент пишет итог: сообщение в него, пока агент работает, — поправка или ответ агенту. */
+  chatId: string;
   startedAt: number;
   endedAt?: number;
 }

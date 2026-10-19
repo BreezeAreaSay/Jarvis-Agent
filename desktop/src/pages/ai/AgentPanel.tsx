@@ -12,6 +12,7 @@ import {
   Hourglass,
   Keyboard,
   ListTodo,
+  MessageCircleQuestionMark,
   MousePointer2,
   MoveVertical,
   Search,
@@ -35,6 +36,7 @@ function actionIcon(text: string): ReactNode {
   if (/^(ищу|ищем|поиск)/.test(t)) return <Search />;
   if (/^(прокруч|листаю)/.test(t)) return <MoveVertical />;
   if (/^(жду|ожида)/.test(t)) return <Hourglass />;
+  if (/^(спрашива|уточня)/.test(t)) return <MessageCircleQuestionMark />;
   if (/^(составляю|планирую|думаю)/.test(t)) return <ListTodo />;
   if (/^(смотрю|читаю|изучаю|анализ|проверяю)/.test(t)) return <Eye />;
   return <Sparkles />;

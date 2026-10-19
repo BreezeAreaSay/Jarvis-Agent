@@ -189,6 +189,12 @@ class FakePlatform:
     def screen_size(self) -> tuple[int, int]:
         return (1920, 1080)
 
+    def virtual_screen(self) -> tuple[int, int, int, int]:
+        return (0, 0, 1920, 1080)
+
+    def monitor_rect(self, hwnd: int) -> tuple[int, int, int, int] | None:
+        return (0, 0, 1920, 1080)
+
     # --- программы --------------------------------------------------------------------------------
     def list_apps(self, refresh: bool = False) -> list[AppInfo]:
         return list(DEMO_APPS)

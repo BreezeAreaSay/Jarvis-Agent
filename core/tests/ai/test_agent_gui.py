@@ -55,23 +55,26 @@ async def test_window_picture_and_click_point(
     _telegram(ui)
     llm.add(
         PLAN,
-        calls(("click_point", {"x": 160, "y": 90, "what": "поле поиска", "step": 1})),
+        calls(("click_point", {"x": 100, "y": 50, "what": "поле поиска", "step": 1})),
+        calls(("finish", {"status": "done", "summary": "Нажал поиск."})),
         calls(("finish", {"status": "done", "summary": "Нажал поиск."})),
     )
     result = await _run(ctx, "Найди чат «Мама» в Telegram")
     assert result.status == "done" and result.outcome == "done"
-    # окно плохо видно UI Automation — к первому сообщению приложена картинка окна (а не всего экрана)
+    # агент видит весь экран: к первому сообщению приложен снимок экрана, окно впереди на нём обведено
     first = llm.requests[1]["messages"]
     images = [m for m in first if m["role"] == "user" and isinstance(m["content"], list)]
     assert images and images[0]["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
-    assert "Сетка — через каждые 100 точек" in images[0]["content"][0]["text"]
-    assert ("screenshot", (102,)) in ctx.platform.calls  # type: ignore[attr-defined]
-    # точка картинки 320×180 → окно 300,80–1600,980 на экране; курсор человека вернулся
+    caption = images[0]["content"][0]["text"]
+    assert caption.startswith("Снимок экрана") and "обведено жёлтым" in caption
+    assert "Сетка — через каждые 100 точек" in caption
+    assert ("screenshot", (None,)) in ctx.platform.calls  # type: ignore[attr-defined]
+    # точка картинки 320×180 → экран 1920×1080 (внутри окна Telegram); курсор человека вернулся
     platform_calls = ctx.platform.calls  # type: ignore[attr-defined]
-    click = platform_calls.index(("mouse_click", (950, 530, "left", False)))
+    click = platform_calls.index(("mouse_click", (600, 300, "left", False)))
     assert platform_calls[click + 1] == ("mouse_move", (960, 540))  # курсор человека — туда, где был
     pointer = events.of("agent.pointer")
-    assert pointer and pointer[0]["kind"] == "click" and (pointer[0]["x"], pointer[0]["y"]) == (950, 530)
+    assert pointer and pointer[0]["kind"] == "click" and (pointer[0]["x"], pointer[0]["y"]) == (600, 300)
     assert pointer[0]["label"] == "поле поиска"
     # подсказка по Telegram — в первом сообщении
     assert "Как работать в «Telegram»" in first[1]["content"]

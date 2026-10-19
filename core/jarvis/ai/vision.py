@@ -1,10 +1,12 @@
-"""Зрение агента: снимок окна, с которым он работает, для модели, понимающей картинки.
+"""Зрение агента: снимок экрана или окна, с которым он работает, для модели, понимающей картинки.
 
-Снимается только целевое окно (PrintWindow — даже перекрытое; свёрнутое не снять), не весь экран: меньше
-чужого на картинке и крупнее детали. Поверх — метки элементов UI Automation (e12 у кнопки — «Set-of-Marks»:
-модель нажимает ui_click по id, а не гадает координаты) и бледная сетка через каждые 100 точек картинки
-с подписями по краям — по ней модель называет точку для click_point. Shot хранит, какой прямоугольник экрана
-(физические точки) лежит на картинке, и переводит точку картинки в точку экрана.
+После каждого действия агент видит весь экран (render_screen): что открылось, всплыло, где курсор, — окно
+впереди на нём обведено. Мониторов несколько — только тот, где окно впереди: крупнее детали.
+Инструмент screenshot — крупно одно окно (PrintWindow — даже перекрытое; свёрнутое не снять). Поверх — метки
+элементов UI Automation окна впереди (e12 у кнопки — «Set-of-Marks»: модель нажимает ui_click по id, а не
+гадает координаты) и бледная сетка через каждые 100 точек картинки с подписями по краям — по ней модель
+называет точку для click_point. Shot хранит, какой прямоугольник экрана (физические точки) лежит на картинке,
+и переводит точку картинки в точку экрана.
 
 Работает в потоке ввода-вывода (ctx.run_io): Pillow и сжатие JPEG не держат цикл событий.
 """
@@ -35,8 +37,8 @@ class Shot:
     width: int
     height: int
     rect: Rect  # left, top, right, bottom — физические точки экрана
-    hwnd: int = 0
-    title: str = ""
+    hwnd: int = 0  # снимок окна; 0 — снимок экрана
+    title: str = ""  # заголовок окна (у снимка экрана — окна впереди)
 
     def to_screen(self, x: float, y: float) -> tuple[int, int]:
         left, top, right, bottom = self.rect
@@ -54,6 +56,13 @@ class Shot:
         return 0 <= x < self.width and 0 <= y < self.height
 
     def caption(self) -> str:
+        if not self.hwnd:
+            front = f"; окно впереди «{self.title}» обведено жёлтым" if self.title else ""
+            return (
+                f"Снимок экрана — {self.width}×{self.height} точек{front}. Метки e… — id элементов окна "
+                f"впереди (жми ui_click по id). Сетка — через каждые {GRID} точек; click_point принимает "
+                "координаты этой картинки. Панель и курсор агента Jarvis на снимке — это ты, их не нажимай."
+            )
         return (
             f"Снимок окна «{self.title}» — {self.width}×{self.height} точек. Метки e… — id элементов "
             f"из снимка окна (жми ui_click по id). Сетка — через каждые {GRID} точек; click_point принимает "
@@ -107,13 +116,74 @@ def render(
     grid: bool = True,
 ) -> Shot:
     """PNG окна → Shot: уменьшить, подписать элементы (их rect — в точках экрана) и наложить сетку."""
-    from PIL import Image, ImageDraw
+    from PIL import Image
 
     image = Image.open(io.BytesIO(png)).convert("RGB")
+    return _draw(image, rect, elements=elements, hwnd=hwnd, title=title, max_side=max_side, grid=grid)
+
+
+def screen_part(screen: tuple[int, int, int, int], monitor: Rect | None) -> Rect:
+    """Какую часть всех мониторов (screen — left, top, width, height) показать, в точках экрана: монитор окна
+    впереди (monitor — left, top, right, bottom), если он внутри экрана, иначе весь экран."""
+    left, top, width, height = screen
+    whole = (left, top, left + width, top + height)
+    if monitor is None:
+        return whole
+    rect = (max(left, monitor[0]), max(top, monitor[1]), min(whole[2], monitor[2]), min(whole[3], monitor[3]))
+    return rect if rect[2] - rect[0] >= 100 and rect[3] - rect[1] >= 100 else whole
+
+
+def render_screen(
+    png: bytes,
+    screen: tuple[int, int, int, int],
+    *,
+    monitor: Rect | None = None,
+    focus: Rect | None = None,
+    elements: list[UiElement] | None = None,
+    title: str = "",
+    max_side: int = MAX_SIDE,
+) -> Shot:
+    """PNG всего экрана (виртуального: screen — left, top, width, height) → Shot экрана: монитор окна впереди
+    (monitor), окно обведено (focus), его элементы подписаны, сетка."""
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(png)).convert("RGB")
+    rect = screen_part(screen, monitor)
+    left, top, width, height = screen
+    kx, ky = image.width / max(1, width), image.height / max(1, height)  # точек картинки на точку экрана
+    box = (
+        round((rect[0] - left) * kx),
+        round((rect[1] - top) * ky),
+        round((rect[2] - left) * kx),
+        round((rect[3] - top) * ky),
+    )
+    if box != (0, 0, image.width, image.height):
+        image = image.crop(box)
+    return _draw(image, rect, elements=elements, title=title, max_side=max_side, focus=focus)
+
+
+def _draw(
+    image: Any,
+    rect: Rect,
+    *,
+    elements: list[UiElement] | None = None,
+    hwnd: int = 0,
+    title: str = "",
+    max_side: int = MAX_SIDE,
+    grid: bool = True,
+    focus: Rect | None = None,
+) -> Shot:
+    from PIL import ImageDraw
+
     image.thumbnail((max_side, max_side))
     width, height = image.size
     shot = Shot("", width, height, rect, hwnd, title)
     draw = ImageDraw.Draw(image, "RGBA")
+    if focus is not None:  # окно впереди на снимке экрана
+        left, top = shot.to_image(focus[0], focus[1])
+        right, bottom = shot.to_image(focus[2], focus[3])
+        if right > left and bottom > top:
+            draw.rectangle([left, top, right - 1, bottom - 1], outline=(255, 214, 0, 230), width=3)
     if grid:
         small = _font(11)
         for x in range(GRID, width, GRID):

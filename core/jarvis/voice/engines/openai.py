@@ -66,6 +66,7 @@ def openai_error(resp: httpx.Response) -> str:
 class OpenAIEngine:
     name = "openai"
     title = "Голоса OpenAI (интернет, по ключу)"
+    cacheable = True  # короткие фразы Tts помнит: повтор не тратит деньги и не ждёт сеть
 
     def __init__(self, ctx: "AppContext", transport: httpx.AsyncBaseTransport | None = None) -> None:
         self.ctx = ctx
@@ -91,6 +92,9 @@ class OpenAIEngine:
 
     def russian(self, voice: str) -> bool:
         return False  # латиницу OpenAI читает сам
+
+    def cache_key(self, settings: "Settings") -> str:
+        return f"{settings.tts.openai_model}|{settings.tts.openai_instructions}"
 
     async def synthesize(self, text: str, opts: SynthOptions) -> tuple[np.ndarray, int]:
         key = self.key()

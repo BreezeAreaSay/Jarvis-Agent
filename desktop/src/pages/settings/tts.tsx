@@ -1,15 +1,17 @@
 // Выбор голоса Jarvis: карточки движков синтеза (как «Выберите голос» в Luxify) и их настройки.
-import { Fish, Globe, Play, Square } from "lucide-react";
+import { ExternalLink, Fish, Globe, Play, Square } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/api/client";
 import { onEvent } from "@/api/events";
 import type { Settings } from "@/api/types";
 import { AppIcon } from "@/components/AppIcon";
 import { LogoMark } from "@/components/Orb";
+import { bridge } from "@/lib/bridge";
 import { navigate } from "@/lib/router";
 import { useApp } from "@/store/app";
 import { Button, cx, notify, notifyError, Select, Slider } from "@/ui";
 import {
+  type ApiState,
   Combo,
   fmtMb,
   greeting,
@@ -34,6 +36,15 @@ export interface EngineMeta {
   offline: boolean;
 }
 
+function ElevenGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
+      <rect x="7" y="4" width="3.2" height="16" rx="1" fill="#F4F4F5" />
+      <rect x="13.8" y="4" width="3.2" height="16" rx="1" fill="#F4F4F5" />
+    </svg>
+  );
+}
+
 function WindowsGlyph() {
   return (
     <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
@@ -43,6 +54,13 @@ function WindowsGlyph() {
 }
 
 export const ENGINES: EngineMeta[] = [
+  {
+    id: "elevenlabs",
+    title: "ElevenLabs",
+    sub: "самые живые голоса · бесплатно ~10 000 кредитов в месяц",
+    tile: <ElevenGlyph />,
+    offline: false,
+  },
   {
     id: "piper",
     title: "Локальный голос Джарвиса",
@@ -93,7 +111,12 @@ const FALLBACK_VOICES: Record<Engine, TtsVoice[]> = {
     name: v[0].toUpperCase() + v.slice(1),
   })),
   fish: [],
+  // без ключа список голосов не получить — стандартный George (его же ядро берёт, когда голос не выбран)
+  elevenlabs: [{ id: "JBFqnCBsd6RMkjVDRZzb", name: "George — британский", gender: "male" }],
 };
+
+const ELEVEN_DEFAULT_VOICE = "JBFqnCBsd6RMkjVDRZzb";
+const ELEVEN_KEYS_URL = "https://elevenlabs.io/app/settings/api-keys";
 
 const VOICE_FIELD = {
   piper: "piper_voice",
@@ -101,10 +124,12 @@ const VOICE_FIELD = {
   edge: "edge_voice",
   openai: "openai_voice",
   fish: "fish_voice_id",
+  elevenlabs: "elevenlabs_voice_id",
 } as const satisfies Record<Engine, keyof Settings["tts"]>;
 
 export function voiceOf(tts: Settings["tts"], engine: Engine): string {
-  return String(tts[VOICE_FIELD[engine]] ?? "");
+  const value = String(tts[VOICE_FIELD[engine]] ?? "");
+  return engine === "elevenlabs" ? value || ELEVEN_DEFAULT_VOICE : value;
 }
 
 /** Имя голоса для людей: ruslan → Руслан (из запасного списка), иначе — как есть. */
@@ -124,11 +149,79 @@ const FISH_MODELS = [
   { value: "speech-1.5", hint: "" },
 ];
 
-/** Голоса движка: GET /api/tts/voices?engine=… или запасной список. */
-export function useTtsVoices(engine: Engine) {
-  const q = useApi<{ items: TtsVoice[] }>(`/api/tts/voices?engine=${engine}`);
+const ELEVEN_MODELS = [
+  { value: "eleven_flash_v2_5", hint: "быстрый, вдвое экономнее" },
+  { value: "eleven_multilingual_v2", hint: "лучшее качество" },
+  { value: "eleven_v3", hint: "самый живой, медленнее" },
+  { value: "eleven_turbo_v2_5", hint: "быстрый" },
+];
+
+/** Счёт облачного движка: GET /api/tts/account?engine=… (остаток кредитов ElevenLabs и модели с русским). */
+export interface TtsAccount {
+  supported: boolean;
+  tier?: string;
+  status?: string;
+  used?: number | null;
+  limit?: number | null;
+  reset_at?: string | null;
+  models?: { id: string; name: string; cost?: number }[];
+  error?: string;
+}
+
+/** Голоса движка: GET /api/tts/voices?engine=… или запасной список; version меняется — список заново (ключ). */
+export function useTtsVoices(engine: Engine, version = "") {
+  const q = useApi<{ items: TtsVoice[] }>(`/api/tts/voices?engine=${engine}${version ? `&v=${version}` : ""}`);
   const items = q.data?.items?.length ? q.data.items : FALLBACK_VOICES[engine];
   return { ...q, items };
+}
+
+/** Модели ElevenLabs: свои подсказки и новые, что сервис сообщил для ключа (×0,5 — полкредита за символ). */
+function elevenModels(account: TtsAccount | undefined) {
+  const list = [...ELEVEN_MODELS];
+  for (const m of account?.models ?? []) {
+    if (list.some((x) => x.value === m.id)) continue;
+    const cost = typeof m.cost === "number" && m.cost !== 1 ? `×${String(m.cost).replace(".", ",")}` : "";
+    list.push({ value: m.id, hint: [m.name, cost].filter(Boolean).join(" · ") });
+  }
+  return list;
+}
+
+const fmtCredits = (n: number) => Math.round(n).toLocaleString("ru-RU");
+
+/** Остаток кредитов ElevenLabs: полоска «Израсходовано N из M · обновится 1 ноября»; после речи — свежий. */
+function ElevenUsage({ account }: { account: ApiState<TtsAccount> }) {
+  const speaking = useSpeaking();
+  const was = useRef(false);
+  const { reload } = account;
+  useEffect(() => {
+    if (was.current && !speaking) void reload();
+    was.current = speaking;
+  }, [speaking, reload]);
+  const data = account.data;
+  if (!data) {
+    return account.loading ? (
+      <div className="row faint small">
+        <span className="spinner" /> Проверяю остаток кредитов…
+      </div>
+    ) : null;
+  }
+  if (data.used == null || !data.limit) {
+    return data.error ? <div className="tts-usage err small">{data.error}</div> : null;
+  }
+  const share = Math.min(1, data.used / data.limit);
+  const reset = data.reset_at ? new Date(data.reset_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" }) : "";
+  return (
+    <div className="tts-usage">
+      <div className="tts-usage-head">
+        <span className="small">
+          Израсходовано {fmtCredits(data.used)} из {fmtCredits(data.limit)} кредитов
+          {reset && <span className="faint"> · обновится {reset}</span>}
+        </span>
+        {data.tier === "free" && <span className="chip">Бесплатный тариф</span>}
+      </div>
+      <ProgressBar value={share} className={share >= 0.9 ? "warn" : undefined} />
+    </div>
+  );
 }
 
 /** Фраза для проверки голоса. */
@@ -242,7 +335,9 @@ function VoiceControl({
   patchTts: (p: Partial<Settings["tts"]>) => void;
   models: ModelItem[];
 }) {
-  const { items } = useTtsVoices(engine);
+  // голоса ElevenLabs видны только с ключом: сохранили ключ — список заново
+  const elevenKey = useApp((s) => !!s.secrets.elevenlabs_api_key);
+  const { items } = useTtsVoices(engine, engine === "elevenlabs" && elevenKey ? "key" : "");
   const value = voiceOf(tts, engine);
   if (engine === "piper") {
     return <PiperVoicePicker value={value} onChange={(v) => patchTts({ piper_voice: v as Settings["tts"]["piper_voice"] })} models={models} />;
@@ -260,11 +355,13 @@ function VoiceControl({
   }
   const options = items.map((v) => ({ value: v.id, label: v.name, hint: v.gender === "female" ? "жен." : v.gender === "male" ? "муж." : undefined }));
   if (engine === "windows") options.unshift({ value: "", label: "По умолчанию", hint: undefined });
-  if (value && !options.some((o) => o.value === value)) options.push({ value, label: value, hint: undefined });
+  if (value && !options.some((o) => o.value === value)) {
+    options.push({ value, label: engine === "elevenlabs" ? `Голос ${value.slice(0, 8)}…` : value, hint: undefined });
+  }
   return (
     <Select
       value={value}
-      width={220}
+      width={engine === "elevenlabs" ? 250 : 220}
       options={options}
       onChange={(v) => patchTts({ [VOICE_FIELD[engine]]: v } as Partial<Settings["tts"]>)}
     />
@@ -281,6 +378,7 @@ export function TtsOptions({ engine, compact }: { engine: Engine; compact?: bool
   const savedSpeed = settings?.tts.speed ?? 1;
   const [speed, setSpeed] = useState(savedSpeed);
   useEffect(() => setSpeed(savedSpeed), [savedSpeed]);
+  const account = useApi<TtsAccount>(engine === "elevenlabs" && secrets.elevenlabs_api_key ? "/api/tts/account?engine=elevenlabs" : null);
   if (!settings) return null;
   const tts = settings.tts;
   const patchTts = (p: Partial<Settings["tts"]>) => patch({ tts: p });
@@ -305,6 +403,16 @@ export function TtsOptions({ engine, compact }: { engine: Engine; compact?: bool
       <div className="tts-key">
         <span className="field-label">Ключ Fish Audio</span>
         <SecretField name="fish_api_key" placeholder="Ключ из кабинета fish.audio" />
+      </div>
+    ) : engine === "elevenlabs" ? (
+      <div className="tts-key">
+        <span className="field-label">Ключ ElevenLabs</span>
+        <SecretField name="elevenlabs_api_key" placeholder="sk_… из кабинета elevenlabs.io" />
+        {!secrets.elevenlabs_api_key && (
+          <Button size="sm" variant="ghost" icon={<ExternalLink />} onClick={() => bridge.openExternal(ELEVEN_KEYS_URL)}>
+            Получить бесплатный ключ
+          </Button>
+        )}
       </div>
     ) : null;
 
@@ -335,6 +443,8 @@ export function TtsOptions({ engine, compact }: { engine: Engine; compact?: bool
       )}
 
       {keyBlock}
+
+      {engine === "elevenlabs" && secrets.elevenlabs_api_key && <ElevenUsage account={account} />}
 
       {!compact && (
         <div className="tts-grid">
@@ -396,6 +506,47 @@ export function TtsOptions({ engine, compact }: { engine: Engine; compact?: bool
               <Combo value={tts.fish_model} options={FISH_MODELS} onCommit={(v) => patchTts({ fish_model: v || "s1" })} />
             </div>
           )}
+          {engine === "elevenlabs" && (
+            <>
+              <div className="tts-cell">
+                <span className="tts-label">Модель</span>
+                <Combo
+                  value={tts.elevenlabs_model}
+                  options={elevenModels(account.data)}
+                  onCommit={(v) => patchTts({ elevenlabs_model: v || "eleven_flash_v2_5" })}
+                />
+              </div>
+              <div className="tts-cell">
+                <span className="tts-label">ID голоса (свой или из библиотеки)</span>
+                <LazyText
+                  value={tts.elevenlabs_voice_id}
+                  placeholder="Пусто — George"
+                  onCommit={(v) => patchTts({ elevenlabs_voice_id: v.trim() })}
+                />
+              </div>
+              <label className="tts-cell">
+                <span className="tts-label">Стабильность</span>
+                <Slider
+                  value={Math.round(tts.elevenlabs_stability * 100)}
+                  onCommit={(v) => patchTts({ elevenlabs_stability: Math.round(v) / 100 })}
+                />
+              </label>
+              <label className="tts-cell">
+                <span className="tts-label">Сходство с голосом</span>
+                <Slider
+                  value={Math.round(tts.elevenlabs_similarity * 100)}
+                  onCommit={(v) => patchTts({ elevenlabs_similarity: Math.round(v) / 100 })}
+                />
+              </label>
+              <label className="tts-cell span-2">
+                <span className="tts-label">Выразительность (больше — живее, но медленнее)</span>
+                <Slider
+                  value={Math.round(tts.elevenlabs_style * 100)}
+                  onCommit={(v) => patchTts({ elevenlabs_style: Math.round(v) / 100 })}
+                />
+              </label>
+            </>
+          )}
           <div className="tts-cell span-2">
             <span className="tts-label">Фраза для проверки</span>
             <input
@@ -411,6 +562,13 @@ export function TtsOptions({ engine, compact }: { engine: Engine; compact?: bool
       {engine === "fish" && !compact && (
         <div className="faint tiny">
           ID голоса — в адресе страницы голоса на fish.audio (можно клонировать свой голос и вставить его ID).
+        </div>
+      )}
+      {engine === "elevenlabs" && !compact && (
+        <div className="faint tiny">
+          Бесплатный тариф ElevenLabs — для личного некоммерческого использования; через VPN и прокси сервис может его
+          отключить. Кончатся кредиты — Jarvis до их обновления говорит локальным голосом; повторяющиеся фразы берутся
+          из памяти и кредитов не тратят. Голоса из библиотеки ElevenLabs доступны только на платном тарифе.
         </div>
       )}
       {engine === "openai" && aiIsOpenai && !secrets.ai_api_key && !compact && (

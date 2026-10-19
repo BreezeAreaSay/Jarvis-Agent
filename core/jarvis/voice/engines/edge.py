@@ -48,6 +48,7 @@ def decode_mp3(data: bytes, rate: int = 24000) -> tuple[np.ndarray, int]:
 class EdgeEngine:
     name = "edge"
     title = "Голоса Microsoft Edge (интернет)"
+    cacheable = True  # короткие фразы Tts помнит: повтор не ждёт сеть
 
     def __init__(self, communicate: Any = None, list_voices: Any = None) -> None:
         self._communicate = communicate  # подмена в тестах: (text, voice, rate=, pitch=) → объект со stream()

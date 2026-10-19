@@ -1,7 +1,9 @@
-"""Движки синтеза: запросы OpenAI и Fish Audio (MockTransport), Edge (подмена edge-tts), piper и Windows."""
+"""Движки синтеза: запросы OpenAI, Fish Audio и ElevenLabs (MockTransport), Edge (подмена edge-tts),
+piper и Windows."""
 
 import json
 import sys
+import time
 from typing import Any
 
 import httpx
@@ -12,6 +14,7 @@ from jarvis.context import AppContext
 from jarvis.voice import dsp
 from jarvis.voice.engines import (
     EdgeEngine,
+    ElevenLabsEngine,
     FishEngine,
     OpenAIEngine,
     PiperEngine,
@@ -19,6 +22,7 @@ from jarvis.voice.engines import (
     WindowsEngine,
 )
 from jarvis.voice.engines import edge as edge_mod
+from jarvis.voice.engines import elevenlabs as el
 from jarvis.voice.engines.base import TtsEngineError
 from jarvis.voice.models import ModelManager
 
@@ -235,3 +239,277 @@ async def test_windows_engine_off_windows() -> None:
         await engine.synthesize("Привет", SynthOptions(""))
     assert engine.russian("") and engine.russian("Microsoft Irina") and not engine.russian("Microsoft David")
     engine.close()
+
+
+# --- ElevenLabs ------------------------------------------------------------------------------------
+
+
+def eleven(ctx: AppContext, handler: Any) -> ElevenLabsEngine:
+    ctx.secrets.set("elevenlabs_api_key", "sk_el")
+    return ElevenLabsEngine(ctx, transport=httpx.MockTransport(handler))
+
+
+async def test_elevenlabs_request_and_pcm(ctx: AppContext) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=pcm(0.5, 24000), headers={"content-type": "audio/pcm"})
+
+    ctx.settings.patch({"tts": {"speed": 1.1}})
+    engine = eleven(ctx, handler)
+    assert engine.available() == "" and engine.voice(ctx.settings.value) == el.DEFAULT_VOICE
+    assert not engine.russian(el.DEFAULT_VOICE)  # латиницу сервис читает сам
+    opts = SynthOptions("", 1.1, 1.0, ctx.settings.value)
+    samples, rate = await engine.synthesize("Добрый день, сэр.", opts)
+    assert rate == 24000 and abs(len(samples) - 12000) <= 1
+    req = seen[0]
+    assert req.method == "POST" and req.url.path == f"/v1/text-to-speech/{el.DEFAULT_VOICE}"
+    assert req.url.host == "api.elevenlabs.io" and req.url.params["output_format"] == "pcm_24000"
+    assert req.headers["xi-api-key"] == "sk_el"
+    body = json.loads(req.content)
+    assert body == {
+        "text": "Добрый день, сэр.",
+        "model_id": "eleven_flash_v2_5",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "use_speaker_boost": True,
+            "speed": 1.1,
+        },
+    }
+
+
+async def test_elevenlabs_pitch_speed_limits_and_v3(ctx: AppContext) -> None:
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append({"path": request.url.raw_path.decode().split("?")[0], **json.loads(request.content)})
+        return httpx.Response(200, content=pcm(0.2, 24000))
+
+    engine = eleven(ctx, handler)
+    ctx.settings.patch({"tts": {"elevenlabs_voice_id": "my/voice", "elevenlabs_style": 0.3}})
+    _, rate = await engine.synthesize("Тест", SynthOptions("", 1.0, 0.9, ctx.settings.value))
+    assert rate == round(24000 * 0.9)  # тон ниже частотой вывода…
+    assert bodies[0]["voice_settings"]["speed"] == round(1 / 0.9, 2)  # …а темп выровнен сервисом
+    assert bodies[0]["voice_settings"]["style"] == 0.3
+    assert bodies[0]["path"] == "/v1/text-to-speech/my%2Fvoice"  # id голоса не ломает адрес
+    await engine.synthesize("Тест", SynthOptions("v", 2.0, 1.0, ctx.settings.value))
+    assert bodies[1]["voice_settings"]["speed"] == 1.2  # быстрее сервис не умеет
+    await engine.synthesize("Тест", SynthOptions("v", 1.0, 1.0, ctx.settings.value))
+    assert "speed" not in bodies[2]["voice_settings"]  # обычный темп — без параметра
+    ctx.settings.patch({"tts": {"elevenlabs_model": "eleven_v3", "elevenlabs_stability": 0.7}})
+    await engine.synthesize("Тест", SynthOptions("v", 1.3, 1.0, ctx.settings.value))
+    assert bodies[3]["model_id"] == "eleven_v3"
+    assert bodies[3]["voice_settings"] == {"stability": 0.5, "similarity_boost": 0.75}  # v3: 0 / 0,5 / 1
+
+
+def quota_handler(subscription: httpx.Response) -> Any:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/user/subscription":
+            return subscription
+        detail = {
+            "status": "quota_exceeded",
+            "message": "This request exceeds your quota of 10000. You have 25 credits remaining, "
+            "while 120 credits are required for this request.",
+        }
+        return httpx.Response(401, json={"detail": detail})
+
+    return handler
+
+
+async def test_elevenlabs_quota_waits_until_reset(ctx: AppContext) -> None:
+    reset = int(time.time()) + 7200
+    engine = eleven(ctx, quota_handler(httpx.Response(200, json={"next_character_count_reset_unix": reset})))
+    with pytest.raises(TtsEngineError, match="кредиты") as info:
+        await engine.synthesize("Тест", SynthOptions("v"))
+    assert info.value.cooldown_s is not None and 7000 < info.value.cooldown_s <= 7200
+    no_right = httpx.Response(401, json={"detail": {"status": "missing_permissions"}})
+    with pytest.raises(TtsEngineError, match="кредиты") as info:
+        await eleven(ctx, quota_handler(no_right)).synthesize("Тест", SynthOptions("v"))
+    assert info.value.cooldown_s == el.QUOTA_COOLDOWN_S  # когда обновятся — неизвестно: час
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "message", "cooldown"),
+    [
+        (401, {"detail": {"status": "invalid_api_key", "message": "Invalid API key"}}, "неверный ключ", 600),
+        (
+            401,
+            {"detail": {"status": "detected_unusual_activity", "message": "Unusual activity detected."}},
+            "VPN",
+            600,
+        ),
+        (
+            401,
+            {
+                "detail": {
+                    "status": "missing_permissions",
+                    "message": "The API key you used is missing the permission text_to_speech",
+                }
+            },
+            "нет права «Text to Speech»",
+            600,
+        ),
+        (
+            402,
+            {"detail": {"status": "payment_required", "message": "Free users cannot use library voices"}},
+            "платном тарифе",
+            None,
+        ),
+        (404, {"detail": {"status": "voice_not_found", "message": "Not found"}}, "голос не найден", None),
+        (
+            422,
+            {"detail": [{"loc": ["body", "model_id"], "msg": "unknown model", "type": "value_error"}]},
+            "модель",
+            None,
+        ),
+        (429, {"detail": {"status": "too_many_concurrent_requests"}}, "перегружен", None),
+        (403, "Forbidden", "региона", None),
+        (500, {"detail": {"status": "internal_error", "message": "boom"}}, "500: boom", None),
+    ],
+)
+async def test_elevenlabs_errors(
+    ctx: AppContext, status: int, body: Any, message: str, cooldown: float | None
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if isinstance(body, str):
+            return httpx.Response(status, text=body)
+        return httpx.Response(status, json=body)
+
+    with pytest.raises(TtsEngineError, match=message) as info:
+        await eleven(ctx, handler).synthesize("Тест", SynthOptions("v"))
+    assert info.value.cooldown_s == cooldown
+
+
+async def test_elevenlabs_no_key_json_reply_and_network(ctx: AppContext) -> None:
+    engine = ElevenLabsEngine(ctx)
+    assert "ключа" in engine.available()
+    with pytest.raises(TtsEngineError, match="ключа"):
+        await engine.synthesize("Тест", SynthOptions("v"))
+
+    json_reply = eleven(ctx, lambda r: httpx.Response(200, json={"detail": "ok?"}))
+    with pytest.raises(TtsEngineError, match="без голоса"):
+        await json_reply.synthesize("Тест", SynthOptions("v"))
+    empty = eleven(ctx, lambda r: httpx.Response(200, content=b""))
+    with pytest.raises(TtsEngineError, match="не вернул звук"):
+        await empty.synthesize("Тест", SynthOptions("v"))
+
+    def offline(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    with pytest.raises(TtsEngineError, match="нет связи"):
+        await eleven(ctx, offline).synthesize("Тест", SynthOptions("v"))
+
+
+async def test_elevenlabs_voices(ctx: AppContext) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        voices = [
+            {"voice_id": "own1", "name": "Мой голос", "category": "cloned", "labels": {}},
+            {
+                "voice_id": el.DEFAULT_VOICE,
+                "name": "George - Warm, Captivating Storyteller",
+                "category": "premade",
+                "labels": {"accent": "british", "gender": "male", "age": "middle aged"},
+            },
+            {
+                "voice_id": "aria",
+                "name": "Aria",
+                "category": "premade",
+                "labels": {"accent": "american", "gender": "female"},
+                "verified_languages": [{"language": "ru", "model_id": "eleven_flash_v2_5"}],
+            },
+        ]
+        return httpx.Response(200, json={"voices": voices, "has_more": False, "total_count": 3})
+
+    ctx.settings.patch({"tts": {"elevenlabs_voice_id": "pasted-id"}})
+    voices = await eleven(ctx, handler).voices()
+    assert seen[0].url.path == "/v2/voices" and seen[0].url.params["page_size"] == "100"
+    assert seen[0].headers["xi-api-key"] == "sk_el"
+    # вставленный id, потом стандартные голоса, потом свои
+    assert [v["id"] for v in voices] == ["pasted-id", "aria", el.DEFAULT_VOICE, "own1"]
+    assert voices[1] == {
+        "id": "aria",
+        "name": "Aria — американский",
+        "lang": "ru",
+        "gender": "female",
+        "category": "premade",
+    }
+    assert voices[2]["name"] == "George — британский" and voices[2]["gender"] == "male"
+    assert voices[3]["name"] == "Мой голос (ваш)" and voices[3]["lang"] == "multi"
+
+    broken = eleven(ctx, lambda r: httpx.Response(401, json={"detail": {"status": "invalid_api_key"}}))
+    assert [v["id"] for v in await broken.voices()] == ["pasted-id"]  # ошибка — только свой id
+    ctx.secrets.set("elevenlabs_api_key", "")
+    ctx.settings.patch({"tts": {"elevenlabs_voice_id": ""}})
+    assert await ElevenLabsEngine(ctx).voices() == []  # без ключа — список у интерфейса
+
+
+async def test_elevenlabs_account(ctx: AppContext) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/user/subscription":
+            return httpx.Response(
+                200,
+                json={
+                    "tier": "free",
+                    "status": "free",
+                    "character_count": 2500,
+                    "character_limit": 10000,
+                    "next_character_count_reset_unix": 1767225600,
+                },
+            )
+        assert request.url.path == "/v1/models"
+        ru = [{"language_id": "ru", "name": "Russian"}, {"language_id": "en", "name": "English"}]
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "model_id": "eleven_flash_v2_5",
+                    "name": "Eleven Flash v2.5",
+                    "can_do_text_to_speech": True,
+                    "languages": ru,
+                    "model_rates": {"character_cost_multiplier": 0.5},
+                },
+                {"model_id": "eleven_multilingual_sts_v2", "can_do_text_to_speech": False, "languages": ru},
+                {
+                    "model_id": "eleven_monolingual_v1",
+                    "can_do_text_to_speech": True,
+                    "languages": [{"language_id": "en", "name": "English"}],
+                },
+                {"model_id": "eleven_multilingual_v2", "name": "Eleven Multilingual v2", "languages": ru},
+            ],
+        )
+
+    account = await eleven(ctx, handler).account()
+    assert account == {
+        "supported": True,
+        "tier": "free",
+        "status": "free",
+        "used": 2500,
+        "limit": 10000,
+        "reset_at": "2026-01-01T00:00:00+00:00",
+        "models": [
+            {"id": "eleven_flash_v2_5", "name": "Eleven Flash v2.5", "cost": 0.5},
+            {"id": "eleven_multilingual_v2", "name": "Eleven Multilingual v2"},
+        ],
+        "error": "",
+    }
+
+
+async def test_elevenlabs_account_without_user_right_and_key(ctx: AppContext) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/user/subscription":
+            detail = {"status": "missing_permissions", "message": "missing the permission user_read"}
+            return httpx.Response(401, json={"detail": detail})
+        return httpx.Response(200, json=[{"model_id": "eleven_flash_v2_5", "can_do_text_to_speech": True}])
+
+    account = await eleven(ctx, handler).account()
+    assert "User (Read)" in account["error"] and account["used"] is None
+    assert account["models"] == [{"id": "eleven_flash_v2_5", "name": ""}]  # модели видны и без права на счёт
+    ctx.secrets.set("elevenlabs_api_key", "")
+    bare = await ElevenLabsEngine(ctx).account()
+    assert bare["supported"] is True and "ключа" in bare["error"]

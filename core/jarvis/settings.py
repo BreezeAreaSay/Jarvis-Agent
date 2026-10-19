@@ -74,7 +74,7 @@ class VoiceSettings(_Model):
 
 
 class TtsSettings(_Model):
-    engine: Literal["piper", "windows", "edge", "openai", "fish"] = "piper"
+    engine: Literal["piper", "windows", "edge", "openai", "fish", "elevenlabs"] = "piper"
     piper_voice: Literal["ruslan", "denis", "dmitri", "irina"] = "ruslan"
     windows_voice: str = ""
     edge_voice: str = "ru-RU-DmitryNeural"
@@ -85,6 +85,11 @@ class TtsSettings(_Model):
     )
     fish_voice_id: str = ""  # reference_id голоса Fish Audio
     fish_model: str = "s1"
+    elevenlabs_voice_id: str = ""  # "" — George (стандартный британский голос, есть на бесплатном тарифе)
+    elevenlabs_model: str = "eleven_flash_v2_5"  # быстрая, говорит по-русски, символ — полкредита
+    elevenlabs_stability: float = Field(0.5, ge=0.0, le=1.0)
+    elevenlabs_similarity: float = Field(0.75, ge=0.0, le=1.0)
+    elevenlabs_style: float = Field(0.0, ge=0.0, le=1.0)  # выразительность: больше — живее, но медленнее
     speed: float = Field(1.0, ge=0.5, le=2.0)
     pitch: float = Field(1.0, ge=0.8, le=1.2)
     effect: float = Field(0.35, ge=0.0, le=1.0)  # «электроника» в голосе
@@ -307,6 +312,7 @@ SECRET_NAMES = (
     "ai_api_key",  # ключ выбранного провайдера ИИ
     "openai_api_key",  # ключ OpenAI для голоса (если ИИ — другой провайдер)
     "fish_api_key",
+    "elevenlabs_api_key",  # голоса ElevenLabs
     "telegram_token",
     "ha_token",  # Home Assistant
     "yandex_iot_token",  # Умный дом Яндекса

@@ -74,6 +74,7 @@ class Vad(Protocol):
 
 
 END_SILENCE_S = 0.45  # пауза после речи, по которой фраза закончилась (voice.end_silence_ms)
+PAUSE_SILENCE_S = 0.18  # VAD пауз: столько тишины — «речь стихла», итог фразы начинаем заранее
 
 
 def vad_params(sensitivity: float, end_silence: float = END_SILENCE_S) -> dict[str, float]:
@@ -98,6 +99,7 @@ class SileroVad:
         max_speech: float = 120.0,
     ) -> None:
         so = _so()
+        self.min_silence = min_silence  # столько тишины после речи — «речь кончилась»
         silero = so.SileroVadModelConfig(
             model=str(model),
             threshold=threshold,
@@ -362,6 +364,13 @@ class Recognizers:
         if path is None:
             raise AsrError("нет модели детектора речи (Silero VAD)")
         return SileroVad(path, **vad_params(sensitivity, end_silence))
+
+    def make_pause_vad(self, sensitivity: float) -> SileroVad:
+        """Тот же VAD, но «речь стихла» — уже после PAUSE_SILENCE_S тишины: итог — заранее."""
+        path = self.vad_model()
+        if path is None:
+            raise AsrError("нет модели детектора речи (Silero VAD)")
+        return SileroVad(path, **(vad_params(sensitivity) | {"min_silence": PAUSE_SILENCE_S}))
 
     def streaming(self) -> StreamingAsr | None:
         if self._stream is not None:

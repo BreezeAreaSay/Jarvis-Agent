@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from jarvis import text as textops
 from jarvis.ai import apphints, policy
 from jarvis.ai.chatgpt import ChatGpt
 from jarvis.ai.chats import MODES, ChatStore, ui_message
@@ -206,6 +207,9 @@ class Ai(BaseService):
         self.chats = ChatStore(ctx)
         self.tools = ToolRegistry(ctx)
         self.chatgpt = ChatGpt(self)  # провайдер «ChatGPT (подписка)» через Codex
+        add_stock = getattr(getattr(ctx, "tts", None), "add_stock", None)
+        if callable(add_stock):  # «Сейчас сделаю» — частый ответ: звук готов заранее
+            add_stock(lambda: [self._ack_text()])
         self.mcp_server = JarvisMcpServer(ctx)  # инструменты Jarvis для программ-провайдеров (/api/ai/mcp)
         # «Claude (подписка)», «Gemini CLI», «Qwen Code» через программы человека
         self.cli = CliProviders(self)
@@ -338,9 +342,12 @@ class Ai(BaseService):
         source: Source = "text",
         mode: str | None = None,
         images: list[str] | None = None,
+        agent_task: str = "",
     ) -> AskResult:
         try:
-            turn = self._begin(text, chat_id=chat_id, source=source, mode=mode, images=images)
+            turn = self._begin(
+                text, chat_id=chat_id, source=source, mode=mode, images=images, agent_task=agent_task
+            )
         except UserFacingError as e:
             return AskResult(chat_id or "", "", error=str(e))
         return await self._spawn(turn)
@@ -354,8 +361,22 @@ class Ai(BaseService):
         mode: str | None = None,
         source: Source = "ui",
     ) -> dict[str, Any]:
-        """Сообщение из окна чата: ответ идёт событиями, вернуть сразу id сообщения."""
+        """Сообщение из окна чата: ответ идёт событиями, вернуть сразу id сообщения. Пока в этом чате работает
+        агент, сообщение — ему (ответ на его вопрос или поправка), а не новый ход."""
         self.chats.require(chat_id)
+        agent = getattr(self.ctx, "agent", None)
+        run = getattr(agent, "current", None)
+        working = run is not None and not run.finished and run.chat_id == chat_id and not images
+        if working and textops.is_stop(text):
+            # «стоп» в чате агента — стоп всему, как голосом, а не поправка к задаче
+            row = self.chats.add_message(chat_id, "user", text.strip())
+            self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
+            await self.ctx.dispatcher.stop()
+            return {"chat_id": chat_id, "message_id": row["id"], "reply_id": run.reply_id}  # type: ignore[union-attr]
+        if working and agent.interject(text):  # type: ignore[union-attr]
+            row = self.chats.add_message(chat_id, "user", text.strip())
+            self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
+            return {"chat_id": chat_id, "message_id": row["id"], "reply_id": run.reply_id}
         turn = self._begin(text, chat_id=chat_id, source=source, mode=mode, images=images)
         self.ctx.spawn(self._spawn(turn), f"chat-{turn.chat_id}")
         return {"chat_id": turn.chat_id, "message_id": turn.user_id, "reply_id": turn.reply_id}
@@ -409,15 +430,16 @@ class Ai(BaseService):
         source: Source,
         mode: str | None,
         images: list[str] | None,
+        agent_task: str = "",
     ) -> Turn:
         text = (text or "").strip()
         pictures = self._check_images(images)
         if not text and not pictures:
             raise UserFacingError("Пустое сообщение")
         chat = self._chat_for(chat_id, source, mode)
-        agent_task = ""
+        agent_task = agent_task.strip()
         found = AGENT_PHRASE.match(text)
-        if found and found["task"].strip():
+        if not agent_task and found and found["task"].strip():
             agent_task = found["task"].strip()
         if agent_task:
             turn_mode = "agent"
@@ -729,10 +751,13 @@ class Ai(BaseService):
                 turn_id=turn.user_id,
                 reply_id=turn.reply_id,
                 speak=False,
+                request=turn.text,
             )
         except UserFacingError as e:
             return self._finish(turn, error=str(e))
         turn.finished = True  # итог в чат запишет агент
+        if turn.source == "voice":
+            await self._agent_ack()
         try:
             result = await agent.wait(run_id)
         except asyncio.CancelledError:
@@ -747,6 +772,19 @@ class Ai(BaseService):
             actions=result.actions,
             error=result.error,
         )
+
+    def _ack_text(self) -> str:
+        address = self.ctx.settings.value.profile.address.strip()
+        return f"Сейчас сделаю, {address}." if address else "Сейчас сделаю."
+
+    async def _agent_ack(self) -> None:
+        """Агент работает секунды — с голоса сразу короткий ответ, чтобы не было тишины; итог — в конце."""
+        if self.ctx.settings.value.voice.silent_mode:
+            return
+        try:
+            await self.ctx.tts.say(self._ack_text())
+        except Exception:
+            log.debug("ответ «сейчас сделаю» не прозвучал", exc_info=True)
 
     # --- события ---------------------------------------------------------------------------------------
     def _status(self, turn: Turn, status: str, text: str) -> None:

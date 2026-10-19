@@ -43,6 +43,11 @@ def test_stop_and_listen_toggle(client: TestClient, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(client.ctx.voice, "state", "listening")  # type: ignore[attr-defined]
     assert client.post("/api/voice/listen", json={"toggle": True}).json() == {"ok": True, "stopped": True}
     assert calls == ["stop", "stop"]
+    # и пока работает агент, хотя Jarvis молчит и не слушает
+    monkeypatch.setattr(client.ctx.voice, "state", "idle")  # type: ignore[attr-defined]
+    monkeypatch.setattr(type(client.ctx.agent), "busy", property(lambda _: True))  # type: ignore[attr-defined]
+    assert client.post("/api/voice/listen", json={"toggle": True}).json() == {"ok": True, "stopped": True}
+    assert calls == ["stop", "stop", "stop"]
     # без toggle — как раньше: слушать (моделей нет — понятная ошибка)
     r = client.post("/api/voice/listen")
     assert r.status_code == 400 and "не скачаны" in r.json()["detail"]

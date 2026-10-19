@@ -215,6 +215,7 @@ async def test_clear_all_data(ctx: AppContext, keeper: Retention, events: EventL
     (models / "voice.onnx").write_bytes(b"model")
     _old_file(paths.data_dir() / "screenshots" / "shot.png", 0)
     _old_file(paths.logs_dir() / "core.log.1", 0)
+    _old_file(paths.cache_dir() / "tts" / "ok.pcm", 0)
 
     with pytest.raises(UserFacingError):
         await keeper.clear(["models"])
@@ -223,7 +224,7 @@ async def test_clear_all_data(ctx: AppContext, keeper: Retention, events: EventL
     assert cleared["history"] == 1 and cleared["chats"] == 1 and cleared["voice_chats"] == 1
     assert cleared["memory"] == 1 and cleared["notes"] == 1 and cleared["tasks"] == 1
     assert cleared["clipboard"] == 1 and cleared["usage"] == 1 and cleared["secrets"] == 1
-    assert cleared["screenshots"] == 1
+    assert cleared["screenshots"] == 1 and cleared["voice_cache"] == 1
     for table in ("history", "chats", "messages", "memory", "notes", "tasks", "usage"):
         assert ctx.db.query(f"SELECT * FROM {table}") == [], table
     assert ctx.db.kv_get("voice_chat:voice") is None and ctx.db.kv_get("clipboard:items") is None
@@ -238,8 +239,10 @@ def test_inventory_counts(ctx: AppContext, keeper: Retention) -> None:
     _history(ctx, NOW, "два")
     ctx.notes.memory_add("Живёт в Казани")
     _old_file(paths.data_dir() / "summaries" / "a.wav", 0, b"1234")
+    _old_file(paths.cache_dir() / "tts" / "ok.pcm", 0, b"123456")  # звук «Готово, сэр.»
     data = keeper.inventory()
     items = {i["id"]: i for i in data["items"]}
+    assert items["voice_cache"] == {**items["voice_cache"], "count": 1, "bytes": 6, "clearable": True}
     assert items["history"]["count"] == 2 and items["history"]["bytes"] > 0
     assert items["memory"]["count"] == 1
     assert items["summaries"] == {**items["summaries"], "count": 1, "bytes": 4}

@@ -62,7 +62,8 @@ class VoiceSettings(_Model):
     silent_mode: bool = False  # тихий режим: без ответов голосом
     input_device: str = ""  # часть имени микрофона; "" — по умолчанию
     sensitivity: float = Field(0.5, ge=0.0, le=1.0)  # чувствительность детектора речи
-    asr_model: Literal["gigaam-v3", "gigaam-v3-punct", "vosk-small"] = "gigaam-v3"
+    # итог фразы: GigaAM или Vosk на ПК, или ElevenLabs Scribe (облако по ключу ElevenLabs; «Джарвис» — на ПК)
+    asr_model: Literal["gigaam-v3", "gigaam-v3-punct", "vosk-small", "elevenlabs"] = "gigaam-v3"
     # язык команд: ru — GigaAM; другой или auto — итоговый текст фразы распознаёт Whisper (скачается сам)
     language: CommandLanguage = "ru"
     end_silence_ms: int = Field(450, ge=300, le=2000)  # столько тишины после речи — фраза закончилась
@@ -141,8 +142,8 @@ class AiSettings(_Model):
     # скорость ответа: fast — модель думает меньше (усилие low), deep — дольше и тщательнее, balanced — как у
     # модели по умолчанию
     speed: Literal["fast", "balanced", "deep"] = "fast"
-    # «Всё вместе»: просьбу что-то сделать в программе («напиши Ане в телеграме…») сразу отдать агенту,
-    # не тратя на это лишний ответ модели
+    # «Всё вместе»: дело на компьютере не из лёгких («напиши Ане…», «поставь будильник…», «что на экране?») —
+    # сразу агенту, без лишнего ответа модели; чату — одна простая команда, сведения, память, заметки
     auto_agent: bool = True
     # модель понимает картинки (снимки окон для агента, картинки в чате): auto — по провайдеру и модели
     vision: Literal["auto", "on", "off"] = "auto"

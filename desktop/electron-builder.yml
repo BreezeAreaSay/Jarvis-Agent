@@ -35,7 +35,9 @@ win:
       arch: [x64]
   icon: build/icon.ico
   artifactName: Jarvis-Setup-${version}.exe
-  # подписи нет: без rcedit под Wine значок exe ставится через afterPack
+  # подпись — если задан сертификат (CSC_LINK и CSC_KEY_PASSWORD, см. scripts/build-win.ps1 -Certificate);
+  # без него — как раньше, без подписи. Подписанную версию выпустили — дальше подписывать все: обновление
+  # проверяет издателя по подписи установленной версии
   signAndEditExecutable: true
 nsis:
   oneClick: false

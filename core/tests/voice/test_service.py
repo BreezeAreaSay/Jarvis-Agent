@@ -18,7 +18,15 @@ from jarvis.voice.asr import vad_params
 from jarvis.voice.models import ModelManager
 from jarvis.voice.service import Voice
 from tests.conftest import EventLog
-from tests.voice.helpers import FakeMic, FakeRecognizers, FakeVad, FakeWhisper, InstalledModels, Script
+from tests.voice.helpers import (
+    FakeCloud,
+    FakeMic,
+    FakeRecognizers,
+    FakeVad,
+    FakeWhisper,
+    InstalledModels,
+    Script,
+)
 
 
 class FakeTts:
@@ -387,3 +395,66 @@ async def test_follow_up_after_question(rig: Rig, ctx: AppContext, monkeypatch: 
     ctx.settings.patch({"voice": {"follow_up_s": 0}})
     rig.voice.follow_up(question=True)
     assert calls[-1] == (0.0, True)  # продолжение выключено — и для вопросов
+
+
+class FakeScribe:
+    """Облачное распознавание для сервиса: поток на каждую обращённую фразу — FakeCloud по сценарию."""
+
+    def __init__(self, script: Script) -> None:
+        self.script = script
+        self.clouds: list[FakeCloud] = []
+        self.resets = 0
+
+    def stream(self) -> FakeCloud:
+        self.clouds.append(FakeCloud(self.script))
+        return self.clouds[-1]
+
+    def available(self) -> str:
+        return ""
+
+    def reset(self) -> None:
+        self.resets += 1
+
+
+async def test_elevenlabs_mode_uses_cloud_and_not_gigaam(rig: Rig, ctx: AppContext) -> None:
+    ctx.settings.patch({"voice": {"asr_model": "elevenlabs"}})
+    scribe = FakeScribe(rig.script)
+    rig.voice.scribe = scribe
+    await rig.voice.start()
+    await until(lambda: rig.mics and rig.voice.state == "idle")
+    rig.say("джарвис включи музыку")
+    await until(lambda: rig.dispatched)
+    assert rig.dispatched == [("включи музыку", "voice")]
+    assert len(scribe.clouds) == 1 and scribe.clouds[0].frames and scribe.clouds[0].closed
+    assert rig.script.finals == []  # GigaAM в этом режиме не зовётся
+    rig.say("какая сегодня погода")  # чужой разговор в облако не уходит
+    await asyncio.sleep(0.3)
+    assert len(scribe.clouds) == 1
+
+
+async def test_elevenlabs_without_key_hears_with_vosk(rig: Rig, ctx: AppContext) -> None:
+    ctx.settings.patch({"voice": {"asr_model": "elevenlabs"}})
+    await rig.voice.start()
+    await until(lambda: rig.mics and rig.voice.state == "idle")
+    assert "ключ" in rig.voice.status()["cloud_error"]
+    rig.say("джарвис сверни все окна")
+    await until(lambda: rig.dispatched)
+    assert rig.dispatched == [("сверни все окна", "voice")]
+    assert rig.script.finals == []  # текст потоковой Vosk, без GigaAM
+
+
+async def test_new_elevenlabs_key_lifts_cloud_pause(rig: Rig, ctx: AppContext) -> None:
+    scribe = FakeScribe(rig.script)
+    rig.voice.scribe = scribe
+    await rig.voice.start()
+    ctx.secrets.set("elevenlabs_api_key", "sk_" + "1" * 40)
+    await until(lambda: scribe.resets == 1)
+    ctx.secrets.set("openai_api_key", "sk-x")
+    await asyncio.sleep(0.05)
+    assert scribe.resets == 1
+
+
+def test_elevenlabs_mode_needs_no_gigaam_download() -> None:
+    settings = Settings.model_validate({"voice": {"asr_model": "elevenlabs"}})
+    ids = ModelManager.required_ids(settings)
+    assert "gigaam-v3" not in ids and "vosk-small" in ids and "silero-vad" in ids

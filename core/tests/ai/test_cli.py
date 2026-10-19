@@ -232,6 +232,7 @@ async def test_agent_works_as_one_program_run(
         [{"say": '{"steps": ["Нажать «Написать»"]}'}],
         [
             {"tool": "ui_click", "args": {"id": "e1", "step": 1}},
+            {"tool": "finish", "args": {"summary": "Открыл новое письмо."}},  # проверка по снимку
             {"tool": "finish", "args": {"summary": "Открыл новое письмо."}},
             {"say": "Готово."},
         ],
@@ -243,6 +244,7 @@ async def test_agent_works_as_one_program_run(
     assert [s["status"] for s in events.of("agent.step")] == ["running", "ok"]
     work = next(r for r in fake.runs if "одним JSON" not in r["stdin"])  # план идёт параллельно
     assert work["tools"][0]["name"] == "ui_click" and "«Написать»: нажато" in work["tools"][0]["text"]
+    assert work["tools"][1]["text"].startswith("Проверка перед итогом")
     assert "--no-session-persistence" in work["argv"] and "агент" in work["system"]
     assert "Задача: Открой новое письмо" in json.loads(work["stdin"])["message"]["content"][0]["text"]
 

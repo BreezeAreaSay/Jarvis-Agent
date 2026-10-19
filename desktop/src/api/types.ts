@@ -48,7 +48,7 @@ export interface Settings {
     silent_mode: boolean;
     input_device: string;
     sensitivity: number;
-    asr_model: "gigaam-v3" | "gigaam-v3-punct" | "vosk-small";
+    asr_model: "gigaam-v3" | "gigaam-v3-punct" | "vosk-small" | "elevenlabs";
     /** Язык команд: ru — GigaAM; другой или auto — Whisper. */
     language: "ru" | "auto" | "en" | "uk" | "de" | "fr" | "es" | "it" | "pt" | "pl" | "tr" | "ja" | "ko" | "zh";
     /** Тишина после речи, по которой фраза закончилась, мс. */
@@ -377,6 +377,8 @@ export interface UiMessage {
     status?: string;
     stopped?: boolean;
     agent?: { run_id: string; status: string; steps: number; plan: string[] };
+    /** Удачный прогон агента, который можно запомнить сценарием (POST /api/agent/scenario). */
+    recipe?: { request: string; actions: { type: string; value: string }[]; scenario_id?: string };
   };
 }
 

@@ -17,13 +17,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from jarvis import paths
+from jarvis.ai.uia import find_by_name
 from jarvis.commands import keys as keyops
 from jarvis.commands import numbers
 from jarvis.commands.matcher import display_title
 from jarvis.commands.model import Action, Entry
 from jarvis.commands.sites import looks_like_url, search_url, to_url
 from jarvis.platform.base import PlatformError
-from jarvis.services import ExecResult, Source, UserFacingError
+from jarvis.services import ExecResult, NeedsAgent, Source, UserFacingError
 
 if TYPE_CHECKING:
     from jarvis.commands.service import Commands
@@ -64,6 +65,24 @@ FOLDER_NAMES = {
     "видео": "videos",
 }
 MUSIC_APPS = ("spotify", "yandex_music", "aimp", "foobar", "vlc")
+# «Включи музыку»: заиграла ли — проверяем столько раз через столько секунд (≈2,4 с)
+PLAY_CHECKS = 8
+PLAY_CHECK_S = 0.3
+# Launch.App, за которым ещё действия (сценарий): окно программы ждём не дольше LAUNCH_WAIT_S, новому окну
+# даём догрузиться LAUNCH_SETTLE_S (кнопки, плеер), уже открытому — выйти вперёд FOCUS_SETTLE_S
+LAUNCH_WAIT_S = 15.0
+LAUNCH_POLL_S = 0.25
+LAUNCH_SETTLE_S = 1.5
+FOCUS_SETTLE_S = 0.3
+# Ui.Click / Ui.Type: элемент окна впереди ждём, пока окно догружается; после нажатия — мгновение окну
+UI_WAIT_S = 8.0
+UI_POLL_S = 0.3
+UI_SETTLE_S = 0.4
+UI_LIMIT = 300
+MUSIC_TASK = (
+    "Включи музыку{where}: открой окно программы и нажми кнопку воспроизведения. Если трек не выбран — "
+    "запусти подборку на главной (например, «Моя волна» в Яндекс Музыке) и проверь, что музыка заиграла."
+)
 
 WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
 MONTHS_GEN = (
@@ -165,6 +184,7 @@ class RunState:
     message: str = ""
     say: str = ""
     data: dict[str, Any] = field(default_factory=dict)
+    rest: int = 0  # действий после текущего: запуск программы перед ними ждёт её окна
 
     def info(self, message: str, say: str = "") -> None:
         self.message = message
@@ -200,6 +220,13 @@ def _degrees_words(n: float) -> str:
     v = round(n)
     sign = "плюс " if v > 0 else "минус " if v < 0 else ""
     return f"{sign}{abs(v)} {numbers.plural(abs(v), numbers.DEGREES)}"
+
+
+def _window_is(window: Any, name: str) -> bool:
+    """Окно программы name: тот же exe («Telegram.exe» или «Telegram») или name — в заголовке."""
+    want = name.casefold().removesuffix(".exe")
+    exe = str(window.exe or "").casefold().removesuffix(".exe")
+    return bool(want) and (exe == want or want in str(window.title or "").casefold())
 
 
 def city_variants(text: str) -> list[str]:
@@ -281,6 +308,9 @@ class Executor:
             "Jarvis.Timer": self._timer,
             "Jarvis.Reminder": self._reminder,
             "Jarvis.Briefing": self._briefing,
+            "Ui.Click": self._ui_click,
+            "Ui.Type": self._ui_type,
+            "Mouse.MoveInWindow": self._mouse_in_window,
         }
 
     # --- вход ---------------------------------------------------------------------------------------
@@ -295,11 +325,13 @@ class Executor:
             return await self._run_handler(entry, slots, source, title)
         state = RunState(entry, dict(slots), source, depth)
         try:
-            for action in cmd.actions:
+            for i, action in enumerate(cmd.actions):
+                state.rest = len(cmd.actions) - i - 1
                 await self.run_action(action, state)
             say = substitute(cmd.say, slots) if cmd.say else state.say
         except (UserFacingError, PlatformError) as e:
-            return ExecResult(False, title, str(e), icon=icon, command_ids=[cmd.id])
+            data = {"agent_task": e.task} if isinstance(e, NeedsAgent) else {}
+            return ExecResult(False, title, str(e), icon=icon, command_ids=[cmd.id], data=data)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -358,18 +390,53 @@ class Executor:
         if _DRIVE.match(value) or "\\" in value or "/" in value:
             await self._platform(platform.launch, value, "")
             return
-        target, name = value, value
+        target, name, exe = value, value, ""
         if st.slots.get("app") == value and st.slots.get("app_id"):
             target = str(st.slots["app_id"])
         else:
             found = self.service.apps.resolve(value)
             if found is not None:
-                target, name = found.app_id, found.name
+                target, name, exe = found.app_id, found.name, found.exe
+        before = await self._windows() if st.rest else []
         if _URI.match(target) and not _DRIVE.match(target):
             await self._platform(platform.open_url, target)
         else:
             await self._platform(platform.launch, target, "")
         st.data["app"] = name
+        if st.rest:  # дальше — действия в этой программе: дождаться, пока она откроется
+            await self._wait_window(name, exe or target, before)
+
+    async def _windows(self) -> list[Any]:
+        try:
+            return list(await self._platform(self.ctx.platform.list_windows) or [])
+        except PlatformError:
+            return []
+
+    async def _wait_window(self, name: str, exe: str, before: list[Any]) -> None:
+        """Окно запущенной программы: уже было — дать ему выйти вперёд; нет — ждать, пока появится, и дать
+        догрузиться. Не дождались за LAUNCH_WAIT_S — дальше всё равно: окна может и не быть, это не ошибка."""
+        file = re.split(r"[\\/]", exe)[-1].casefold()
+        stem = file[:-4] if file.endswith(".exe") else ""  # у программ из Магазина — AppUserModelID, не exe
+        keys = [k for k in (name.casefold().strip(), stem) if len(k) >= 3]
+
+        def mine(window: Any) -> bool:
+            text = f"{window.title} {window.exe}".casefold()
+            return any(k in text for k in keys)
+
+        if any(mine(w) for w in before):
+            await asyncio.sleep(FOCUS_SETTLE_S)
+            return
+        seen = {w.hwnd for w in before}
+        polls = round(LAUNCH_WAIT_S / LAUNCH_POLL_S)
+        for n in range(polls):
+            await asyncio.sleep(LAUNCH_POLL_S)
+            windows = await self._windows()
+            fresh = [w for w in windows if w.hwnd not in seen]
+            # своё окно узнаём по названию или процессу; любое новое — тоже, если прошла секунда
+            if any(mine(w) for w in fresh) or (fresh and (n + 1) * LAUNCH_POLL_S >= 1.0):
+                await asyncio.sleep(LAUNCH_SETTLE_S)
+                return
+        log.info("команды: окно «%s» не появилось за %.0f с — продолжаю", name, LAUNCH_WAIT_S)
 
     async def _launch_file(self, value: str, st: RunState) -> None:
         path, args = _split_path_args(value)
@@ -502,6 +569,71 @@ class Executor:
                 raise UserFacingError(f"{name} не запущен") from None
             raise
         await asyncio.sleep(0.15)  # окну нужно мгновение, чтобы выйти на передний план
+
+    # --- элементы окна (шаги, записанные агентом) ---------------------------------------------------
+    async def _ui_click(self, value: str, st: RunState) -> None:
+        ui, element = await self._ui_element(value, st)
+        await self._platform(ui.click, element.id)
+        await asyncio.sleep(UI_SETTLE_S)
+
+    async def _ui_type(self, value: str, st: RunState) -> None:
+        name, sep, text = value.partition("|")
+        if not sep or not name.strip():
+            raise UserFacingError("«Ввести текст в поле»: нужно «поле | текст», например «Кому | Иван»")
+        ui, element = await self._ui_element(name.strip(), st)
+        await self._platform(ui.set_text, element.id, text.strip())
+        await asyncio.sleep(UI_SETTLE_S)
+
+    @staticmethod
+    def _handoff(st: RunState, message: str) -> NeedsAgent:
+        """Шаг, записанный агентом, не сработал — дело снова берёт агент: задача — сам сценарий (его
+        название — это и есть просьба человека)."""
+        why = message[:1].lower() + message[1:]
+        return NeedsAgent(message, f"{st.entry.command.name}. (Готовый сценарий не справился: {why}.)")
+
+    async def _ui_element(self, name: str, st: RunState) -> tuple[Any, Any]:
+        """Элемент окна впереди по названию; пока его нет — ждём (окно догружается). Так и не появился —
+        NeedsAgent: дело берёт агент."""
+        if not name:
+            raise UserFacingError("Не указано, какой элемент окна нужен")
+        ui = getattr(getattr(self.ctx, "agent", None), "ui", None)
+        if ui is None:
+            raise self._handoff(st, "Элементы окон недоступны")
+        deadline = time.monotonic() + UI_WAIT_S
+        while True:
+            try:
+                fg = await self._platform(self.ctx.platform.foreground_window)
+                snapshot = await self._platform(ui.snapshot, UI_LIMIT, fg.hwnd if fg is not None else None)
+            except PlatformError as e:
+                raise self._handoff(st, f"Окно не читается: {e}") from e
+            element = find_by_name(snapshot.elements, name)
+            if element is not None:
+                return ui, element
+            if time.monotonic() >= deadline:
+                raise self._handoff(st, f"В окне «{snapshot.window}» нет «{name}»")
+            await asyncio.sleep(UI_POLL_S)
+
+    async def _mouse_in_window(self, value: str, st: RunState) -> None:
+        """Курсор — в точку окна программы («Telegram.exe | 150 -40»: от левого и верхнего края, минус — от
+        правого и нижнего); окно не впереди — вывести вперёд; окна нет — дело берёт агент."""
+        name, sep, point = value.partition("|")
+        m = _COORDS.match(point)
+        if not sep or not name.strip() or m is None:
+            raise UserFacingError("«Навести курсор в окно»: нужно «программа | x y» — «Telegram | 150 60»")
+        name, x, y = name.strip(), int(m.group(1)), int(m.group(2))
+        platform = self.ctx.platform
+        windows = await self._windows()
+        front = next((w for w in windows if w.foreground and _window_is(w, name)), None)
+        window = front or next((w for w in windows if _window_is(w, name)), None)
+        if window is None:
+            raise self._handoff(st, f"Окна «{name}» нет")
+        if front is None:
+            await self._platform(platform.window_action, "focus", window.hwnd)
+            await asyncio.sleep(FOCUS_SETTLE_S)
+        left, top, right, bottom = window.rect
+        px = min(max(left + x if x >= 0 else right + x, left), right - 1)
+        py = min(max(top + y if y >= 0 else bottom + y, top), bottom - 1)
+        await self._platform(platform.mouse_move, px, py)
 
     # --- клавиатура и мышь --------------------------------------------------------------------------
     async def _keys_press(self, value: str, st: RunState) -> None:
@@ -673,33 +805,53 @@ class Executor:
     async def _play_pause(self, value: str, st: RunState) -> None:
         platform = self.ctx.platform
         mode = value.casefold()
-        if mode in ("play", "pause"):
-            info = await self._platform(platform.now_playing)
-            if mode == "pause" and info is not None and info.status in ("paused", "stopped"):
+        info = await self._platform(platform.now_playing)
+        if mode not in ("play", "pause"):  # «Переключить»: играет — пауза, нет — включить (и проверить)
+            mode = "pause" if info is not None and info.status == "playing" else "play"
+        if mode == "pause":
+            if info is not None and info.status in ("paused", "stopped"):
                 st.info("Уже на паузе")
                 return
-            if mode == "play" and info is not None and info.status == "playing":
-                st.info("Музыка уже играет")
-                return
-            if mode == "play" and info is None and await self._start_music_app(st):
-                return
+            await self._platform(platform.media_key, "play_pause")
+            return
+        if info is not None and info.status == "playing":
+            st.info("Музыка уже играет")
+            return
+        # программа — та, что играла, или только что запущенная сценарием; нет ни той, ни другой — своя
+        app = info.app if info is not None else str(st.data.get("app") or "")
+        if info is None and not app:
+            app = await self._start_music_app(st)
         await self._platform(platform.media_key, "play_pause")
+        if not await self._playing():
+            # клавиша «Play» без выбранного трека ничего не включает («Моя волна» ждёт щелчка) — агент
+            # откроет программу и нажмёт кнопку сам
+            where = f" в «{app}»" if app else ""
+            raise NeedsAgent("Музыка не заиграла", MUSIC_TASK.format(where=where))
 
-    async def _start_music_app(self, st: RunState) -> bool:
-        """Ничего не играет и плеера нет — запустить установленную музыкальную программу и включить музыку."""
+    async def _playing(self) -> bool:
+        """После «Play» музыка и правда заиграла (сеанс воспроизведения Windows)."""
+        for n in range(PLAY_CHECKS + 1):
+            if n:
+                await asyncio.sleep(PLAY_CHECK_S)
+            info = await self._platform(self.ctx.platform.now_playing)
+            if info is not None and info.status == "playing":
+                return True
+        return False
+
+    async def _start_music_app(self, st: RunState) -> str:
+        """Ничего не играет и плеера нет — запустить установленную музыкальную программу (подождав, пока
+        она откроется). Вернёт её название ("" — музыкальной программы нет)."""
         from jarvis.commands.apps import KNOWN_BY_KEY
 
         for key in MUSIC_APPS:
             installed = self.service.apps.find_installed(KNOWN_BY_KEY[key])
             if installed is None:
                 continue
-            platform = self.ctx.platform
-            await self._platform(platform.launch, installed.app_id, "")
+            await self._platform(self.ctx.platform.launch, installed.app_id, "")
             await asyncio.sleep(4.0)
-            await self._platform(platform.media_key, "play_pause")
             st.info(f"Запускаю {installed.name}")
-            return True
-        return False
+            return str(installed.name)
+        return ""
 
     async def _media_next(self, value: str, st: RunState) -> None:
         await self._platform(self.ctx.platform.media_key, "next")

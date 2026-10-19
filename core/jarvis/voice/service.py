@@ -2,6 +2,12 @@
 → ctx.dispatcher.handle(команда, "voice"). Всё локально: звук никуда не уходит. Команды не по-русски
 (voice.language) — Whisper по концу фразы, без потоковой модели (она русская).
 
+voice.asr_model = "elevenlabs" — итог обращённой к Jarvis фразы распознаёт ElevenLabs Scribe v2 Realtime
+(jarvis.voice.scribe, ключ elevenlabs_api_key): звук уходит, пока человек говорит, текст готов к концу фразы.
+VAD, «Джарвис» и чужие разговоры — по-прежнему на ПК (Vosk); GigaAM в этом режиме не грузится: облако не
+ответило — текст Vosk. Второй VAD с короткой паузой (make_pause_vad) говорит слушателю, что речь стихла, —
+итог фразы начинается заранее и на ПК.
+
 Потоки: PortAudio кладёт блоки в очередь; поток «jarvis-voice» читает микрофон, считает уровень (voice.level
 ~15 Гц) и ведёт слушателя (jarvis.voice.listener): VAD, распознавание и решения — там же, не в цикле ядра.
 Модели распознавания грузятся один раз (Recognizers) и работают только пока человек говорит.
@@ -37,6 +43,7 @@ from jarvis.voice.audio import MicInput
 from jarvis.voice.dsp import RATE, LevelMeter, level, resample
 from jarvis.voice.listener import LISTEN_TIMEOUT_S, Listener, Session
 from jarvis.voice.ptt import PttError, PttHook
+from jarvis.voice.scribe import Scribe
 
 if TYPE_CHECKING:
     from jarvis.context import AppContext
@@ -75,6 +82,8 @@ class Voice(BaseService):
         recognizers: Any = None,
         mic_factory: Callable[[str], Any] | None = None,
         vad_factory: Callable[[float, float], Any] | None = None,  # (чувствительность, пауза в конце, с)
+        pause_vad_factory: Callable[[float], Any] | None = None,  # (чувствительность) → VAD коротких пауз
+        scribe: Any = None,
         auto_download: bool | None = None,
     ) -> None:
         super().__init__(ctx)
@@ -82,8 +91,16 @@ class Voice(BaseService):
         self.recognizers: Any = recognizers or Recognizers(self.models)
         self.mic_factory = mic_factory or (lambda device: MicInput(device))
         self.vad_factory = vad_factory or self.recognizers.make_vad
+        self.pause_vad_factory = pause_vad_factory or getattr(self.recognizers, "make_pause_vad", None)
+        self.scribe: Any = scribe or Scribe(ctx)
         self._auto_download = auto_download
-        self.listener = Listener(self, vad=_NoVad(), stream_factory=self._new_session, final=self._final_text)
+        self.listener = Listener(
+            self,
+            vad=_NoVad(),
+            stream_factory=self._new_session,
+            final=self._final_text,
+            cloud_factory=self._new_cloud,
+        )
         self.reason = ""
         self.error = ""
         self.input_device = ""
@@ -111,6 +128,7 @@ class Voice(BaseService):
         self._started = True
         self._unsubs.append(self.ctx.settings.on_change(self._on_settings))
         self._unsubs.append(self.ctx.bus.on("tts.state", lambda _e: self._publish_state()))
+        self._unsubs.append(self.ctx.bus.on("secrets.changed", self._on_secret))
         self._unsubs.append(self.models.add_listener(self._on_model_event))
         await self._apply()
         self._setup_ptt()
@@ -235,6 +253,8 @@ class Voice(BaseService):
             "models_ready": self.models_ready(),
             "input_device": self.input_device or s.input_device,
             "ptt_error": self.ptt_error,
+            # выбрано распознавание ElevenLabs, но звать его сейчас нельзя (нет ключа, пауза после ошибки)
+            "cloud_error": self.scribe.available() if s.asr_model == "elevenlabs" else "",
         }
 
     def models_list(self) -> list[dict[str, Any]]:
@@ -267,6 +287,16 @@ class Voice(BaseService):
             self.ctx.tts.silence()
         except Exception:
             log.exception("голос: не удалось заглушить речь")
+
+    def stoppable(self) -> bool:
+        """Есть что останавливать «стопом» без «Джарвис»: работает агент, ждёт ответа «Разрешить?», Jarvis
+        говорит (из потока распознавания — только чтение флагов)."""
+        if getattr(getattr(self.ctx, "agent", None), "busy", False):
+            return True
+        waiting = getattr(getattr(self.ctx, "confirmations", None), "waiting", None)
+        if callable(waiting) and waiting():
+            return True
+        return self.tts_speaking()
 
     def earcon(self, name: str) -> None:
         if not self.ctx.settings.value.voice.earcons:
@@ -513,30 +543,51 @@ class Voice(BaseService):
         rec = self.recognizers.streaming()
         return rec.session() if rec is not None else None
 
-    def _final_text(self, audio: np.ndarray, punct: bool) -> str:
+    def _new_cloud(self) -> Any:
+        """Облачное распознавание обращённой фразы (выбрано ElevenLabs, есть ключ, нет паузы после ошибки)."""
+        return self.scribe.stream()
+
+    def _offline(self, punct: bool = False) -> Any:
+        """Модель итога на ПК. В режиме ElevenLabs — никакой (текст Vosk), если только Vosk не скачана."""
+        asr_model = self.ctx.settings.value.voice.asr_model
+        if asr_model == "elevenlabs" and self.models.installed(m.STREAM_ID):
+            return None
+        return self.recognizers.pick_offline(asr_model, punct=punct)
+
+    def _final_text(self, audio: np.ndarray, punct: bool) -> str | None:
+        """Итог фразы на ПК; None — модели для итога нет, слушатель берёт текст потоковой."""
         whisper = self._whisper()
         if whisper is not None:
             return str(whisper.recognize(audio, self._command_language() or ""))
-        asr = self.recognizers.pick_offline(self.ctx.settings.value.voice.asr_model, punct=punct)
+        asr = self._offline(punct)
         if asr is not None:
             return str(asr.recognize(audio))
-        stream = self.recognizers.streaming()
-        return str(stream.recognize(audio)) if stream is not None else ""
+        return None
 
     def _make_vad(self, s: VoiceSettings) -> Any:
         return self.vad_factory(s.sensitivity, s.end_silence_ms / 1000)
+
+    def _make_pause_vad(self, s: VoiceSettings) -> Any:
+        """VAD коротких пауз для слушателя; не создался — без него (итог фразы — только после её конца)."""
+        if self.pause_vad_factory is None:
+            return None
+        try:
+            return self.pause_vad_factory(s.sensitivity)
+        except Exception as e:
+            log.warning("голос: VAD пауз не создан — итог фразы только после её конца: %s", e)
+            return None
 
     def _load_engines(self) -> Any:
         s = self.ctx.settings.value.voice
         vad = self._make_vad(s)
         try:
-            self.recognizers.pick_offline(s.asr_model)  # GigaAM — секунда-две, заранее, не на первой фразе
-        except AsrError as e:
-            log.warning("голос: %s", e)
-        try:
             self.recognizers.streaming()
         except AsrError as e:
             log.warning("голос: потоковая модель недоступна: %s", e)
+        try:
+            self._offline()  # GigaAM грузится секунду-две — заранее (в режиме ElevenLabs она не нужна)
+        except AsrError as e:
+            log.warning("голос: %s", e)
         self._whisper()  # команды не по-русски — Whisper тоже заранее
         return vad
 
@@ -551,7 +602,8 @@ class Voice(BaseService):
         if stop.is_set():
             return
         listener.vad = vad
-        listener.utt = None
+        listener.pause_vad = self._make_pause_vad(self.ctx.settings.value.voice)
+        listener.drop()
         listener.preroll.clear()
         with self._lock:
             self._reconfig.discard("vad")
@@ -579,7 +631,7 @@ class Voice(BaseService):
         finally:
             with contextlib.suppress(Exception):
                 mic.close()
-            listener.utt = None
+            listener.drop()
             self.ctx.bus.publish("voice.level", {"level": 0.0})
             log.info("голос: микрофон закрыт")
 
@@ -601,21 +653,22 @@ class Voice(BaseService):
             with contextlib.suppress(Exception):
                 mic.close()
             mic = self.mic_factory(s.input_device)
-            listener.utt = None
+            listener.drop()
         if "vad" in todo:
             try:
                 listener.vad = self._make_vad(s)
-                listener.utt = None
+                listener.pause_vad = self._make_pause_vad(s)
+                listener.drop()
             except Exception:
                 log.exception("голос: VAD не перенастроился")
         if "final" in todo:
             try:
-                self.recognizers.pick_offline(s.asr_model)
                 self.recognizers.streaming()
+                self._offline()
             except AsrError as e:
                 log.warning("голос: %s", e)
             self._whisper()
-            listener.utt = None  # начатая фраза — потоковой моделью прежнего языка
+            listener.drop()  # начатая фраза — потоковой моделью прежнего языка
         return mic
 
     def _on_settings(self, old: Settings, new: Settings) -> None:
@@ -627,6 +680,8 @@ class Voice(BaseService):
                 self._reconfig.add("vad")
             if o.asr_model != n.asr_model or o.language != n.language:
                 self._reconfig.add("final")
+        if o.asr_model != n.asr_model:
+            self.scribe.reset()
         if (
             o.enabled != n.enabled
             or o.asr_model != n.asr_model
@@ -640,6 +695,10 @@ class Voice(BaseService):
                 loop.call_soon_threadsafe(self._setup_ptt)
         if o.enabled != n.enabled or o.wake_words != n.wake_words or o.prefix_mode != n.prefix_mode:
             self._publish_state()
+
+    def _on_secret(self, event: Any) -> None:
+        if (event.data or {}).get("name") == "elevenlabs_api_key":
+            self.scribe.reset()  # новый ключ — прежняя пауза после ошибки («неверный ключ») не действует
 
     # --- внутреннее: распознавание записи ----------------------------------------------------------
     def _transcribe_sync(self, x: np.ndarray, lang: str) -> str:

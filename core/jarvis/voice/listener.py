@@ -6,7 +6,14 @@
 — сразу voice.wake, а если Jarvis говорит — замолчать: перебивание). Конец речи (VAD; фраза стихла на
 «открой…» или предлоге — ещё GRACE_S ждём продолжения), предел длины или отпущенная клавиша — итоговый текст
 GigaAM по всей фразе (нет GigaAM — текст потоковой модели; команды не по-русски — Whisper, без потоковой) →
-voice.final {text, wake, command} → решение:
+voice.final {text, wake, command} → решение.
+
+Итог — к концу фразы, а не после него. Второй VAD с короткой паузой (pause_vad, ~0,2 с) замечает, что речь
+стихла, раньше основного (end_silence_ms): обращённую к Jarvis фразу ПК распознаёт сразу (в своём потоке),
+пока основной VAD ещё ждёт тишины; речь продолжилась — догадка выброшена. Облачное распознавание
+(cloud_factory — ElevenLabs) начинается, как только фраза стала обращённой («Джарвис» в частичном тексте,
+клавиша, просьба, окно продолжения): звук уходит по ходу речи, на паузе — commit заранее; облако не ответило —
+текст ПК.
 
 - просьба ждёт фразу (listen_now / ask_yes_no / capture_text / «Джарвис» без команды) — фраза её;
   новая просьба отменяет прежнюю;
@@ -24,6 +31,7 @@ voice.final {text, wake, command} → решение:
 
 import logging
 import queue
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -51,6 +59,8 @@ MAX_FOLLOW_CHAIN = 2  # команд подряд из окна продолже
 MAX_FOLLOW_TOTAL = 4  # вместе с ответами на уточняющие вопросы Jarvis — всё равно не больше
 GRACE_S = 0.5  # фраза стихла на «открой…» или предлоге — ждём продолжения ещё столько
 GRACE_FRAMES = max(1, round(GRACE_S * RATE / FRAME))
+CLOUD_WAIT_S = 2.0  # конец фразы → итог облака не дольше; дальше — текст ПК
+GUESS_WAIT_S = 10.0  # распознавание ПК, начатое на паузе, уже идёт — ждём его, а не начинаем заново
 # на этом фраза почти никогда не кончается: «открой… браузер», «поставь будильник на… семь»
 GRACE_WORDS = frozenset(
     {
@@ -72,6 +82,8 @@ class Host(Protocol):
     def silence_tts(self) -> None: ...
     def earcon(self, name: str) -> None: ...
     def activity(self, value: str) -> None: ...
+    # идёт то, что «стоп» должен оборвать (агент, вопрос «Разрешить?», речь Jarvis): «стоп» — и без «Джарвис»
+    def stoppable(self) -> bool: ...
 
 
 class Session(Protocol):
@@ -82,7 +94,45 @@ class Session(Protocol):
     def finish(self) -> str: ...
 
 
-FinalFn = Callable[[np.ndarray, bool], str]  # (звук фразы, нужна ли пунктуация) → текст
+class CloudSession(Protocol):
+    """Фраза облачного распознавания (jarvis.voice.scribe.ScribeStream)."""
+
+    def feed(self, frame: np.ndarray) -> None: ...
+    def pause(self) -> None: ...  # речь стихла — итог сказанного заранее
+    def resume(self) -> None: ...  # речь продолжилась
+    def partial(self) -> str: ...
+    def failed(self) -> bool: ...
+    def finish(self, timeout: float, *, punct: bool = False) -> str | None: ...  # None — распознает ПК
+    def close(self) -> None: ...
+
+
+# (звук фразы, нужна ли пунктуация) → текст; None — модели для итога нет, годится текст потоковой
+FinalFn = Callable[[np.ndarray, bool], str | None]
+
+
+class Guess:
+    """Итог фразы на ПК, начатый на паузе в речи, — в своём потоке, пока основной VAD ждёт тишины."""
+
+    def __init__(self, fn: Callable[[], str | None]) -> None:
+        self.text: str | None = None
+        self.ok = False
+        self._done = threading.Event()
+        threading.Thread(target=self._run, args=(fn,), name="jarvis-asr-guess", daemon=True).start()
+
+    def _run(self, fn: Callable[[], str | None]) -> None:
+        try:
+            self.text = fn()
+            self.ok = True
+        except Exception:
+            log.exception("голос: распознавание на паузе упало")
+        finally:
+            self._done.set()
+
+    def result(self, timeout: float) -> tuple[bool, str | None]:
+        """(готово и без ошибки, текст)."""
+        if not self._done.wait(timeout):
+            return False, None
+        return self.ok, self.text
 
 
 @dataclass
@@ -121,6 +171,14 @@ class Utterance:
     next_partial: int = 0  # номер блока, на котором снова спросить потоковую модель
     grace: int = 0  # блоков тишины ещё ждём продолжения (фраза стихла на «открой…»); 0 — не ждём
     graced: bool = False  # ожидание уже было — второй раз не ждём
+    shown: str = ""  # последний показанный частичный текст
+    cloud: CloudSession | None = None
+    cloud_tried: bool = False  # облако уже звали для этой фразы (не открылось — больше не зовём)
+    cloud_sent: int = 0  # блоков фразы уже отдано облаку
+    heard: bool = False  # pause_vad уже слышал речь в этой фразе
+    voice_end: float = 0.0  # когда (по часам слушателя) речь стихла — для замера задержки
+    paused: bool = False  # pause_vad: речь стихла и не продолжилась
+    guess: Guess | None = None  # распознавание ПК, начатое на этой паузе
 
     @property
     def seconds(self) -> float:
@@ -201,11 +259,15 @@ class Listener:
         stream_factory: Callable[[], Session | None] | None = None,
         final: FinalFn | None = None,
         clock: Callable[[], float] = time.monotonic,
+        pause_vad: Any = None,
+        cloud_factory: Callable[[], CloudSession | None] | None = None,
     ) -> None:
         self.host = host
         self.vad = vad
+        self.pause_vad = pause_vad  # тот же VAD с короткой паузой: «речь стихла» раньше конца фразы
         self.stream_factory = stream_factory
         self.final = final
+        self.cloud_factory = cloud_factory
         self.clock = clock
         self.requests: list[Request] = []
         self.utt: Utterance | None = None
@@ -308,6 +370,7 @@ class Listener:
         self._drain(now)
         speaking = self._track_tts(now)
         is_speech = bool(self.vad.accept(frame))
+        voice = self._accept_pause_vad(frame)
         utt = self.utt
         if utt is None:
             self.preroll.push(frame)
@@ -324,7 +387,11 @@ class Listener:
         if speaking and not utt.manual:
             utt.echo = True
         self._feed(utt, frame, now)
-        limit = self.host.settings().max_utterance_s
+        s = self.host.settings()
+        self._stream_cloud(utt, s)
+        if voice is not None:
+            self._track_pause(utt, voice, now, s)
+        limit = s.max_utterance_s
         if utt.manual:
             if utt.seconds >= limit:
                 self._finish(now)
@@ -334,7 +401,7 @@ class Listener:
         elif utt.seconds >= limit:
             log.info("голос: фраза длиннее %d с — распознаю, что есть", limit)
             self._finish(now)
-            self.vad.reset()
+            self._reset_vads()
         self._update_activity(now)
 
     def tick(self) -> None:
@@ -419,16 +486,87 @@ class Listener:
             log.exception("голос: потоковая модель упала")
             utt.session = None
             return
-        if not text or text == utt.partial:
+        if text and text != utt.partial:
+            utt.partial = text
+            if not utt.wake_early and self._wake(text, utt)[0]:
+                utt.wake_early = True
+                self.host.publish("voice.wake", {})
+                if utt.echo or self.host.tts_speaking():
+                    self.host.silence_tts()  # перебивание: «Джарвис, стоп» поверх речи Jarvis
+        if not self._addressed(utt, self.host.settings()):  # чужой разговор и эхо интерфейсу не показываем
             return
-        utt.partial = text
-        if not utt.wake_early and self._wake(text, utt)[0]:
-            utt.wake_early = True
-            self.host.publish("voice.wake", {})
-            if utt.echo or self.host.tts_speaking():
-                self.host.silence_tts()  # перебивание: «Джарвис, стоп» поверх речи Jarvis
-        if self._addressed(utt, self.host.settings()):  # чужой разговор и эхо интерфейсу не показываем
-            self.host.publish("voice.partial", {"text": text, "wake": utt.wake_early})
+        shown = utt.partial
+        if utt.cloud is not None:  # текст облака точнее — его и показываем, пока он есть
+            try:
+                shown = utt.cloud.partial() or shown
+            except Exception:
+                log.debug("голос: частичный текст облака не получен", exc_info=True)
+        if shown and shown != utt.shown:
+            utt.shown = shown
+            self.host.publish("voice.partial", {"text": shown, "wake": utt.wake_early})
+
+    def _accept_pause_vad(self, frame: np.ndarray) -> bool | None:
+        """Слышит ли речь pause_vad (None — его нет или он упал)."""
+        if self.pause_vad is None:
+            return None
+        try:
+            return bool(self.pause_vad.accept(frame))
+        except Exception:
+            log.exception("голос: VAD пауз упал — дальше без него")
+            self.pause_vad = None
+            return None
+
+    def _reset_vads(self) -> None:
+        for vad in (self.vad, self.pause_vad):
+            if vad is None:
+                continue
+            try:
+                vad.reset()
+            except Exception:
+                log.debug("голос: VAD не сбросился", exc_info=True)
+
+    def _stream_cloud(self, utt: Utterance, s: VoiceSettings) -> None:
+        """Обращённая к Jarvis фраза — в облако: при первой возможности весь звук фразы, дальше — по блоку."""
+        if utt.cloud is None:
+            if utt.cloud_tried or self.cloud_factory is None or not self._addressed(utt, s):
+                return
+            utt.cloud_tried = True
+            try:
+                utt.cloud = self.cloud_factory()
+            except Exception:
+                log.exception("голос: облачное распознавание не началось")
+            if utt.cloud is None:
+                return
+        while utt.cloud_sent < len(utt.frames):
+            utt.cloud.feed(utt.frames[utt.cloud_sent])
+            utt.cloud_sent += 1
+
+    def _track_pause(self, utt: Utterance, voice: bool, now: float, s: VoiceSettings) -> None:
+        """Речь стихла — итог заранее (облако: commit, ПК: распознавание); продолжилась — забыть."""
+        if voice:
+            utt.heard = True
+            if utt.paused:
+                utt.paused = False
+                utt.guess = None
+                if utt.cloud is not None:
+                    utt.cloud.resume()
+            return
+        if utt.paused or not utt.heard:
+            return
+        utt.paused = True
+        # VAD решает, что речь стихла, спустя свою паузу — тогда она и стихла на самом деле
+        utt.voice_end = now - float(getattr(self.pause_vad, "min_silence", 0.0) or 0.0)
+        if utt.cloud is not None and not utt.cloud.failed():
+            utt.cloud.pause()
+        elif self.final is not None and self._addressed(utt, s):
+            audio = np.concatenate(utt.frames)
+            punct = self._punct()
+            final = self.final
+            utt.guess = Guess(lambda: final(audio, punct))
+
+    def _punct(self) -> bool:
+        req = self._active()
+        return bool(req is not None and req.punct)
 
     def _hold_on(self, utt: Utterance) -> bool:
         """Речь стихла, но фраза, похоже, не кончилась («Джарвис, открой… браузер»): подождать GRACE_S — вдруг
@@ -471,11 +609,23 @@ class Listener:
         self._finish(now)
 
     def _drop(self) -> None:
-        self.utt = None
-        try:
-            self.vad.reset()
-        except Exception:
-            log.debug("голос: VAD не сбросился", exc_info=True)
+        utt, self.utt = self.utt, None
+        if utt is not None:
+            self._close_cloud(utt)
+        self._reset_vads()
+
+    def drop(self) -> None:
+        """Бросить начатую фразу (смена микрофона, VAD, модели) — из потока распознавания."""
+        self._drop()
+
+    @staticmethod
+    def _close_cloud(utt: Utterance) -> None:
+        cloud, utt.cloud = utt.cloud, None
+        if cloud is not None:
+            try:
+                cloud.close()
+            except Exception:
+                log.debug("голос: облачный поток не закрылся", exc_info=True)
 
     def _active(self) -> Request | None:
         return self.requests[-1] if self.requests else None
@@ -492,26 +642,51 @@ class Listener:
         return not s.prefix_mode or bool(self.requests) or self._in_follow(utt.start)
 
     def _final_text(self, utt: Utterance, audio: np.ndarray, addressed: bool, stream_text: str) -> str:
-        if self.final is None or not len(audio):
+        final = self.final
+        if final is None or not len(audio):
             return stream_text
-        req = self._active()
-        punct = bool(req is not None and req.punct)
+        punct = self._punct()
+
+        def decode(x: np.ndarray, p: bool) -> str:
+            text = final(x, p)
+            return stream_text if text is None else text  # модели для итога нет — текст потоковой
+
         try:
             if utt.echo and not utt.wake_early and utt.session is not None:
                 # голос Jarvis в микрофоне: GigaAM — только если потоковая услышала активатор
                 if not self._wake(stream_text, utt)[0]:
                     return stream_text
-                return self.final(audio, punct)
+                return decode(audio, punct)
             if addressed or len(audio) <= int((HEAD_S + 0.5) * RATE):
-                return self.final(audio, punct)
+                return decode(audio, punct)
             # непрошеная длинная фраза (разговор, телевизор): сначала начало — есть ли там активатор
-            head = self.final(audio[: int(HEAD_S * RATE)], False)
+            head = decode(audio[: int(HEAD_S * RATE)], False)
             if self._wake(head, utt)[0]:
-                return self.final(audio, punct)
+                return decode(audio, punct)
             return stream_text or head
         except Exception:
             log.exception("голос: итоговое распознавание упало — беру потоковый текст")
             return stream_text
+
+    def _early_text(self, utt: Utterance) -> tuple[str | None, str]:
+        """Итог, начатый до конца фразы: облако или распознавание ПК на паузе; (None, "") — такого нет."""
+        cloud = utt.cloud
+        if cloud is not None:
+            try:
+                text = cloud.finish(CLOUD_WAIT_S, punct=self._punct())
+            except Exception:
+                log.exception("голос: облачное распознавание упало")
+                text = None
+            finally:
+                self._close_cloud(utt)
+            if text is not None:
+                return text, "облако"
+        guess = utt.guess
+        if guess is not None and utt.paused:
+            ok, text = guess.result(GUESS_WAIT_S)
+            if ok and text is not None:  # None — модели для итога нет: текст потоковой ниже
+                return text, "ПК на паузе"
+        return None, ""
 
     def _finish(self, now: float) -> None:
         utt = self.utt
@@ -522,15 +697,49 @@ class Listener:
         addressed = self._addressed(utt, s)
         if addressed:
             self._set_activity("processing")
-        stream_text = ""
-        if utt.session is not None:
-            try:
-                stream_text = utt.session.finish()
-            except Exception:
-                log.exception("голос: потоковая модель не закончила фразу")
-        audio = np.concatenate(utt.frames) if utt.frames else np.zeros(0, dtype=np.float32)
-        raw = " ".join(self._final_text(utt, audio, addressed, stream_text).split())
-        self._decide(utt, raw, now, s)
+        started = time.perf_counter()
+        text, how = self._early_text(utt) if addressed else (None, "")
+        if text is None:
+            self._close_cloud(utt)
+            stream_text = ""
+            if utt.session is not None:
+                try:
+                    stream_text = utt.session.finish()
+                except Exception:
+                    log.exception("голос: потоковая модель не закончила фразу")
+            audio = np.concatenate(utt.frames) if utt.frames else np.zeros(0, dtype=np.float32)
+            text, how = self._final_text(utt, audio, addressed, stream_text), "ПК"
+        if addressed and utt.paused:
+            wait_ms = (now - utt.voice_end) * 1000
+            asr_ms = (time.perf_counter() - started) * 1000
+            log.info(
+                "голос: текст фразы через %d мс после конца речи (тишина %d мс, распознавание %d мс — %s)",
+                round(wait_ms + asr_ms),
+                round(wait_ms),
+                round(asr_ms),
+                how,
+            )
+        self._decide(utt, " ".join(text.split()), now, s)
+
+    def _stoppable(self) -> bool:
+        check = getattr(self.host, "stoppable", None)
+        try:
+            return bool(check()) if callable(check) else False
+        except Exception:
+            log.debug("голос: не узнать, есть ли что останавливать", exc_info=True)
+            return False
+
+    def _stop_now(self, text: str, wake: bool) -> None:
+        """«Стоп»: отменить все ожидания фразы (вопрос «да или нет?» — не «нет», а стоп), заглушить речь и
+        выполнить."""
+        log.info("голос: «стоп» — останавливаю всё: %r", text)
+        for req in list(self.requests):
+            self.requests.remove(req)
+            req.finish(None)
+        self.host.silence_tts()
+        self._publish_final(text, wake, "стоп")
+        self.follow_chain = self.follow_total = 0
+        self._dispatch("стоп")
 
     def _publish_final(self, text: str, wake: bool, command: str) -> None:
         self.host.publish("voice.final", {"text": text, "wake": wake, "command": command})
@@ -547,6 +756,15 @@ class Listener:
                 self._publish_final("", wake, "")
                 if utt.manual:
                     self.host.earcon("error")  # нажал, сказал — не расслышали
+            return
+        stoppable = self._stoppable()
+        said = rest if wake else text
+        strict = not stoppable or (utt.echo and not wake)  # эхо речи Jarvis — только целая фраза «стоп»
+        is_stop = textops.is_stop(said) if strict else textops.starts_with_stop(said)
+        if said and (wake or stoppable) and is_stop:
+            # «стоп» важнее всего: вопроса «да или нет?», ответа агенту, ожидания команды — и без «Джарвис»,
+            # пока работает агент или Jarvis говорит
+            self._stop_now(text, wake)
             return
         if utt.echo and not wake:
             log.debug("голос: пока Jarvis говорит, без активатора не слушаю: %r", text)

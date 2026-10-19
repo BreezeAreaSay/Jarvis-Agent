@@ -230,6 +230,32 @@ def test_ask_yes_no_and_capture_text_do_not_dispatch(rig: Rig) -> None:
     assert [f["command"] for f in host.of("voice.final")] == ["", ""]
 
 
+def test_stop_beats_a_question_and_needs_no_wake_word_while_something_runs(rig: Rig) -> None:
+    listener, host, _, _ = rig
+    host.busy = True  # агент работает (или ждёт ответа «Разрешить?», или Jarvis говорит)
+    answers: list[str | None] = []
+    listener.request("yesno", 8.0, on_done=answers.append)  # «Отключить Wi-Fi? Да или нет?»
+    say(rig, "стоп")
+    # не «нет» на этот шаг, а стоп всему: вопрос снят, «стоп» — диспетчеру
+    assert answers == [None] and host.commands == ["стоп"] and not listener.requests
+    say(rig, "стой стой")  # без «Джарвис» — тоже
+    say(rig, "стоп, не надо ничего отключать")
+    assert host.commands == ["стоп", "стоп", "стоп"]
+
+
+def test_stop_words_do_not_steal_commands_when_nothing_runs(rig: Rig) -> None:
+    _, host, _, _ = rig
+    say(rig, "стоп")  # ничего не идёт, без «Джарвис» — чужой разговор
+    assert host.commands == []
+    say(rig, "джарвис стоп музыка")  # «стоп музыка» — команда, не стоп всему
+    say(rig, "джарвис стоп")
+    assert host.commands == ["стоп музыка", "стоп"]
+    answers: list[str | None] = []
+    rig[0].request("text", 8.0, punct=True, on_done=answers.append, source="capture")
+    say(rig, "стоп-кран")  # диктовка слова — не стоп
+    assert answers == ["стоп-кран"]
+
+
 def test_capture_strips_wake_word(rig: Rig) -> None:
     listener, _, _, _ = rig
     answers: list[str | None] = []

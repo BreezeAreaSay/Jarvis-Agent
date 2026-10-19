@@ -151,9 +151,13 @@ class FakeHost:
         self.activities: list[str] = []
         self.speaking = False
         self.silenced = 0
+        self.busy = False  # работает агент или ждёт ответа «Разрешить?»
 
     def settings(self) -> VoiceSettings:
         return self.voice
+
+    def stoppable(self) -> bool:
+        return self.busy or self.speaking
 
     def publish(self, type: str, data: dict[str, Any]) -> None:
         self.events.append((type, data))

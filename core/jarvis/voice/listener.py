@@ -82,6 +82,8 @@ class Host(Protocol):
     def silence_tts(self) -> None: ...
     def earcon(self, name: str) -> None: ...
     def activity(self, value: str) -> None: ...
+    # идёт то, что «стоп» должен оборвать (агент, вопрос «Разрешить?», речь Jarvis): «стоп» — и без «Джарвис»
+    def stoppable(self) -> bool: ...
 
 
 class Session(Protocol):
@@ -719,6 +721,26 @@ class Listener:
             )
         self._decide(utt, " ".join(text.split()), now, s)
 
+    def _stoppable(self) -> bool:
+        check = getattr(self.host, "stoppable", None)
+        try:
+            return bool(check()) if callable(check) else False
+        except Exception:
+            log.debug("голос: не узнать, есть ли что останавливать", exc_info=True)
+            return False
+
+    def _stop_now(self, text: str, wake: bool) -> None:
+        """«Стоп»: отменить все ожидания фразы (вопрос «да или нет?» — не «нет», а стоп), заглушить речь и
+        выполнить."""
+        log.info("голос: «стоп» — останавливаю всё: %r", text)
+        for req in list(self.requests):
+            self.requests.remove(req)
+            req.finish(None)
+        self.host.silence_tts()
+        self._publish_final(text, wake, "стоп")
+        self.follow_chain = self.follow_total = 0
+        self._dispatch("стоп")
+
     def _publish_final(self, text: str, wake: bool, command: str) -> None:
         self.host.publish("voice.final", {"text": text, "wake": wake, "command": command})
 
@@ -734,6 +756,15 @@ class Listener:
                 self._publish_final("", wake, "")
                 if utt.manual:
                     self.host.earcon("error")  # нажал, сказал — не расслышали
+            return
+        stoppable = self._stoppable()
+        said = rest if wake else text
+        strict = not stoppable or (utt.echo and not wake)  # эхо речи Jarvis — только целая фраза «стоп»
+        is_stop = textops.is_stop(said) if strict else textops.starts_with_stop(said)
+        if said and (wake or stoppable) and is_stop:
+            # «стоп» важнее всего: вопроса «да или нет?», ответа агенту, ожидания команды — и без «Джарвис»,
+            # пока работает агент или Jarvis говорит
+            self._stop_now(text, wake)
             return
         if utt.echo and not wake:
             log.debug("голос: пока Jarvis говорит, без активатора не слушаю: %r", text)

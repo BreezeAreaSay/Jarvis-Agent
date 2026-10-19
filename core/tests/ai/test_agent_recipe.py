@@ -14,6 +14,7 @@ from jarvis.ai.uia import UiElement, find_by_name
 from jarvis.commands import executor as executor_module
 from jarvis.context import AppContext
 from jarvis.platform.base import WindowInfo
+from jarvis.services import UserFacingError
 from tests.ai.fakes import FakeUi, ScriptedLlm, calls, reply
 
 PLAN = reply(json.dumps({"steps": ["Открыть письмо", "Заполнить", "Сохранить черновик"]}))
@@ -143,12 +144,16 @@ async def test_runs_that_a_scenario_cannot_repeat_are_not_offered(
     assert steps(run, "type_text", {"text": "строка\nвторая"}, None) == [
         {"type": "Keys.Paste", "value": "строка\nвторая"}
     ]
+    # точка — от ближнего края окна (минус — от правого или нижнего): окно сдвинут — сценарий не промахнётся
     run.pointer = (640, 360)
+    assert steps(run, "click_point", {"x": 1, "y": 2}, None) is None  # окно точки неизвестно
+    run.pointer_window = WindowInfo(7, "Telegram", "Telegram.exe", rect=(100, 50, 1100, 850))
     assert steps(run, "click_point", {"x": 1, "y": 2, "button": "right"}, None) == [
-        {"type": "Mouse.ClickRight", "value": "640 360"}
+        {"type": "Mouse.MoveInWindow", "value": "Telegram.exe | -460 310"},
+        {"type": "Mouse.ClickRight", "value": ""},
     ]
     assert steps(run, "scroll", {"direction": "up", "amount": 3}, None) == [
-        {"type": "Mouse.Move", "value": "640 360"},
+        {"type": "Mouse.MoveInWindow", "value": "Telegram.exe | -460 310"},
         {"type": "Mouse.Scroll", "value": "3"},
     ]
     # что запомнить: только удачный прогон, где сценарий повторит всё
@@ -160,6 +165,64 @@ async def test_runs_that_a_scenario_cannot_repeat_are_not_offered(
     assert agent._recipe(run, "done") is None  # одно ожидание — не дело
     run.recipe, run.replayable = [{"type": "Keys.Press", "value": "ctrl+s"}], False
     assert agent._recipe(run, "done") is None
+
+
+async def test_point_in_window_follows_the_window(ctx: AppContext, ui: FakeUi) -> None:
+    platform: Any = ctx.platform
+    spotify = next(w for w in platform.windows if w.exe == "Spotify.exe")  # не впереди: (120, 120, 1300, 900)
+    item = ctx.scenarios.create(
+        {
+            "name": "Нажми плей в спотифае",
+            "triggers": [{"type": "phrase", "phrases": ["нажми плей в спотифае"]}],
+            "actions": [
+                {"type": "Mouse.MoveInWindow", "value": "Spotify | 150 -40"},
+                {"type": "Mouse.ClickLeft", "value": ""},
+            ],
+        }
+    )
+    assert (await ctx.scenarios.run(item["id"])).ok
+    assert ("window_action", ("focus", spotify.hwnd)) in platform.calls  # окно — вперёд
+    assert ("mouse_move", (270, 860)) in platform.calls and (
+        "mouse_click",
+        (None, None, "left", False),
+    ) in platform.calls
+    # окно растянули — точка у нижнего края осталась на месте относительно окна
+    spotify.rect = (0, 0, 1920, 1040)
+    platform.calls.clear()
+    assert (await ctx.scenarios.run(item["id"])).ok
+    assert ("mouse_move", (150, 1000)) in platform.calls
+    # окна нет — дело агенту
+    platform.windows.remove(spotify)
+    result = await ctx.scenarios.run(item["id"])
+    assert not result.ok and result.message == "Окна «Spotify» нет"
+    assert (
+        result.data["agent_task"]
+        == "Нажми плей в спотифае. (Готовый сценарий не справился: окна «Spotify» нет.)"
+    )
+    with pytest.raises(UserFacingError, match="программа \\| x y"):
+        ctx.scenarios.create(
+            {
+                "name": "Плохая точка",
+                "triggers": [{"type": "phrase", "phrases": ["плохая точка"]}],
+                "actions": [{"type": "Mouse.MoveInWindow", "value": "150 60"}],
+            }
+        )
+
+
+def test_long_request_still_gets_a_phrase(ctx: AppContext) -> None:
+    agent: Any = ctx.agent
+    request = (
+        "открой телеграм найди чат с аней и напиши ей что я задержусь "
+        "на полчаса из-за пробок на кольцевой дороге"
+    )
+    assert len(request) > 100
+    chat = ctx.ai.chats.create(title="Агент", mode="agent")  # type: ignore[attr-defined]
+    recipe = {"request": request, "actions": [{"type": "Keys.Press", "value": "ctrl+k"}]}
+    row = ctx.ai.chats.add_message(chat["id"], "assistant", "Готово.", meta={"recipe": recipe})  # type: ignore[attr-defined]
+    item = agent.save_scenario(chat["id"], row["id"])
+    phrase = item["triggers"][0]["phrases"][0]
+    assert len(phrase) <= 100 and request.startswith(phrase) and phrase.endswith("на кольцевой")
+    assert item["name"].endswith("…") and len(item["name"]) <= 60
 
 
 def test_find_element_by_name() -> None:

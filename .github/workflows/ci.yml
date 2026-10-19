@@ -50,6 +50,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: [core, desktop]
     runs-on: windows-latest
+    permissions:
+      contents: write  # релиз по тегу
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -57,7 +59,25 @@ jobs:
         with:
           node-version: 22
       - run: pwsh -File scripts/build-win.ps1
+        env:
+          # подпись — если в настройках репозитория заданы эти секреты; нет — установщик без подписи
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: Jarvis-Setup
-          path: desktop/release/Jarvis-Setup-*.exe
+          path: |
+            desktop/release/Jarvis-Setup-*.exe
+            desktop/release/Jarvis-Setup-*.exe.blockmap
+            desktop/release/latest.yml
+      # тег vX.Y.Z — сразу релиз GitHub с установщиком (заметки — docs/releases/vX.Y.Z.md): установленный
+      # Jarvis увидит обновление сам
+      - name: Релиз
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = "docs/releases/$env:GITHUB_REF_NAME.md"
+          if (Test-Path $notes) { ./scripts/publish-release.ps1 -NotesFile $notes }
+          else { ./scripts/publish-release.ps1 -Notes "Jarvis $env:GITHUB_REF_NAME" }

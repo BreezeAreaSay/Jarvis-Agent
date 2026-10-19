@@ -76,7 +76,10 @@ sources, error, history}` | `{kind: "unknown", history}` | `{kind: "stop"}` | `{
 кнопка на карточке; «нет, напиши лучше Маше» — ещё и поправка), иначе поправка к задаче («нет, не Ане, а Маше»:
 вслух «Понял, учту.»). Итог — `{kind: "ai", chat_id, text: "Ответ агенту" | "Решение для агента" | "Агенту —
 поправка к задаче", …}`; «стоп» — как всегда, стоп. Так же — сообщение в чат, где работает агент
-(`POST /api/chats/{id}/messages` без картинок, `reply_id` — будущий итог агента).
+(`POST /api/chats/{id}/messages` без картинок, `reply_id` — будущий итог агента; «стоп» там — тоже стоп, не
+поправка). Пока работает агент, ждёт ответа «Разрешить?» или Jarvis говорит (`Host.stoppable`), «стоп» слышен и
+без «Джарвис» и важнее ожидания «да» / «нет» и ответа агенту: «стоп», «стоп-стоп», «стой, хватит» — сразу
+`dispatcher.stop()`; пока звучит речь Jarvis (эхо) — только фраза целиком из стоп-слов.
 
 `HistoryItem = {id, ts, source, text, kind: command|ai|unknown|system|confirm, title, status: ok|error|pending|cancelled|
 denied, detail, icon, command_id}` — `confirm`: итог подтверждения (`title` — вопрос, `status`: `ok` разрешено, `denied`
@@ -153,7 +156,7 @@ mouse, search, weather, timer, note, task, calendar, desk, ai, home, plugin, err
 ### Действия (`type`)
 
 `Launch.File, Launch.App, Launch.Url, Launch.Folder, Launch.Shell, App.Close, App.Kill, App.Focus, Ui.Click, Ui.Type, Keys.Press,
-Keys.Type, Keys.Paste, Mouse.ClickLeft, Mouse.ClickRight, Mouse.DoubleClick, Mouse.Move, Mouse.Scroll,
+Keys.Type, Keys.Paste, Mouse.ClickLeft, Mouse.ClickRight, Mouse.DoubleClick, Mouse.Move, Mouse.MoveInWindow, Mouse.Scroll,
 System.VolumeSet, System.VolumeUp, System.VolumeDown, System.Mute, System.Unmute, System.MuteToggle,
 System.BrightnessSet, System.Lock, System.Sleep, System.Shutdown, System.Restart, System.CancelShutdown,
 System.Screenshot, System.EmptyRecycleBin, Media.PlayPause, Media.Next, Media.Prev, Media.Stop,
@@ -166,7 +169,10 @@ Info.Battery, Info.System, Jarvis.Timer, Jarvis.Reminder`. Каталог с о�
 Значения: `Ui.Click` — название кнопки, ссылки или пункта окна впереди («Отправить»), `Ui.Type` — «поле | текст»
 («Кому | ivan@example.com»; содержимое поля заменится): элемент ищется UI Automation по названию (точное, начало,
 вхождение, похожее; доступные — первыми), пока окно догружается — до 8 с; не нашёлся — `NeedsAgent` с задачей
-«<название сценария>. (Готовый сценарий не справился: …)» — дело берёт агент. Такие шаги записывает агент (§4,
+«<название сценария>. (Готовый сценарий не справился: …)» — дело берёт агент. `Mouse.MoveInWindow` — «программа |
+x y»: курсор в точку окна программы (exe или часть заголовка) от левого и верхнего края, минус — от правого и
+нижнего («Telegram.exe | 150 -40»): окно сдвинули или растянули — точка та же; окно не впереди — выходит вперёд;
+нет окна — `NeedsAgent`; дальше — `Mouse.Click*`/`Mouse.Scroll` без координат. Такие шаги записывает агент (§4,
 «Запомнить как сценарий»). `Keys.Press` — «ctrl+shift+s», несколько через пробел («ctrl+k ctrl+s»), повтор «down*3»; `Wait`,
 `System.Shutdown`/`Restart` — секунды или «5m», «1h»; `System.VolumeSet`/`BrightnessSet` — 0–100 или «+10»/«-10»;
 `Mouse.*` — «x y» (пусто — где курсор, `center` — центр экрана); `Media.PlayPause` — «» (переключить: играет —
@@ -273,7 +279,7 @@ label, placeholder?, options?, required}], description}`.
 |---|---|---|
 | `GET /api/voice` | — | `{state, reason, enabled, error, ptt_error, wake_words, models_ready, input_device, cloud_error}` — `cloud_error`: выбрано распознавание ElevenLabs, но звать его сейчас нельзя (нет ключа, пауза после ошибки); иначе `""` |
 | `POST /api/voice/enabled` | `{enabled}` | то же |
-| `POST /api/voice/listen` | `{toggle?}` | `{ok}` — слушать команду без активатора (кнопка микрофона, хоткей); `toggle` и Jarvis уже слушает/отвечает — «стоп»: `{ok, stopped: true}` |
+| `POST /api/voice/listen` | `{toggle?}` | `{ok}` — слушать команду без активатора (кнопка микрофона, хоткей); `toggle` и Jarvis уже слушает/отвечает или работает агент — «стоп»: `{ok, stopped: true}` |
 | `POST /api/voice/stop` | — | `{ok}` |
 | `POST /api/voice/capture` | `{timeout?: 15, punct?: true}` | `{text}` — выслушать одну фразу без активатора и без выполнения (диктовка в поле ввода чата) |
 | `GET /api/voice/devices` | — | `{inputs: [{id, name, default}], outputs: [...]}` |
@@ -423,7 +429,9 @@ UI Automation и, если модель понимает картинки (`sett
 них — PNG всех мониторов, обрезанный), окно обведено, его элементы с метками `e…`, сетка через 100 точек
 (`jarvis/ai/vision.py` `render_pixels`); `screenshot` — крупно одно окно (и когда экран не снять). Экран текстом — и
 моделям без картинок: после действия — какие окна появились и закрылись с прошлого снимка («Окна на экране с
-прошлого снимка»). Первый `finish` со `status: done` после действий, которые что-то меняют,
+прошлого снимка») и новые всплывающие уведомления Windows («Новые уведомления Windows», до 3; источник — тот же
+WinRT UserNotificationListener, что у «Озвучки уведомлений»; без доступа к уведомлениям — ничего, Windows
+спрашивается не чаще раза в минуту); всё это — как данные. Первый `finish` со `status: done` после действий, которые что-то меняют,
 не принимается сразу: модель получает свежий снимок и «Проверка перед итогом» — сверить с задачей и снова вызвать
 `finish` (или доделать); так во всех трёх циклах агента (ключ API, Codex, программы-провайдеры —
 `Agent.check_finish`). Реплика человека посреди работы (`Agent.interject`: фраза Jarvis, сообщение в чат агента)
@@ -437,11 +445,12 @@ UI Automation и, если модель понимает картинки (`sett
 `partial`. Удачный прогон (итог `done`, все действия, что меняли экран, сценарий повторит: без инструментов MCP,
 безымянных кнопок, паролей и номеров карт) несёт `meta.recipe` — его шаги действиями команд (`ui_click` →
 `Ui.Click «название»`, `ui_type` → `Ui.Type`, `type_text` → `Keys.Type`/`Keys.Paste`, `press_keys` → `Keys.Press`,
-`launch_app` → `Launch.App`, `open_url` → `Launch.Url`, `focus_window` → `App.Focus`, `click_point` → `Mouse.*` в
-точке экрана, `scroll` → `Mouse.Move` + `Mouse.Scroll`, `run_command` → `Jarvis.Command`, `wait` → `Wait`). «Запомнить
+`launch_app` → `Launch.App`, `open_url` → `Launch.Url`, `focus_window` → `App.Focus`, `click_point` →
+`Mouse.MoveInWindow` (точка от ближнего края окна) + `Mouse.ClickLeft`/`ClickRight`/`DoubleClick`, `scroll` →
+`Mouse.MoveInWindow` + `Mouse.Scroll`, `run_command` → `Jarvis.Command`, `wait` → `Wait`). «Запомнить
 как сценарий» (кнопка у итога, `POST /api/agent/scenario`, голосом «запомни это» в течение 15 минут) — сценарий
-с фразой человека (`Agent.run(request=…)`: его слова, а не переписанная задача): в следующий раз — сразу, без ИИ;
-шаг не сработал — дело снова берёт агент. Перед каждым вводом —
+с фразой человека (`Agent.run(request=…)`: его слова, а не переписанная задача; длиннее 100 знаков — обрезана по
+слову): в следующий раз — сразу, без ИИ; шаг не сработал — дело снова берёт агент. Перед каждым вводом —
 окно той же программы, что при последнем снимке (впереди окно Jarvis — фокус окну задачи; другая программа —
 действие не выполняется); мышь не жмёт, если точку закрывает чужое окно; курсор человека возвращается на место.
 Подсказки по программам и сайтам (≈30: мессенджеры, браузеры и YouTube, карты, магазины, почта, Office, Zoom,
@@ -449,8 +458,13 @@ Teams, Steam, OBS, плееры, Notion…) — `jarvis/ai/playbooks.py`, вме
 впервые оказавшаяся впереди, приносит свои подсказки и команды. План работы составляется параллельно с первыми
 шагами (агент его не ждёт) и приходит модели в ответе на ближайшее действие. Разрешения: `settings.ai.tool_policy` с ключами
 `agent.<действие>` и именами инструментов MCP; отправка, удаление и оплата через MCP спрашиваются всегда; после
-отказа агент спрашивает перед каждым действием, которое что-то меняет. Лимиты: `ai.max_agent_steps`, 30 минут на
-запуск, 3 минуты на действие.
+отказа агент спрашивает перед каждым действием, которое что-то меняет. Связь и питание компьютера — всегда с
+разрешения, в любом окне: кнопка или окно о Wi-Fi, Ethernet, Bluetooth, VPN, «в самолёте», хот-споте, мобильной
+сети, о выключении, перезагрузке, сне, выходе из системы (`NETWORK_NAME`, `POWER_NAME`), любое нажатие в быстрых
+настройках, центре уведомлений, «Сетевых подключениях» и «Диспетчере устройств» (пробел и Enter там — тоже).
+«Стоп» — сразу и до конца: начатое действие обрывается (и когда его позвал Codex или программа-провайдер, не
+цикл агента), а вызовы инструментов, что ещё придут, — «Ошибка: пользователь остановил работу» без действия.
+Лимиты: `ai.max_agent_steps`, 30 минут на запуск, 3 минуты на действие.
 
 Провайдер `chatgpt` — «ChatGPT (подписка)» (`jarvis/ai/chatgpt`): модели GPT по подписке ChatGPT через Codex
 app-server (SDK `openai-codex==0.163.0` с бинарём Codex, ≈150 МБ, скачивается в `<data>/pylib` по кнопке; extra

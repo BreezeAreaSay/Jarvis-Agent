@@ -1,4 +1,4 @@
-"""Синтез речи Jarvis: движки (piper, windows, edge, openai, fish), очередь фраз, воспроизведение и события.
+"""Синтез речи Jarvis: движки (piper, windows, edge, openai, fish, elevenlabs), очередь фраз, вывод и события.
 
 say(text) → текст для голоса (jarvis.voice.textprep: без markdown, ссылок, эмодзи; латиница русскими
 буквами для русских голосов) → предложения по очереди: следующее синтезируется, пока звучит текущее (первый
@@ -6,7 +6,12 @@ say(text) → текст для голоса (jarvis.voice.textprep: без mark
 текущую речь, silence() — замолчать и очистить очередь, wait — дождаться конца.
 
 Выбранный движок не смог (нет ключа, сети) — событие tts.error {error, engine} и запасной: piper (если голос
-скачан), потом голоса Windows; упавший движок минуту не трогаем, чтобы не ждать таймаута на каждой фразе.
+скачан), потом голоса Windows; упавший движок минуту не трогаем, чтобы не ждать таймаута на каждой фразе
+(а если движок сказал, сколько ждать, — столько: кончились кредиты ElevenLabs — до их обновления). Удачное
+прослушивание в настройках снимает паузу.
+
+Короткие фразы облачных движков (cacheable) помнятся в памяти: повторное «Готово, сэр.» не тратит кредиты
+и не ждёт сеть. На диск не пишутся — в фразах бывает личное.
 
 События: tts.state {speaking, text?}, tts.level {level} ~20 Гц — аватар пульсирует в такт речи.
 speaking — правда с момента say() до конца звука: голосовой сервис в это время не слушает без «Джарвис» (эхо).
@@ -17,6 +22,7 @@ import contextlib
 import logging
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -27,7 +33,7 @@ from jarvis.service_base import BaseService
 from jarvis.services import UserFacingError
 from jarvis.settings import Settings
 from jarvis.voice import models as m
-from jarvis.voice.dsp import as_mono, resample, silence
+from jarvis.voice.dsp import as_mono, float_to_pcm16, pcm16_to_float, resample, silence
 from jarvis.voice.engines import Engine, SynthOptions, create_engines
 from jarvis.voice.fx import EARCON_RATE, earcon, electronic, fade
 from jarvis.voice.player import Chunk, Player, Sink, SoundDeviceSink
@@ -43,6 +49,50 @@ FAIL_COOLDOWN_S = 60.0  # упавший движок (сеть, ключ) ст�
 SENTENCE_GAP_S = 0.12
 ERROR_EVERY_S = 30.0
 FALLBACKS = ("piper", "windows")
+CACHE_MAX_CHARS = 160  # помнить только короткие фразы: подтверждения и ответы в одно предложение
+CACHE_MAX_BYTES = 24 * 1024 * 1024
+
+
+class PhraseCache:
+    """Звук коротких фраз облачных движков в памяти (LRU, PCM 16 бит); из любого потока."""
+
+    def __init__(self, max_bytes: int = CACHE_MAX_BYTES) -> None:
+        self.max_bytes = max_bytes
+        self._items: OrderedDict[tuple[Any, ...], tuple[bytes, int]] = OrderedDict()
+        self._bytes = 0
+        self._lock = threading.Lock()
+
+    def get(self, key: tuple[Any, ...]) -> tuple[np.ndarray, int] | None:
+        with self._lock:
+            item = self._items.get(key)
+            if item is None:
+                return None
+            self._items.move_to_end(key)
+        data, rate = item
+        return pcm16_to_float(data), rate
+
+    def put(self, key: tuple[Any, ...], samples: np.ndarray, rate: int) -> None:
+        data = float_to_pcm16(samples)
+        if not data or len(data) > self.max_bytes:
+            return
+        with self._lock:
+            old = self._items.pop(key, None)
+            if old is not None:
+                self._bytes -= len(old[0])
+            self._items[key] = (data, int(rate))
+            self._bytes += len(data)
+            while self._bytes > self.max_bytes and self._items:
+                _, (dropped, _) = self._items.popitem(last=False)
+                self._bytes -= len(dropped)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+            self._bytes = 0
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._items)
 
 
 @dataclass
@@ -91,6 +141,7 @@ class Tts(BaseService):
         self._published: str | None = None  # текст, о котором сказали tts.state speaking; None — молчим
         self._failed_until: dict[str, float] = {}
         self._error_at: dict[str, float] = {}
+        self.cache = PhraseCache()
         self._unsubs: list[Callable[[], None]] = []
 
     # --- жизненный цикл ----------------------------------------------------------------------------
@@ -219,8 +270,20 @@ class Tts(BaseService):
             parts.append(samples)
         if not parts:
             raise UserFacingError("Нечего произносить")
+        self._failed_until.pop(name, None)  # заработал (новый ключ, кредиты обновились) — снова главный
         self.silence()
         await self.play(np.concatenate(parts), out_rate, wait=False)
+
+    async def account(self, engine: str | None = None) -> dict[str, Any]:
+        """Счёт движка (остаток кредитов ElevenLabs, модели); у движков без счёта — {supported: false}."""
+        name = engine or self.ctx.settings.value.tts.engine
+        found = self.engines.get(name)
+        if found is None:
+            raise UserFacingError(f"Неизвестный движок голоса: {name}")
+        account = getattr(found, "account", None)
+        if account is None:
+            return {"supported": False}
+        return dict(await account())
 
     def status(self) -> dict[str, Any]:
         s = self.ctx.settings.value.tts
@@ -337,7 +400,8 @@ class Tts(BaseService):
                 return await self._synth_with(engine, sentence, engine.voice(settings), settings)
             except UserFacingError as e:
                 errors.append(str(e))
-                self._report(name, engine, str(e), primary=name == primary)
+                cooldown = getattr(e.__cause__, "cooldown_s", None)
+                self._report(name, engine, str(e), primary=name == primary, cooldown=cooldown)
         if errors:
             self._publish_error("tts", "Не удалось озвучить: " + errors[-1])
         return None
@@ -349,20 +413,39 @@ class Tts(BaseService):
         if not text.strip():
             raise UserFacingError("Нечего произносить")
         opts = SynthOptions(voice, settings.tts.speed, settings.tts.pitch, settings)
-        try:
-            samples, rate = await engine.synthesize(text, opts)
-        except Exception as e:
-            message = str(e) or type(e).__name__
-            if not strict:
-                log.warning("голос: %s не озвучил фразу: %s", engine.name, message)
-            raise UserFacingError(f"{engine.title}: {message}") from e
-        x = as_mono(samples)
+        key = self._cache_key(engine, voice, text, settings)
+        cached = self.cache.get(key) if key is not None else None
+        if cached is not None:
+            x, rate = cached
+        else:
+            try:
+                samples, rate = await engine.synthesize(text, opts)
+            except Exception as e:
+                message = str(e) or type(e).__name__
+                if not strict:
+                    log.warning("голос: %s не озвучил фразу: %s", engine.name, message)
+                raise UserFacingError(f"{engine.title}: {message}") from e
+            x = as_mono(samples)
+            if key is not None and len(x):
+                self.cache.put(key, x, int(rate))
         if settings.tts.effect > 0.01:
             x = electronic(x, rate, settings.tts.effect)
         return fade(x, rate), int(rate)
 
-    def _report(self, name: str, engine: Any, message: str, *, primary: bool = True) -> None:
-        self._failed_until[name] = time.monotonic() + FAIL_COOLDOWN_S
+    @staticmethod
+    def _cache_key(engine: Any, voice: str, text: str, settings: Settings) -> tuple[Any, ...] | None:
+        """Ключ фразы в памяти: облачный движок, голос, модель и её настройки, темп, тон, точный текст."""
+        if not getattr(engine, "cacheable", False) or len(text) > CACHE_MAX_CHARS:
+            return None
+        fingerprint = getattr(engine, "cache_key", None)
+        extra = fingerprint(settings) if callable(fingerprint) else ""
+        tts = settings.tts
+        return (engine.name, voice, extra, round(tts.speed, 2), round(tts.pitch, 2), text)
+
+    def _report(
+        self, name: str, engine: Any, message: str, *, primary: bool = True, cooldown: float | None = None
+    ) -> None:
+        self._failed_until[name] = time.monotonic() + (cooldown if cooldown else FAIL_COOLDOWN_S)
         if primary:
             text = message if message.startswith(engine.title) else f"{engine.title}: {message}"
             self._publish_error(name, text)

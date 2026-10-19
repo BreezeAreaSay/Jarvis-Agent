@@ -61,7 +61,7 @@ export interface Settings {
     speak_confirmations: "short" | "off";
   };
   tts: {
-    engine: "piper" | "windows" | "edge" | "openai" | "fish";
+    engine: "piper" | "windows" | "edge" | "openai" | "fish" | "elevenlabs";
     piper_voice: "ruslan" | "denis" | "dmitri" | "irina";
     windows_voice: string;
     edge_voice: string;
@@ -70,6 +70,12 @@ export interface Settings {
     openai_instructions: string;
     fish_voice_id: string;
     fish_model: string;
+    /** "" — George, стандартный британский голос */
+    elevenlabs_voice_id: string;
+    elevenlabs_model: string;
+    elevenlabs_stability: number;
+    elevenlabs_similarity: number;
+    elevenlabs_style: number;
     speed: number;
     pitch: number;
     effect: number;
@@ -141,6 +147,7 @@ export type SecretName =
   | "ai_api_key"
   | "openai_api_key"
   | "fish_api_key"
+  | "elevenlabs_api_key"
   | "telegram_token"
   | "ha_token"
   | "yandex_iot_token"

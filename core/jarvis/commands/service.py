@@ -249,7 +249,7 @@ class Commands(BaseService):
 
     async def _execute_parts(self, parts: list[MatchedPart], source: Source, depth: int) -> ExecResult:
         results: list[ExecResult] = []
-        for part in parts:
+        for i, part in enumerate(parts):
             entry = self._entries.get(part.command_id)
             if entry is None:
                 results.append(
@@ -290,6 +290,9 @@ class Commands(BaseService):
             result = await self.executor.run_entry(entry, part.slots, source, depth)
             results.append(result)
             if not result.ok:
+                rest = [p.text or p.title for p in parts[i + 1 :]]
+                if rest and result.data.get("agent_task"):  # дальше фразы — тоже агенту, по порядку
+                    result.data["agent_task"] += " Потом: " + "; ".join(rest) + "."
                 break
         return _combine(results, parts)
 
@@ -610,6 +613,9 @@ def _combine(results: list[ExecResult], parts: list[MatchedPart]) -> ExecResult:
     }
     if any(r.data.get("cancelled") for r in results):
         data["cancelled"] = True
+    handoff = next((r.data.get("agent_task") for r in results if not r.ok), None)
+    if handoff:
+        data["agent_task"] = handoff  # не вышло у команды — агенту (вместе с остатком фразы)
     ids = [cid for r in results for cid in r.command_ids]
     return ExecResult(
         ok, title, message, icon=results[0].icon, say=". ".join(says), command_ids=ids, data=data

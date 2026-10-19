@@ -203,6 +203,9 @@ label, placeholder?, options?, required}], description}`.
 
 Конвейер: микрофон 16 кГц → Silero VAD → (пока идёт речь) потоковая модель для частичного текста →
 по концу фразы GigaAM v3 → слово-активатор (`jarvis.text.find_wake`) → `ctx.dispatcher.handle(text, "voice")`.
+Итог фразы начинается заранее: второй VAD с короткой паузой (0,18 с) замечает, что речь стихла, — обращённую
+к Jarvis фразу ПК распознаёт, пока основной VAD ещё ждёт `end_silence_ms`; речь продолжилась — догадка
+выброшена. В журнал — «текст фразы через N мс после конца речи (тишина …, распознавание …)».
 Модели — `paths.models_dir()`; скачиваются из релизов `k2-fsa/sherpa-onnx` с проверкой SHA-256 (докачка, атомарная
 замена папки). При первом запуске недостающие обязательные модели качаются сами (на платформе `fake` — нет;
 `JARVIS_VOICE_AUTODOWNLOAD=1|0` переопределяет).
@@ -214,6 +217,17 @@ label, placeholder?, options?, required}], description}`.
   Встроенные команды — русские: фраза на другом языке уходит Jarvis AI.
 - `voice.end_silence_ms` (300–2000, по умолчанию 450) — тишина после речи, по которой фраза закончилась;
   стихла на «открой…» или предлоге — ещё 0,5 с ждём продолжения.
+- `voice.asr_model` — итог фразы: `gigaam-v3` (по умолчанию), `gigaam-v3-punct`, `vosk-small` — на ПК;
+  `elevenlabs` — ElevenLabs Scribe v2 Realtime (`jarvis.voice.scribe`) по ключу `elevenlabs_api_key` (тот же,
+  что у голоса; у ключа нужно право Speech to Text). Звук уходит по WebSocket
+  `wss://api.elevenlabs.io/v1/speech-to-text/realtime` (`model_id=scribe_v2_realtime`, PCM 16 кГц,
+  `commit_strategy=manual`, `language_code` — язык команд) только у обращённой фразы: «Джарвис» услышан
+  потоковой моделью, клавиша «держи и говори», просьба выслушать, окно продолжения, выключенный режим
+  префикса; с первого звука фразы, а на паузе в речи — commit заранее. VAD, «Джарвис» и чужие разговоры — на ПК;
+  GigaAM в этом режиме не грузится и не обязательна. Сервис не ответил за 2 с, нет сети, ключа, кредитов —
+  текст Vosk; после серьёзной ошибки облако не зовётся (кредиты — час, ключ, условия, регион — 10 минут,
+  сеть и перегрузка — 30 с), тост «Распознавание ElevenLabs» — не чаще раза в минуту; новый ключ или другая
+  модель снимают паузу. Прокси — поле «Прокси» Jarvis AI, иначе системный (VPN, SOCKS5 тоже).
 - Слово-активатор: своё слово узнаётся и с окончаниями («пятницу»), фраза из нескольких слов — целиком
   («эй, Джарвис»), латиница — на слух («Jarvis» = «джарвис»).
 
@@ -231,7 +245,7 @@ label, placeholder?, options?, required}], description}`.
 
 | Маршрут | Тело | Ответ |
 |---|---|---|
-| `GET /api/voice` | — | `{state, reason, enabled, error, ptt_error, wake_words, models_ready, input_device}` |
+| `GET /api/voice` | — | `{state, reason, enabled, error, ptt_error, wake_words, models_ready, input_device, cloud_error}` — `cloud_error`: выбрано распознавание ElevenLabs, но звать его сейчас нельзя (нет ключа, пауза после ошибки); иначе `""` |
 | `POST /api/voice/enabled` | `{enabled}` | то же |
 | `POST /api/voice/listen` | `{toggle?}` | `{ok}` — слушать команду без активатора (кнопка микрофона, хоткей); `toggle` и Jarvis уже слушает/отвечает — «стоп»: `{ok, stopped: true}` |
 | `POST /api/voice/stop` | — | `{ok}` |

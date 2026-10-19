@@ -62,7 +62,8 @@ class VoiceSettings(_Model):
     silent_mode: bool = False  # тихий режим: без ответов голосом
     input_device: str = ""  # часть имени микрофона; "" — по умолчанию
     sensitivity: float = Field(0.5, ge=0.0, le=1.0)  # чувствительность детектора речи
-    asr_model: Literal["gigaam-v3", "gigaam-v3-punct", "vosk-small"] = "gigaam-v3"
+    # итог фразы: GigaAM или Vosk на ПК, или ElevenLabs Scribe (облако по ключу ElevenLabs; «Джарвис» — на ПК)
+    asr_model: Literal["gigaam-v3", "gigaam-v3-punct", "vosk-small", "elevenlabs"] = "gigaam-v3"
     # язык команд: ru — GigaAM; другой или auto — итоговый текст фразы распознаёт Whisper (скачается сам)
     language: CommandLanguage = "ru"
     end_silence_ms: int = Field(450, ge=300, le=2000)  # столько тишины после речи — фраза закончилась

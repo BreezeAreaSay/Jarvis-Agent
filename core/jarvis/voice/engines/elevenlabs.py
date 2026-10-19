@@ -64,7 +64,7 @@ class QuotaError(TtsEngineError):
     """Кончились кредиты: движок не зовём до их обновления (cooldown_s уточняется по подписке)."""
 
 
-def _detail(resp: httpx.Response) -> tuple[str, str]:
+def error_detail(resp: httpx.Response) -> tuple[str, str]:
     """(статус, сообщение) из ответа: detail {status|code|type, message}, список ошибок 422 или текст."""
     try:
         body = resp.json()
@@ -91,7 +91,7 @@ def eleven_error(resp: httpx.Response, right: str = "Text to Speech") -> TtsEngi
 
     Порядок важен: кончившиеся кредиты, отключённый бесплатный тариф и нехватка прав приходят тоже с 401.
     """
-    status, message = _detail(resp)
+    status, message = error_detail(resp)
     low = f"{status} {message}".casefold()
     code = resp.status_code
     if "quota_exceeded" in low or "exceeds your quota" in low or "credits remaining" in low:

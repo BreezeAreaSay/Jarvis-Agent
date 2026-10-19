@@ -2,9 +2,11 @@
 import {
   Activity,
   AudioLines,
+  Cloud,
   Cpu,
   Download,
   Ear,
+  ExternalLink,
   Languages,
   MessageSquare,
   Mic,
@@ -15,6 +17,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Settings } from "@/api/types";
+import { bridge } from "@/lib/bridge";
 import { useApp } from "@/store/app";
 import { Button, Card, cx, Select, Setting, Slider, Toggle } from "@/ui";
 import {
@@ -26,6 +29,7 @@ import {
   type ModelItem,
   ModelRow,
   Note,
+  SecretField,
   useDevices,
   useSettingsPatch,
   useVoiceModels,
@@ -42,6 +46,7 @@ const MODEL_ICONS: Record<string, ReactNode> = {
 };
 
 const ASR_OPTIONS: { value: Settings["voice"]["asr_model"]; label: string; hint: string }[] = [
+  { value: "elevenlabs", label: "ElevenLabs Scribe", hint: "облако, быстрее всех" },
   { value: "gigaam-v3", label: "GigaAM v3 — команды", hint: "точная" },
   { value: "gigaam-v3-punct", label: "GigaAM v3 с пунктуацией", hint: "диктовка" },
   { value: "vosk-small", label: "Vosk small", hint: "лёгкая" },
@@ -65,8 +70,9 @@ const LANGUAGE_OPTIONS: { value: Settings["voice"]["language"]; label: string; h
 ];
 
 const fmtSeconds = (ms: number) => `${String(Number((ms / 1000).toFixed(2))).replace(".", ",")} с`;
+const ELEVEN_KEYS_URL = "https://elevenlabs.io/app/settings/api-keys";
 
-/** Полоса «Приватно и быстро»: распознавание на ПК, без интернета, живой уровень микрофона. */
+/** Полоса «Приватно и быстро» (распознавание на ПК) или «Быстро и точно» (ElevenLabs), живой уровень микрофона. */
 function VoiceHero() {
   const [settings, patch] = useSettingsPatch();
   const state = useApp((s) => s.voiceState);
@@ -76,18 +82,32 @@ function VoiceHero() {
   const v = settings.voice;
   const live = state === "listening" || state === "processing";
   const error = state === "error" ? status.data?.error : "";
+  const cloud = v.asr_model === "elevenlabs";
   return (
     <div className="set-hero voice-hero">
       <div className="grow">
         <div className="eyebrow">Распознавание речи</div>
-        <h2 className="hero-title">Приватно и быстро</h2>
+        <h2 className="hero-title">{cloud ? "Быстро и точно" : "Приватно и быстро"}</h2>
         <div className="hero-chips">
-          <span className="hero-chip">
-            <Cpu /> На вашем ПК
-          </span>
-          <span className="hero-chip">
-            <WifiOff className="wifi-off" /> Без интернета
-          </span>
+          {cloud ? (
+            <>
+              <span className="hero-chip">
+                <Cloud /> ElevenLabs по ходу речи
+              </span>
+              <span className="hero-chip">
+                <Cpu /> «{cap(v.wake_words[0] ?? "Джарвис")}» — на ПК
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="hero-chip">
+                <Cpu /> На вашем ПК
+              </span>
+              <span className="hero-chip">
+                <WifiOff className="wifi-off" /> Без интернета
+              </span>
+            </>
+          )}
         </div>
       </div>
       <div className="hero-mic">
@@ -117,11 +137,42 @@ function VoiceHero() {
   );
 }
 
+/** Распознавание ElevenLabs: ключ (тот же, что у голоса) и почему облако сейчас не зовётся. */
+function CloudAsr() {
+  const status = useVoiceStatus();
+  const hasKey = useApp((s) => !!s.secrets.elevenlabs_api_key);
+  const error = status.data?.cloud_error;
+  return (
+    <>
+      {!hasKey && (
+        <Setting name="Ключ ElevenLabs" desc="Тот же ключ, что у голоса ElevenLabs. Нужно право «Speech to Text»" wide>
+          <div className="row" style={{ gap: 8 }}>
+            <SecretField name="elevenlabs_api_key" placeholder="sk_… из кабинета elevenlabs.io" />
+            <Button size="sm" variant="ghost" icon={<ExternalLink />} onClick={() => bridge.openExternal(ELEVEN_KEYS_URL)}>
+              Получить ключ
+            </Button>
+          </div>
+        </Setting>
+      )}
+      {error && hasKey ? (
+        <Note tone="warn">{`${cap(error)}. Пока распознаю на ПК (Vosk)`}</Note>
+      ) : (
+        <Note icon={<Cloud />}>
+          Звук фразы уходит в ElevenLabs, пока вы говорите, — текст готов к концу фразы. Уходят только фразы к Jarvis
+          (после «Джарвис», с клавишей, в окне продолжения); тратятся кредиты ElevenLabs по секундам звука. Нет сети —
+          распознаю на ПК
+        </Note>
+      )}
+    </>
+  );
+}
+
 function MicrophoneCard() {
   const [settings, patch] = useSettingsPatch();
   const devices = useDevices();
   if (!settings) return null;
   const v = settings.voice;
+  const cloud = v.asr_model === "elevenlabs";
   const inputs = devices.data?.inputs ?? [];
   const def = inputs.find((d) => d.default);
   const options = [
@@ -175,14 +226,25 @@ function MicrophoneCard() {
       <Setting
         name="Язык команд"
         desc={
-          v.language === "ru"
-            ? "Русский распознаёт GigaAM — точнее и быстрее всего"
-            : "Распознаёт Whisper (скачается сам, ~200 МБ; пока его нет — слушаю по-русски). Встроенные команды Jarvis — русские: фразы на другом языке выполняет Jarvis AI"
+          v.language !== "ru"
+            ? "Распознаёт Whisper (скачается сам, ~200 МБ; пока его нет — слушаю по-русски). Встроенные команды Jarvis — русские: фразы на другом языке выполняет Jarvis AI"
+            : cloud
+              ? "Русский — ElevenLabs, «Джарвис» — Vosk на ПК"
+              : "Русский распознаёт GigaAM — точнее и быстрее всего"
         }
       >
         <Select value={v.language} width={250} options={LANGUAGE_OPTIONS} onChange={(l) => patch({ voice: { language: l } })} />
       </Setting>
-      <Setting name="Модель распознавания" desc={v.language === "ru" ? "Работает на вашем ПК — без интернета" : "Для русского языка команд"}>
+      <Setting
+        name="Модель распознавания"
+        desc={
+          cloud
+            ? "Облако ElevenLabs по ключу — самый быстрый и точный итог фразы"
+            : v.language === "ru"
+              ? "Работает на вашем ПК — без интернета"
+              : "Для русского языка команд"
+        }
+      >
         <Select
           value={v.asr_model}
           width={250}
@@ -190,6 +252,7 @@ function MicrophoneCard() {
           onChange={(m) => patch({ voice: { asr_model: m } })}
         />
       </Setting>
+      {cloud && <CloudAsr />}
     </Card>
   );
 }
@@ -309,6 +372,7 @@ function RepliesCard() {
 
 function ModelsCard() {
   const models = useVoiceModels();
+  const cloud = useApp((s) => s.settings?.voice.asr_model === "elevenlabs");
   const list = models.items.filter((m) => m.kind !== "tts");
   const missing = list.filter((m: ModelItem) => m.required && !m.installed && !m.downloading);
   const totalMb = missing.reduce((s, m) => s + m.size_mb, 0);
@@ -316,7 +380,11 @@ function ModelsCard() {
     <Card
       icon={<Package />}
       title="Модели"
-      sub="Распознавание работает полностью на вашем ПК — модели скачиваются один раз"
+      sub={
+        cloud
+          ? "«Джарвис» и паузы Jarvis слышит на ПК — эти модели скачиваются один раз"
+          : "Распознавание работает полностью на вашем ПК — модели скачиваются один раз"
+      }
       actions={
         missing.length > 0 && (
           <Button size="sm" variant="primary" icon={<Download />} onClick={() => missing.forEach((m) => void models.download(m.id))}>

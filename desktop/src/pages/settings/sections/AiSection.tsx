@@ -94,10 +94,14 @@ export default function AiSection() {
         sub={isAccountProvider(ai.provider) ? "Модель и проверка связи" : "Ключ хранится зашифрованным только на этом компьютере"}
       >
         <AiConnection />
-        <Setting name="Прокси" desc="Для запросов к ИИ: http://… или socks5://… Пусто — напрямую" wide>
+        <Setting
+          name="Прокси"
+          desc="Для ИИ и Telegram-бота: http://… или socks5://… — адрес и порт есть в настройках VPN-программы. Claude Code понимает только http://. Пусто — через системный прокси (его включает VPN) или напрямую"
+          wide
+        >
           <LazyText
             value={ai.proxy}
-            placeholder="socks5://127.0.0.1:1080"
+            placeholder="http://127.0.0.1:10809"
             width="100%"
             onCommit={(v) => patch({ ai: { proxy: v } })}
           />

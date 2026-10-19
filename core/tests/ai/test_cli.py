@@ -324,6 +324,18 @@ async def test_gemini_cli_errors(core: AppContext, tmp_path: Path, monkeypatch: 
     assert (await core.ai.ask("Привет")).error == errors.REGION.format(name="Gemini")
 
 
+async def test_claude_code_with_socks_proxy_explains_why_there_is_no_connection(
+    core: AppContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.settings.patch({"ai": {"proxy": "socks5://127.0.0.1:1080"}})
+    fake = fake_for(core, "claude_code", tmp_path, monkeypatch)
+    fake.add([{"result_error": "API Error: 403 Request not allowed"}])
+    result = await core.ai.ask("Привет")
+    # Claude Code не понимает SOCKS: адрес ему не передан, а вместо «включите VPN» — что поменять
+    assert result.error == errors.NO_SOCKS.format(program="Claude Code", proxy="socks5://127.0.0.1:1080")
+    assert fake.runs[0]["env"]["HTTPS_PROXY"] != "socks5://127.0.0.1:1080"
+
+
 async def test_qwen_code_flags_and_complete(
     core: AppContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

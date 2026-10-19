@@ -365,6 +365,57 @@ async def test_windows_that_open_or_close_are_reported(ctx: AppContext, llm: Scr
     assert "закрылось: «Сохранение документа» (notepad.exe)" in second and "появилось" not in second
 
 
+async def test_new_windows_notifications_are_reported(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi) -> None:
+    from jarvis.plugins.notify_voice import Toast
+
+    agent: Any = ctx.agent
+
+    class Source:
+        def __init__(self, access: str) -> None:
+            self.items = [Toast(1, "Почта", "Старое письмо")]
+            self.answer, self.asked = access, 0
+
+        async def access(self, request: bool = False) -> str:
+            self.asked += 1
+            return self.answer
+
+        async def fetch(self) -> list[Toast]:
+            return list(self.items)
+
+        async def close(self) -> None:
+            return None
+
+    source = agent.toast_source = Source("allowed")
+
+    def arrive() -> None:
+        source.items.append(Toast(2, "Telegram", "Аня", "Привет, ты где?"))
+
+    llm.add(
+        PLAN,
+        after(calls(("press_keys", {"combo": "ctrl+r"})), arrive),
+        calls(("finish", {"status": "partial", "summary": "Обновил."})),
+    )
+    await agent.wait(await agent.run("Обнови почту"))
+    first = tool_results(llm)[0]
+    # пришло во время работы — текстом, как данные; то, что было до начала, не повторяется
+    assert "Новые уведомления Windows" in first and "Telegram: Аня — Привет, ты где?" in first
+    assert "Старое письмо" not in first and source.asked == 1
+
+    # нет доступа к уведомлениям — молча, и Windows не спрашиваем на каждом шаге
+    denied = agent.toast_source = Source("denied")
+    agent._toast_access, agent._toast_checked = "", -1e9
+    llm.add(
+        PLAN,
+        after(
+            calls(("press_keys", {"combo": "ctrl+r"})),
+            lambda: denied.items.append(Toast(3, "Telegram", "Ещё")),
+        ),
+        calls(("finish", {"status": "partial", "summary": "Обновил."})),
+    )
+    await agent.wait(await agent.run("Обнови почту"))
+    assert "уведомления" not in tool_results(llm)[0] and denied.asked == 1
+
+
 def test_screen_shot_shows_the_monitor_of_the_front_window() -> None:
     from PIL import Image
 

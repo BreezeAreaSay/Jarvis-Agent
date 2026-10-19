@@ -222,6 +222,13 @@ def _degrees_words(n: float) -> str:
     return f"{sign}{abs(v)} {numbers.plural(abs(v), numbers.DEGREES)}"
 
 
+def _window_is(window: Any, name: str) -> bool:
+    """Окно программы name: тот же exe («Telegram.exe» или «Telegram») или name — в заголовке."""
+    want = name.casefold().removesuffix(".exe")
+    exe = str(window.exe or "").casefold().removesuffix(".exe")
+    return bool(want) and (exe == want or want in str(window.title or "").casefold())
+
+
 def city_variants(text: str) -> list[str]:
     """«питере» → [«Санкт-Петербург»], «туле» → [«туле», «Тула», …] — варианты для поиска погоды."""
     t = " ".join(text.casefold().replace("ё", "е").split())
@@ -303,6 +310,7 @@ class Executor:
             "Jarvis.Briefing": self._briefing,
             "Ui.Click": self._ui_click,
             "Ui.Type": self._ui_type,
+            "Mouse.MoveInWindow": self._mouse_in_window,
         }
 
     # --- вход ---------------------------------------------------------------------------------------
@@ -576,29 +584,56 @@ class Executor:
         await self._platform(ui.set_text, element.id, text.strip())
         await asyncio.sleep(UI_SETTLE_S)
 
+    @staticmethod
+    def _handoff(st: RunState, message: str) -> NeedsAgent:
+        """Шаг, записанный агентом, не сработал — дело снова берёт агент: задача — сам сценарий (его
+        название — это и есть просьба человека)."""
+        why = message[:1].lower() + message[1:]
+        return NeedsAgent(message, f"{st.entry.command.name}. (Готовый сценарий не справился: {why}.)")
+
     async def _ui_element(self, name: str, st: RunState) -> tuple[Any, Any]:
         """Элемент окна впереди по названию; пока его нет — ждём (окно догружается). Так и не появился —
-        NeedsAgent: дело берёт агент, задача — сам сценарий (его название — это и есть просьба человека)."""
+        NeedsAgent: дело берёт агент."""
         if not name:
             raise UserFacingError("Не указано, какой элемент окна нужен")
-        task = f"{st.entry.command.name}. (Готовый сценарий не справился: {{why}}.)"
         ui = getattr(getattr(self.ctx, "agent", None), "ui", None)
         if ui is None:
-            raise NeedsAgent("Элементы окон недоступны", task.format(why="элементы окон недоступны"))
+            raise self._handoff(st, "Элементы окон недоступны")
         deadline = time.monotonic() + UI_WAIT_S
         while True:
             try:
                 fg = await self._platform(self.ctx.platform.foreground_window)
                 snapshot = await self._platform(ui.snapshot, UI_LIMIT, fg.hwnd if fg is not None else None)
             except PlatformError as e:
-                raise NeedsAgent(f"Окно не читается: {e}", task.format(why=str(e))) from e
+                raise self._handoff(st, f"Окно не читается: {e}") from e
             element = find_by_name(snapshot.elements, name)
             if element is not None:
                 return ui, element
             if time.monotonic() >= deadline:
-                why = f"в окне «{snapshot.window}» нет «{name}»"
-                raise NeedsAgent(why[:1].upper() + why[1:], task.format(why=why))
+                raise self._handoff(st, f"В окне «{snapshot.window}» нет «{name}»")
             await asyncio.sleep(UI_POLL_S)
+
+    async def _mouse_in_window(self, value: str, st: RunState) -> None:
+        """Курсор — в точку окна программы («Telegram.exe | 150 -40»: от левого и верхнего края, минус — от
+        правого и нижнего); окно не впереди — вывести вперёд; окна нет — дело берёт агент."""
+        name, sep, point = value.partition("|")
+        m = _COORDS.match(point)
+        if not sep or not name.strip() or m is None:
+            raise UserFacingError("«Навести курсор в окно»: нужно «программа | x y» — «Telegram | 150 60»")
+        name, x, y = name.strip(), int(m.group(1)), int(m.group(2))
+        platform = self.ctx.platform
+        windows = await self._windows()
+        front = next((w for w in windows if w.foreground and _window_is(w, name)), None)
+        window = front or next((w for w in windows if _window_is(w, name)), None)
+        if window is None:
+            raise self._handoff(st, f"Окна «{name}» нет")
+        if front is None:
+            await self._platform(platform.window_action, "focus", window.hwnd)
+            await asyncio.sleep(FOCUS_SETTLE_S)
+        left, top, right, bottom = window.rect
+        px = min(max(left + x if x >= 0 else right + x, left), right - 1)
+        py = min(max(top + y if y >= 0 else bottom + y, top), bottom - 1)
+        await self._platform(platform.mouse_move, px, py)
 
     # --- клавиатура и мышь --------------------------------------------------------------------------
     async def _keys_press(self, value: str, st: RunState) -> None:

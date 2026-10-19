@@ -288,6 +288,16 @@ class Voice(BaseService):
         except Exception:
             log.exception("голос: не удалось заглушить речь")
 
+    def stoppable(self) -> bool:
+        """Есть что останавливать «стопом» без «Джарвис»: работает агент, ждёт ответа «Разрешить?», Jarvis
+        говорит (из потока распознавания — только чтение флагов)."""
+        if getattr(getattr(self.ctx, "agent", None), "busy", False):
+            return True
+        waiting = getattr(getattr(self.ctx, "confirmations", None), "waiting", None)
+        if callable(waiting) and waiting():
+            return True
+        return self.tts_speaking()
+
     def earcon(self, name: str) -> None:
         if not self.ctx.settings.value.voice.earcons:
             return

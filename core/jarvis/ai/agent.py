@@ -31,6 +31,7 @@ import contextlib
 import copy
 import logging
 import re
+import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -83,9 +84,13 @@ POOR_ELEMENTS = 6  # меньше интерактивных элементов 
 OPAQUE_EXES = frozenset({"telegram.exe", "ayugram.exe", "kotatogram.exe", "64gram.exe"})
 URL_SCHEMES = ("http://", "https://", *APP_SCHEMES)
 MAX_MCP_RESULT = 8000
+TOAST_RECHECK_S = 60.0  # нет доступа к уведомлениям Windows — снова спросить не раньше чем через минуту
+TOAST_TIMEOUT_S = 2.0
+MAX_TOASTS = 3  # новых уведомлений в снимке
 RECENT_RECIPE_S = 15 * 60.0  # «запомни это» — про дело агента, если оно было не раньше 15 минут назад
 ASK_TIMEOUT_S = APPROVAL_TIMEOUT  # ask_user: ответ (голосом, в чате, фразой) ждём, как решение о разрешении
 MAX_MCP_TOOLS = 64  # больше инструментов провайдеры не принимают (вместе с действиями агента)
+STOPPED = "Ошибка: пользователь остановил работу — больше ничего не делай"
 
 RISKY_NAME = re.compile(
     r"\b(send|submit|delete|remove|pay|buy|order|purchase|checkout|confirm|publish|post|transfer|uninstall|"
@@ -110,6 +115,30 @@ SETTINGS_CHANGE = re.compile(
     re.I,
 )
 TOGGLE_KINDS = frozenset({"CheckBox", "RadioButton", "ComboBox", "Slider", "Spinner"})
+# связь компьютера: выключить — значит потерять сеть (а с ней ИИ и связь с Jarvis); в любом окне — только
+# с разрешения (переключатель Wi-Fi в параметрах Windows — для UI Automation обычная кнопка)
+NETWORK_NAME = re.compile(
+    r"wi-?fi|wi‑fi|вай-?фай|wlan|ethernet|bluetooth|блют[уо]|\bvpn\b|впн|самол[её]т|режим\w* пол[её]т|"
+    r"airplane|flight mode|точк\w* доступа|hotspot|хот-?спот|(?:мобильн|сотов)\w* (?:сет|интернет|данн|связ)|"
+    r"cellular|сетев\w* (?:адаптер|подключ)|network (?:adapter|connection)|"
+    r"отключ\w* (?:от )?(?:сет|интернет)|disconnect",
+    re.I,
+)
+# питание: выключить, перезагрузить, усыпить, выйти из системы (меню «Пуск», окно «Завершение работы Windows»
+# после Alt+F4 на рабочем столе) — тоже везде только с разрешения
+POWER_NAME = re.compile(
+    r"заверш\w* работ|выключ\w* (?:компьютер|пк|систем)|перезагрузк|"
+    r"перезагрузить (?:сейчас|компьютер|пк|систем)|спящ\w* режим|гибернац|выйти из системы|выход из системы|"
+    r"сменить пользовател|shut ?down|restart|reboot|\bsleep\b|hibernat|sign out|log ?off|switch user",
+    re.I,
+)
+# окна, где почти любое нажатие меняет систему: быстрые настройки, центр уведомлений, сетевые подключения
+SYSTEM_PANEL = re.compile(
+    r"быстр\w* (?:настрой|параметр|действ)|quick settings|центр уведомлений|notification cent|action center|"
+    r"сетевые подключения|network connections|диспетчер устройств|device manager",
+    re.I,
+)
+SYSTEM_PANEL_EXES = frozenset({"shellexperiencehost.exe", "shellhost.exe"})
 IMAGE_REFUSED = re.compile(r"image|vision|multimodal|изображ|картин", re.I)
 AGENT_RISK: dict[str, Any] = {a["name"]: a["risk"] for a in AGENT_ACTIONS}  # «agent.<имя>» в разрешениях
 
@@ -132,6 +161,7 @@ AGENT_PROMPT = """Ты — агент Jarvis: сам выполняешь зад
 открылось, что всплыло (окна, уведомления, ошибки), что изменилось. Крупно одно окно — screenshot.
 - Нужного элемента нет в снимке (окно плохо видно UI Automation: Telegram, игры, нестандартные окна) — \
 смотри на картинку и жми click_point по координатам картинки.
+- Какие окна появились или закрылись и новые уведомления Windows приходят текстом рядом со снимком.
 
 Как действовать — от надёжного к запасному:
 1. Команды Jarvis (run_command: «громкость 30», «пауза», «открой папку загрузки») и инструменты сервисов MCP \
@@ -162,6 +192,9 @@ ask_user одним коротким вопросом и дождись отве
 - Перед отправкой, публикацией, удалением, оплатой, покупкой, скачиванием и загрузкой файлов, изменением \
 параметров Windows и вводом паролей Jarvis сам спросит пользователя. Отклонил — не повторяй и не обходи \
 запрет другим путём.
+- Не отключай сеть (Wi-Fi, Ethernet, VPN, Bluetooth), не включай режим «в самолёте», не выключай, не \
+перезагружай и не усыпляй компьютер, если пользователь прямо не просил этого в задаче: без сети пропадёт \
+связь и с тобой, и с Jarvis. Нечаянно отключил — сразу верни как было и скажи об этом.
 - Пароли, коды из SMS и данные карт не вводи, если пользователь не дал их явно в задаче; в итоге их не \
 пересказывай.
 - Капчу, вход в аккаунт, двухфакторную проверку и ограничения сайтов не обходи: остановись и попроси \
@@ -246,11 +279,15 @@ class AgentRun:
     changed: bool = False  # было действие, которое что-то меняет на экране, — итог «done» проверить по снимку
     verified: bool = False  # проверка перед итогом уже была
     closing: bool = False  # итог (finish) принят: реплика человека — уже новый запрос, а не агенту
+    stopping: bool = False  # «Стоп»: больше ни одного действия (Codex и программы ещё могут звать)
+    acting: "set[asyncio.Future[Outcome]]" = field(default_factory=set)  # идущие действия — «Стоп» обрывает
     request: str = ""  # слова человека: фраза сценария, если прогон запомнят
     recipe: list[dict[str, str]] = field(default_factory=list)  # удачные действия — шагами сценария
     replayable: bool = True  # всё, что меняло экран, сценарий повторит (нет MCP, безымянных кнопок, секретов)
     pointer: tuple[int, int] | None = None  # куда (экран) агент последний раз нажал мышью или крутил колесо
+    pointer_window: WindowInfo | None = None  # окно, в котором была эта точка
     windows: dict[int, str] | None = None  # окна на экране при прошлом снимке: hwnd → «заголовок» (exe)
+    toasts: set[Any] | None = None  # id уведомлений Windows при прошлом снимке
     usage: Usage = field(default_factory=Usage)
     started: float = field(default_factory=time.time)
     deadline: float = field(default_factory=lambda: time.monotonic() + RUN_DEADLINE_S)
@@ -374,6 +411,10 @@ class Agent(BaseService):
         self._run: AgentRun | None = None
         self._runs: dict[str, AgentRun] = {}
         self._last_recipe: tuple[str, str, float] | None = None  # (чат, итог, когда) — можно запомнить
+        # уведомления Windows (как у «Озвучки уведомлений»): тесты подставляют свой источник
+        self.toast_source: Any = None
+        self._toast_access = ""
+        self._toast_checked = -1e9
         self._actions: dict[str, Action] = {a.name: a for a in self._make_actions()}
 
     # --- управление ------------------------------------------------------------------------------------
@@ -386,7 +427,7 @@ class Agent(BaseService):
         """Агент сейчас работает (реплику человека — ему, а не новым запросом). Итог уже принят — нет:
         реплика тогда — новый запрос, иначе она бы потерялась."""
         run = self._run
-        return run is not None and not run.finished and not run.closing
+        return run is not None and not run.finished and not run.closing and not run.stopping
 
     @property
     def waiting_answer(self) -> bool:
@@ -539,6 +580,12 @@ class Agent(BaseService):
         run = self._run
         if run is None or run.finished or run.handle is None or run.handle.done():
             return
+        # сразу: вызов инструмента, который уже идёт из Codex или программы, ничего не сделает, а начатое
+        # действие (курсор летит к кнопке, набирается текст) обрывается — оно идёт не в задаче запуска
+        run.stopping = True
+        log.info("агент: «Стоп» — работа останавливается")
+        for work in list(run.acting):
+            work.cancel()
         run.handle.cancel()
         if run.done is not None:
             with contextlib.suppress(TimeoutError):
@@ -549,6 +596,10 @@ class Agent(BaseService):
 
     async def stop(self) -> None:
         await self.stop_run()
+        source, self.toast_source = self.toast_source, None
+        if source is not None:
+            with contextlib.suppress(Exception):
+                await source.close()
 
     # --- события -------------------------------------------------------------------------------------
     def _set(self, run: AgentRun, status: str | None = None, text: str | None = None) -> None:
@@ -969,17 +1020,20 @@ class Agent(BaseService):
         if name == "wait":
             seconds = _num(args, "seconds") or 1.0
             return [_step("Wait", f"{max(0.5, min(seconds, 15.0)):g}")]
-        if name in ("click_point", "scroll") and run.pointer is not None:
-            point = f"{run.pointer[0]} {run.pointer[1]}"
+        if name in ("click_point", "scroll"):
+            point = _window_point(run.pointer, run.pointer_window)
+            if point is None:
+                return None
+            move = _step("Mouse.MoveInWindow", point)  # окно сдвинули или растянули — точка та же
             if name == "scroll":
                 amount = int(max(1, min(_num(args, "amount") or 5, 30)))
                 up = (_arg(args, "direction") or "down").casefold() == "up"
-                return [_step("Mouse.Move", point), _step("Mouse.Scroll", str(amount if up else -amount))]
+                return [move, _step("Mouse.Scroll", str(amount if up else -amount))]
             button = _arg(args, "button") or "left"
             if args.get("double"):
-                return [_step("Mouse.DoubleClick", point)]
+                return [move, _step("Mouse.DoubleClick", "")]
             if button in ("left", "right"):
-                return [_step("Mouse.ClickRight" if button == "right" else "Mouse.ClickLeft", point)]
+                return [move, _step("Mouse.ClickRight" if button == "right" else "Mouse.ClickLeft", "")]
         return None  # инструменты MCP и всё, чего сценарий не умеет
 
     @staticmethod
@@ -1019,10 +1073,19 @@ class Agent(BaseService):
         if len(base) > MAX_SCENARIO_NAME:
             base = base[: MAX_SCENARIO_NAME - 1].rstrip() + "…"
         name = scenarios.unique_name(base)
+        # без триггера сценарий не сохранить: фраза — слова человека (длинные — по слово в пределах лимита)
         phrase = request.casefold()
-        triggers = [{"type": "phrase", "phrases": [phrase]}] if 2 < len(phrase) <= MAX_SCENARIO_PHRASE else []
+        if len(phrase) > MAX_SCENARIO_PHRASE:
+            phrase = phrase[: MAX_SCENARIO_PHRASE + 1].rsplit(" ", 1)[0].rstrip(" ,.!?…")
+        if len(phrase) < 3:
+            phrase = name.casefold().rstrip("…")
         item = scenarios.create(
-            {"name": name, "icon": "sparkles", "triggers": triggers, "actions": recipe["actions"]}
+            {
+                "name": name,
+                "icon": "sparkles",
+                "triggers": [{"type": "phrase", "phrases": [phrase]}],
+                "actions": recipe["actions"],
+            }
         )
         meta["recipe"] = {**recipe, "scenario_id": item["id"]}
         updated = self.chats.set_meta(chat_id, message_id, meta)
@@ -1056,6 +1119,8 @@ class Agent(BaseService):
         return summary
 
     async def _act(self, run: AgentRun, call: ToolCall) -> tuple[str, list[dict[str, Any]]]:
+        if run.stopping or run.finished:
+            return STOPPED, []
         action = self._actions.get(call.name) or run.mcp.get(call.name)
         if action is None:
             return f"Ошибка: инструмента «{call.name}» нет", []
@@ -1091,8 +1156,19 @@ class Agent(BaseService):
             "agent.step", {"run_id": run.id, "index": index, "title": doing, "status": "running"}
         )
         self._set(run, "running", doing)
+        work = asyncio.ensure_future(action.run(run, args))
+        run.acting.add(work)
         try:
-            outcome = await asyncio.wait_for(action.run(run, args), ACTION_TIMEOUT)
+            outcome = await asyncio.wait_for(work, ACTION_TIMEOUT)
+        except asyncio.CancelledError:
+            task = asyncio.current_task()
+            if not run.stopping or (task is not None and task.cancelling()):
+                raise  # останавливают сам запуск (свой цикл агента) — дальше по стеку
+            # «Стоп», а действие звал Codex или программа: они узнают ответом, запуск уже закончен
+            self.ctx.bus.publish(
+                "agent.step", {"run_id": run.id, "index": index, "title": doing, "status": "error"}
+            )
+            return STOPPED, []
         except Denied as e:
             outcome = Outcome(False, str(e), "Отклонено")
         except WindowChanged as e:
@@ -1104,6 +1180,8 @@ class Agent(BaseService):
         except Exception as e:
             log.exception("действие агента %s упало", call.name)
             outcome = Outcome(False, f"Ошибка: {e}", str(e))
+        finally:
+            run.acting.discard(work)
         status = "ok" if outcome.ok else "error"
         if outcome.ok and call.name in self._actions and AGENT_RISK.get(call.name, "act") != "read":
             run.changed = True
@@ -1197,6 +1275,9 @@ class Agent(BaseService):
         if hwnd != run.unsent_hwnd:
             run.unsent, run.unsent_hwnd = [], hwnd
         run.unsent.append(text)
+
+    def _system_panel(self, run: AgentRun) -> bool:
+        return self._app(run).casefold() in SYSTEM_PANEL_EXES or bool(SYSTEM_PANEL.search(self._window(run)))
 
     def _settings_window(self, run: AgentRun) -> bool:
         return self._app(run).casefold() in SETTINGS_EXES or bool(SETTINGS_WINDOW.search(self._window(run)))
@@ -1301,9 +1382,9 @@ class Agent(BaseService):
             hint = self._new_playbook(run, fg)
             if hint:
                 parts.append(hint)  # до снимка: устаревшие снимки скрываются, подсказка остаётся
-        changed = await self._windows_change(run)
-        if changed:
-            parts.append(changed)
+        for change in (await self._windows_change(run), await self._toasts_change(run)):
+            if change:
+                parts.append(change)
         # картинка экрана снимается (пул ввода-вывода), пока поток платформы читает элементы окна
         area = await self._screen_area(fg) if run.vision and not force_shot else None
         grab = asyncio.ensure_future(self._grab(area)) if area is not None else None
@@ -1346,6 +1427,38 @@ class Agent(BaseService):
             [f"закрылось: {', '.join(closed)}"] if closed else []
         )
         return untrusted("Окна на экране с прошлого снимка", "\n".join(lines)) if lines else ""
+
+    async def _toasts_change(self, run: AgentRun) -> str:
+        """Новые всплывающие уведомления Windows с прошлого снимка («Telegram: Аня — Привет») — текстом, как
+        данные. Нет доступа к уведомлениям (Параметры Windows) или не Windows — ничего."""
+        source = self.toast_source
+        if source is None and sys.platform == "win32":
+            from jarvis.plugins.notify_voice import WinNotificationSource
+
+            source = self.toast_source = WinNotificationSource()
+        if source is None:
+            return ""
+        try:
+            if self._toast_access != "allowed":
+                if time.monotonic() - self._toast_checked < TOAST_RECHECK_S:
+                    return ""
+                self._toast_checked = time.monotonic()
+                self._toast_access = str(await asyncio.wait_for(source.access(False), TOAST_TIMEOUT_S))
+                if self._toast_access != "allowed":
+                    return ""
+            toasts = list(await asyncio.wait_for(source.fetch(), TOAST_TIMEOUT_S))
+        except Exception as e:
+            log.debug("уведомления для агента не прочитаны: %s", e)
+            return ""
+        seen, run.toasts = run.toasts, {t.id for t in toasts}
+        if seen is None:
+            return ""
+        fresh = [t for t in toasts if t.id not in seen][-MAX_TOASTS:]
+        lines = [
+            one_line(f"{t.app or 'Уведомление'}: {t.title}" + (f" — {t.body}" if t.body else ""), 200)
+            for t in fresh
+        ]
+        return untrusted("Новые уведомления Windows", "\n".join(lines)) if lines else ""
 
     def _area_sync(self, hwnd: int | None) -> ScreenArea:
         """Что снимать (монитор окна впереди или весь экран) и виртуальный экран — одним вызовом платформы."""
@@ -1494,6 +1607,8 @@ class Agent(BaseService):
         window = self._window(run)
         if RISKY_NAME.search(name) or (CLOSE_NAME.search(name) and UNSAVED.search(window)):
             return True
+        if _cuts_off(name) or _cuts_off(window) or self._system_panel(run):
+            return True  # Wi-Fi, VPN, «в самолёте», выключение, быстрые настройки — везде только с разрешения
         # параметры Windows: переключатели и «Применить» меняют систему
         return self._settings_window(run) and (kind in TOGGLE_KINDS or bool(SETTINGS_CHANGE.search(name)))
 
@@ -1595,7 +1710,7 @@ class Agent(BaseService):
         what = _arg(args, "what")
         fg = await self._target(run)
         sx, sy = self._point_of(run, fg, x, y)
-        run.pointer = (sx, sy)
+        run.pointer, run.pointer_window = (sx, sy), fg
         owner_pid, owner_title = await self.ctx.run_platform(self.ui.owner_at, sx, sy)
         if owner_pid and fg.pid and owner_pid != fg.pid:
             raise WindowChanged(
@@ -1650,7 +1765,7 @@ class Agent(BaseService):
             sx, sy = self._point_of(run, fg, x, y)
         else:
             sx, sy = _center(fg.rect)
-        run.pointer = (sx, sy)
+        run.pointer, run.pointer_window = (sx, sy), fg
         await self._point(run, "scroll", sx, sy, "вверх" if direction == "up" else "вниз")
         saved: tuple[int, int] | None = None
         with contextlib.suppress(PlatformError):
@@ -1679,6 +1794,8 @@ class Agent(BaseService):
             await self._approve_send(run, f"Нажать {combo}")
         else:
             risky = combo in RISKY_KEYS or (combo in CLOSE_KEYS and bool(UNSAVED.search(window)))
+            # пробел и Enter в быстрых настройках, на переключателе связи, в окне выключения — то же нажатие
+            risky = risky or (combo in ("space", "enter") and (self._system_panel(run) or _cuts_off(window)))
             if self._ask(run, risky):
                 detail = self._send_detail(run) if combo in ("ctrl+enter", "alt+s") else ""
                 await self._approve(run, f"Нажать {combo}{where}?", detail)
@@ -1979,9 +2096,30 @@ class Agent(BaseService):
                 task.cancel()
 
 
+def _cuts_off(text: str) -> bool:
+    """Связь или питание компьютера (Wi-Fi, VPN, «в самолёте», выключение, сон) — нажатие только с
+    разрешения."""
+    return bool(NETWORK_NAME.search(text) or POWER_NAME.search(text))
+
+
 def _step(kind: str, value: str) -> dict[str, str]:
     """Шаг сценария — как действие команды: {type, value}."""
     return {"type": kind, "value": value}
+
+
+def _window_point(point: tuple[int, int] | None, window: WindowInfo | None) -> str | None:
+    """Точка экрана → «Telegram.exe | 150 -40»: от ближнего края окна (минус — от правого или нижнего), чтобы
+    в сценарии она не уехала, когда окно сдвинут или растянут. Окна или точки нет — None."""
+    if point is None or window is None:
+        return None
+    left, top, right, bottom = window.rect
+    name = window.exe or window.title
+    if right <= left or bottom <= top or not name or "|" in name:
+        return None
+    sx, sy = point
+    x = sx - left if sx - left <= right - sx else min(-1, sx - right)
+    y = sy - top if sy - top <= bottom - sy else min(-1, sy - bottom)
+    return f"{name} | {x} {y}"
 
 
 def _prune(messages: list[dict[str, Any]]) -> None:

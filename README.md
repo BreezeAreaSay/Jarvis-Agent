@@ -36,8 +36,8 @@
    (1.x), сначала удалите её и переменную среды `JARVIS_DATA_DIR`, если задавали.
 3. Скажите «Джарвис, сверни все окна».
 
-Установщик не подписан цифровой подписью — Windows SmartScreen может предупредить: «Подробнее → Выполнить
-в любом случае».
+Установщик пока не подписан цифровой подписью — Windows SmartScreen может предупредить: «Подробнее →
+Выполнить в любом случае». Как подписывать сборки — «Подпись установщика» ниже.
 
 ## Обновления
 
@@ -47,12 +47,34 @@ Jarvis сам проверяет новые версии на GitHub — при 
 
 Выпуск версии:
 
-1. Поднять версию в `desktop/package.json`, `core/pyproject.toml` и `core/jarvis/__init__.py`.
-2. Собрать установщик: `pwsh -File scripts\build-win.ps1` — в `desktop\release` появятся
-   `Jarvis-Setup-<версия>.exe`, `Jarvis-Setup-<версия>.exe.blockmap` и `latest.yml`.
-3. Опубликовать: `pwsh -File scripts\publish-release.ps1 -Notes "что нового"` (нужен
+1. Поднять версию в `desktop/package.json` (и `package-lock.json`), `core/pyproject.toml` (и `core/uv.lock`)
+   и `core/jarvis/__init__.py`; что нового — в `docs/releases/v<версия>.md`.
+2. Поставить тег `v<версия>` на коммит в `main` и отправить его на GitHub (`git tag v2.3.0 && git push origin
+   v2.3.0`): CI проверит ядро и интерфейс, соберёт установщик на Windows и сам создаст релиз с заметками из
+   `docs/releases` — установленный Jarvis увидит обновление.
+3. Без CI — на своём ПК: `pwsh -File scripts\build-win.ps1` (в `desktop\release` появятся
+   `Jarvis-Setup-<версия>.exe`, `.exe.blockmap` и `latest.yml`), затем
+   `pwsh -File scripts\publish-release.ps1 -NotesFile docs\releases\v<версия>.md` (нужен
    [GitHub CLI](https://cli.github.com): `winget install GitHub.cli`, `gh auth login`) — или вручную: новый релиз
    на GitHub с тегом `v<версия>` и этими тремя файлами. Без `latest.yml` приложение версию не увидит.
+
+### Подпись установщика
+
+Подписанный установщик не пугает SmartScreen и реже ловит ложные срабатывания антивирусов. Нужен сертификат
+подписи кода (Code Signing, OV или EV) от центра сертификации — их теперь выдают на токене или в облаке, не
+файлом. Открытым проектам подпись бывает бесплатной: [SignPath Foundation](https://signpath.org) подписывает
+сборки из CI своим сертификатом (подключается отдельно, через их сервис).
+
+- Сертификат на токене: `pwsh -File scripts\build-win.ps1 -CertificateSubject "Имя из сертификата"` — signtool
+  найдёт его в хранилище Windows (PIN токена спросит сам); electron-builder подпишет `Jarvis.exe`, установщик
+  и деинсталлятор.
+- Файл .pfx (если есть): `-Certificate C:\keys\jarvis.pfx` (пароль спросит); в CI — секреты репозитория
+  `WIN_CSC_LINK` (файл .pfx в base64) и `WIN_CSC_KEY_PASSWORD` (Settings → Secrets and variables → Actions),
+  сборка по тегу подпишет сама.
+- Без сертификата — сборка без подписи, как раньше.
+
+Подписанную версию выпустили — дальше подписывайте все: обновление проверяет издателя по подписи уже
+установленной версии.
 
 ## Запуск из исходников (Windows)
 

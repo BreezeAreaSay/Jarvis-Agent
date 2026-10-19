@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from jarvis import text as textops
 from jarvis.ai import apphints, policy
 from jarvis.ai.chatgpt import ChatGpt
 from jarvis.ai.chats import MODES, ChatStore, ui_message
@@ -365,13 +366,14 @@ class Ai(BaseService):
         self.chats.require(chat_id)
         agent = getattr(self.ctx, "agent", None)
         run = getattr(agent, "current", None)
-        if (
-            run is not None
-            and not run.finished
-            and run.chat_id == chat_id
-            and not images
-            and agent.interject(text)  # type: ignore[union-attr]
-        ):
+        working = run is not None and not run.finished and run.chat_id == chat_id and not images
+        if working and textops.is_stop(text):
+            # «стоп» в чате агента — стоп всему, как голосом, а не поправка к задаче
+            row = self.chats.add_message(chat_id, "user", text.strip())
+            self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
+            await self.ctx.dispatcher.stop()
+            return {"chat_id": chat_id, "message_id": row["id"], "reply_id": run.reply_id}  # type: ignore[union-attr]
+        if working and agent.interject(text):  # type: ignore[union-attr]
             row = self.chats.add_message(chat_id, "user", text.strip())
             self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
             return {"chat_id": chat_id, "message_id": row["id"], "reply_id": run.reply_id}

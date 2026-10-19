@@ -196,6 +196,11 @@ def jarvis_hotkeys(settings: Any) -> frozenset[str]:
 # сайты, куда данные в адресе (поисковый запрос) уходят по делу: ссылки на них открываются без вопросов
 SEARCH_HOSTS = re.compile(
     r"(^|\.)(google\.[a-z.]+|yandex\.[a-z]+|ya\.ru|bing\.com|duckduckgo\.com|youtube\.com|wikipedia\.org|"
-    r"maps\.google\.[a-z.]+|2gis\.ru|ozon\.ru|wildberries\.ru|market\.yandex\.ru|github\.com)$",
+    r"maps\.google\.[a-z.]+|2gis\.ru|ozon\.ru|wildberries\.ru|market\.yandex\.ru|github\.com|avito\.ru|"
+    r"kinopoisk\.ru|rutube\.ru|twitch\.tv|vk\.com|soundcloud\.com|aliexpress\.(?:ru|com)|"
+    r"store\.steampowered\.com)$",
     re.I,
 )
+# адреса программ, которые ИИ может открывать (кроме http и https): открывают нужное место в программе,
+# но сами ничего не отправляют и не запускают (tg://resolve — чат, whatsapp://send — чат с текстом в поле)
+APP_SCHEMES = ("tg://", "ms-settings:", "spotify:", "mailto:", "whatsapp://")

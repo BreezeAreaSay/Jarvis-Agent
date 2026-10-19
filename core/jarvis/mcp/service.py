@@ -205,6 +205,17 @@ class Mcp(BaseService):
         self._names, self._titles = names, titles
         return specs
 
+    def server_notes(self) -> list[dict[str, str]]:
+        """Подключённые серверы для подсказок ИИ: {name, prefix (mcp__<сервер>__), instructions}."""
+        out = []
+        for conn in list(self._conns.values()):
+            if conn.status != "connected":
+                continue
+            server = slug(conn.config.name) or conn.config.id
+            prefix = f"mcp__{_part(server)[:20] or 'server'}__"
+            out.append({"name": conn.config.name, "prefix": prefix, "instructions": conn.instructions})
+        return out
+
     def tool_title(self, name: str) -> str:
         """Заголовок карточки: «Файлы: read_file»."""
         if name not in self._titles:

@@ -132,6 +132,12 @@ class AiSettings(_Model):
     web_search: bool = True
     memory: bool = True  # запоминать факты о пользователе
     mode: Literal["chat", "all", "agent"] = "all"  # режим по умолчанию: чат / всё вместе / агент
+    # скорость ответа: fast — модель думает меньше (усилие low), deep — дольше и тщательнее, balanced — как у
+    # модели по умолчанию
+    speed: Literal["fast", "balanced", "deep"] = "fast"
+    # «Всё вместе»: просьбу что-то сделать в программе («напиши Ане в телеграме…») сразу отдать агенту,
+    # не тратя на это лишний ответ модели
+    auto_agent: bool = True
     # модель понимает картинки (снимки окон для агента, картинки в чате): auto — по провайдеру и модели
     vision: Literal["auto", "on", "off"] = "auto"
     agent_confirm: Literal["risky", "always"] = "risky"

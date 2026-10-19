@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from jarvis.ai.format import now_text
 from jarvis.ai.prompts import (
+    APPS_HEADER,
     MODE_ALL_AGENT,
     MODE_CHAT,
     PERSONA_JARVIS,
@@ -64,6 +65,7 @@ def context_sections(
     mode: str,
     memory: str,
     has_agent_tool: bool,
+    apps: str = "",
     moment: datetime | None = None,
 ) -> dict[str, str]:
     """Разделы контекста хода: имя → текст (пустой текст — раздела нет)."""
@@ -103,6 +105,7 @@ def context_sections(
             if custom
             else ""
         ),
+        "apps": f"{APPS_HEADER}\n\n{apps.strip()}" if apps.strip() else "",
         "time": f"Сейчас: {now_text(moment)}.",
     }
 

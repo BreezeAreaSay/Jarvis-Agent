@@ -154,6 +154,7 @@ class McpConnection:
         self.status = "connecting" if config.enabled else "disabled"
         self.error = ""
         self.tools: list[types.Tool] = []
+        self.instructions = ""  # как пользоваться сервером — его собственные инструкции (initialize)
         self.session: ClientSession | None = None
         self.log_path = log_path
         self._on_change = on_change
@@ -244,7 +245,8 @@ class McpConnection:
                     client_info=types.Implementation(name="jarvis", version=__version__),
                 )
             )
-            await asyncio.wait_for(session.initialize(), INIT_TIMEOUT)
+            init = await asyncio.wait_for(session.initialize(), INIT_TIMEOUT)
+            self.instructions = str(getattr(init, "instructions", None) or "").strip()
             self.tools = await asyncio.wait_for(list_all_tools(session), LIST_TIMEOUT)
             self._broken = self._tools_dirty = False
             self.session = session

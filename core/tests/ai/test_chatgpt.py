@@ -248,7 +248,8 @@ async def test_chat_turn_streams_text_and_runs_jarvis_tools(
     assert all(set(tool) == {"type", "name", "description", "inputSchema"} for tool in thread["dynamicTools"])
     assert "Ты работаешь внутри Jarvis" in thread["developerInstructions"]
     assert thread["config"] == {"web_search": "disabled"}
-    assert turn["params"]["model"] == "gpt-6.1-sol" and turn["params"]["effort"] == "medium"
+    # «Скорость ответа: Быстро» (по умолчанию) — модель думает меньше
+    assert turn["params"]["model"] == "gpt-6.1-sol" and turn["params"]["effort"] == "low"
     context = turn["params"]["additionalContext"]
     assert set(context) == {"jarvis"} and context["jarvis"]["kind"] == "application"
     assert "Обращайся к пользователю «сэр»" in context["jarvis"]["value"]
@@ -602,16 +603,18 @@ async def test_agent_works_as_a_codex_turn(
     assert ui.clicks == ["Написать"]
     assert [s["status"] for s in events.of("agent.step")] == ["running", "ok"]
     states = events.of("agent.state")
-    assert states[0]["status"] == "planning" and states[-1]["status"] == "done" and states[-1]["total"] == 1
+    assert states[0]["status"] == "planning" and states[-1]["status"] == "done"
 
-    thread = codex.threads[codex.turns[1]["thread"]]
+    # план составляется параллельно (отдельный ход со схемой): ход агента его не ждёт
+    agent_turn = next(t for t in codex.turns if "outputSchema" not in t["params"])
+    assert agent_turn["params"]["effort"] == "low"
+    thread = codex.threads[agent_turn["thread"]]
     names = {tool["name"] for tool in thread["dynamicTools"]}
     assert {"ui_snapshot", "ui_click", "ui_type", "press_keys", "launch_app", "finish"} <= names
     assert "remember" not in names and "screenshot" not in names  # без зрения — без снимков экрана
     assert thread["ephemeral"] is True and "Ты — агент Jarvis" in thread["developerInstructions"]
-    first = codex.turns[1]["items"][0]["text"]
-    assert "Задача: Открой новое письмо" in first and "План:\n1. Нажать «Написать»" in first
-    assert "e1 Button «Написать»" in first
+    first = agent_turn["items"][0]["text"]
+    assert "Задача: Открой новое письмо" in first and "e1 Button «Написать»" in first
 
 
 async def test_agent_step_limit_and_screenshot(

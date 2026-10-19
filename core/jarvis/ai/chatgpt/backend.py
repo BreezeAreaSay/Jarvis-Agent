@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from jarvis.ai import apphints
 from jarvis.ai.chatgpt import component, errors, prompt
 from jarvis.ai.chatgpt.component import SdkInfo
 from jarvis.ai.chatgpt.runtime import (
@@ -498,13 +499,36 @@ class ChatGpt:
         name = (requested or "").strip() or self.ctx.settings.value.ai.model.strip()
         return name if name in self.model_ids() else self.default_model()
 
-    def _effort(self, model: str, source: str) -> str:
-        if source in ("voice", "remote", "telegram"):
-            return "low"  # голосом — быстрее
+    def _default_effort(self, model: str) -> str:
         for item in self._models or []:
             if item.get("id") == model and isinstance(item.get("defaultReasoningEffort"), str):
                 return str(item["defaultReasoningEffort"])
         return "medium"
+
+    def _supported(self, model: str, wanted: str) -> str:
+        """Усилие, если модель его знает (по каталогу Codex); иначе — её умолчание."""
+        for item in self._models or []:
+            if item.get("id") != model:
+                continue
+            raw = item.get("supportedReasoningEfforts")
+            if isinstance(raw, list) and raw:
+                names = {str(e.get("reasoningEffort") if isinstance(e, dict) else e) for e in raw}
+                if wanted not in names:
+                    return self._default_effort(model)
+        return wanted
+
+    def _effort(self, model: str, source: str) -> str:
+        """Сколько думать в чате: «Быстро» и голос — low, «Тщательно» — high, иначе — умолчание модели."""
+        speed = self.ctx.settings.value.ai.speed
+        if speed == "fast" or source in ("voice", "remote", "telegram"):
+            return self._supported(model, "low")
+        if speed == "deep":
+            return self._supported(model, "high")
+        return self._default_effort(model)
+
+    def _agent_effort(self, model: str) -> str:
+        speed = self.ctx.settings.value.ai.speed
+        return self._supported(model, {"fast": "low", "deep": "high"}.get(speed, "medium"))
 
     def preset_json(self, base: dict[str, Any]) -> dict[str, Any]:
         """Пресет для GET /api/ai/providers: модели и умолчание — из каталога Codex (если есть)."""
@@ -1135,6 +1159,7 @@ class ChatGpt:
                 mode=turn.mode,
                 memory=memory,
                 has_agent_tool="run_agent" in allowed,
+                apps=await apphints.chat_hints(self.ctx, turn.text, allowed),
             )
             sent = dict(state.sent)
             context: dict[str, Any] = {
@@ -1445,7 +1470,7 @@ class ChatGpt:
                     runtime,
                     thread_id,
                     [{"type": "text", "text": first}],
-                    {"model": model, "effort": "medium"},
+                    {"model": model, "effort": self._agent_effort(model)},
                 )
             )
             run_ref["run"] = active.run = turn_run

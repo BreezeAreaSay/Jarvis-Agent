@@ -241,7 +241,7 @@ async def test_agent_works_as_one_program_run(
     assert (result.status, result.summary, result.error) == ("done", "Открыл новое письмо.", "")
     assert ui.clicks == ["Написать"]
     assert [s["status"] for s in events.of("agent.step")] == ["running", "ok"]
-    work = fake.runs[1]
+    work = next(r for r in fake.runs if "одним JSON" not in r["stdin"])  # план идёт параллельно
     assert work["tools"][0]["name"] == "ui_click" and "«Написать»: нажато" in work["tools"][0]["text"]
     assert "--no-session-persistence" in work["argv"] and "агент" in work["system"]
     assert "Задача: Открой новое письмо" in json.loads(work["stdin"])["message"]["content"][0]["text"]
@@ -264,7 +264,8 @@ async def test_agent_step_limit_kills_the_program(
     result = await asyncio.wait_for(core.agent.wait(run_id), 20)
     assert result.status == "error" and result.error == "Агент не уложился в 3 шагов"
     # четвёртое действие не выполнено, программа остановлена сразу, а не через 30 с своего сценария
-    assert [t["name"] for t in fake.runs[1]["tools"]] == ["ui_snapshot"] * 3
+    work = next(r for r in fake.runs if "одним JSON" not in r["stdin"])
+    assert [t["name"] for t in work["tools"]] == ["ui_snapshot"] * 3
     assert [s["status"] for s in events.of("agent.step")].count("ok") == 3
     assert time.monotonic() - started < 15
 

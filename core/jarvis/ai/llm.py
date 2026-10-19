@@ -106,6 +106,7 @@ class LlmConfig:
     enabled: bool
     local: bool  # сервер на этом ПК или в домашней сети: без ключа, без прокси, бесплатно
     folder_id: str = ""  # каталог Yandex Cloud (YandexGPT)
+    speed: str = "balanced"  # settings.ai.speed: fast — думать меньше, deep — больше
 
     @property
     def chat_url(self) -> str:
@@ -174,6 +175,7 @@ def resolve_config(settings: "AiSettings", secrets: "Secrets", model: str | None
         enabled=settings.enabled,
         local=local,
         folder_id=settings.folder_id.strip() if preset.folder else "",
+        speed=str(getattr(settings, "speed", "balanced") or "balanced"),
     )
 
 
@@ -832,6 +834,8 @@ def _quirk_for(message: str, body: dict[str, Any]) -> str | None:
         return "no_tool_choice"
     if "tools" in body and _NO_TOOLS.search(m):
         return "no_tools"
+    if ("reasoning_effort" in body or "reasoning" in body) and "reasoning" in m:
+        return "no_reasoning"
     return None
 
 
@@ -839,6 +843,24 @@ def _is_reasoning_model(model: str) -> bool:
     """«Думающие» модели OpenAI (gpt-5*, o1/o3/o4…) не принимают temperature."""
     name = model.lower().rsplit("/", 1)[-1]
     return bool(re.match(r"(gpt-5|o\d)", name))
+
+
+SPEED_EFFORT = {"fast": "low", "deep": "high"}  # balanced — как у модели по умолчанию
+_ALWAYS_THINKS = re.compile(r"gemini-(?:2\.5|[3-9])", re.I)  # Gemini, которые думают всегда
+
+
+def reasoning_effort(cfg: LlmConfig) -> str:
+    """Сколько модели думать (settings.ai.speed) — только моделям, которые думают и так: «быстро» им
+    сокращает раздумья; включать раздумья тем, кто без них, «быстро» не должно."""
+    effort = SPEED_EFFORT.get(cfg.speed, "")
+    if not effort:
+        return ""
+    model = cfg.model.rsplit("/", 1)[-1]
+    if cfg.provider in ("openai", "openrouter") and _is_reasoning_model(model):
+        return effort
+    if cfg.provider in ("gemini", "openrouter") and _ALWAYS_THINKS.search(model):
+        return effort
+    return ""
 
 
 def _backoff(attempt: int, retry_after: float | None) -> float:
@@ -1021,6 +1043,12 @@ class LlmClient:
                 body["response_format"] = {"type": "json_object"}
             else:
                 body["response_format"] = {"type": "json_schema", "json_schema": _schema_spec(json_schema)}
+        effort = reasoning_effort(cfg)
+        if effort and "no_reasoning" not in quirks:
+            if cfg.provider == "openrouter":
+                body["reasoning"] = {"effort": effort}
+            else:
+                body["reasoning_effort"] = effort
         return body
 
     # --- запросы ------------------------------------------------------------------------------------------

@@ -235,7 +235,7 @@ class FakeRuntime:
             raise AssertionError("сценарий ходов закончился")
         self.world.turn_n += 1
         turn = FakeTurn(thread_id, f"turn-{self.world.turn_n}")
-        script = self.world.scripts.pop(0)
+        script = self.world.scripts.pop(_pick(self.world.scripts, params))
         self.world.turns.append({"thread": thread_id, "items": items, "params": params, "turn": turn})
         ctx = FakeTurnScript(self, turn, items, params)
 
@@ -289,7 +289,18 @@ def answer(text: str, *, tokens: tuple[int, int] = (120, 30)) -> Script:
         t.usage(*tokens)
         t.complete()
 
+    script.json_answer = text.lstrip().startswith("{")  # type: ignore[attr-defined]
     return script
+
+
+def _pick(scripts: list[Script], params: dict[str, Any]) -> int:
+    """Ходу со схемой (план агента) — первый ответ-JSON, остальным — первый другой сценарий: план агента
+    составляется параллельно с его первым ходом, порядок ходов не задан."""
+    wants_json = "outputSchema" in params
+    for i, script in enumerate(scripts):
+        if bool(getattr(script, "json_answer", False)) == wants_json:
+            return i
+    return 0
 
 
 def text_of(result: dict[str, Any]) -> str:

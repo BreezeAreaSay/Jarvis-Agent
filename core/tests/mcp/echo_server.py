@@ -2,7 +2,7 @@
 
 from mcp.server.fastmcp import FastMCP
 
-server = FastMCP("echo")
+server = FastMCP("echo", instructions="Эхо: складывает числа и повторяет текст.")
 
 
 @server.tool()

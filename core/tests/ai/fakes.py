@@ -101,6 +101,22 @@ class ScriptedLlm:
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handler)
 
+    def _pick(self, body: dict[str, Any]) -> int:
+        """Какой ответ отдать: запросу со схемой JSON (план агента) — первый ответ-JSON, остальным — первый
+        не-JSON: план агента теперь составляется параллельно с первым шагом, порядок запросов не задан."""
+        wants_json = "response_format" in body
+
+        def is_json(item: Any) -> bool:
+            if not isinstance(item, dict):
+                return False
+            text = item.get("text")
+            return isinstance(text, str) and text.lstrip().startswith("{") and not item.get("calls")
+
+        for i, item in enumerate(self.responses):
+            if is_json(item) == wants_json:
+                return i
+        return 0
+
     async def handler(self, request: httpx.Request) -> httpx.Response:
         if not request.url.path.endswith("/chat/completions"):
             self.other.append(request)
@@ -113,7 +129,7 @@ class ScriptedLlm:
         self.requests.append(body)
         if not self.responses:
             return httpx.Response(500, json={"error": {"message": "сценарий закончился"}})
-        item = self.responses.pop(0)
+        item = self.responses.pop(self._pick(body))
         if callable(item):
             result = item(request, body)
             return await result if asyncio.iscoroutine(result) else result

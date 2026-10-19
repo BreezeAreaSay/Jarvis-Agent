@@ -89,6 +89,10 @@ export interface Settings {
     web_search: boolean;
     memory: boolean;
     mode: "chat" | "all" | "agent";
+    /** Скорость ответа: fast — модель думает меньше, deep — дольше и тщательнее, balanced — как у модели. */
+    speed: "fast" | "balanced" | "deep";
+    /** «Всё вместе»: просьбу сделать что-то в программе сразу отдать агенту. */
+    auto_agent: boolean;
     /** Модель понимает картинки: auto — по провайдеру и модели. */
     vision: "auto" | "on" | "off";
     agent_confirm: "risky" | "always";

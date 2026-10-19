@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from jarvis.ai import policy
+from jarvis.ai import apphints, policy
 from jarvis.ai.chatgpt import ChatGpt
 from jarvis.ai.chats import MODES, ChatStore, ui_message
 from jarvis.ai.cli import CliProviders
@@ -427,6 +427,14 @@ class Ai(BaseService):
             turn_mode = self.ctx.settings.value.ai.mode
         else:
             turn_mode = chat["mode"]
+        if (
+            turn_mode == "all"
+            and not pictures
+            and self.ctx.settings.value.ai.auto_agent
+            and apphints.app_task(text)
+        ):
+            # «напиши Ане в телеграме…» — дело для агента: сразу ему, без лишнего ответа модели
+            agent_task, turn_mode = text, "agent"
         first = self.ctx.db.query_one(
             "SELECT 1 FROM messages WHERE chat_id=? AND role='user' LIMIT 1", (chat["id"],)
         )
@@ -493,7 +501,8 @@ class Ai(BaseService):
         specs = [t.spec() for t in tools.values()]
         env = ToolEnv(self.ctx, self.web, turn.source, turn.chat_id, user_text=turn.text)
         try:
-            messages = self._messages(turn, has_agent_tool="run_agent" in tools)
+            apps = await apphints.chat_hints(self.ctx, turn.text, tools)
+            messages = self._messages(turn, has_agent_tool="run_agent" in tools, apps=apps)
             for round_no in range(MAX_ROUNDS + 1):
                 last = round_no == MAX_ROUNDS
                 if round_no:
@@ -533,7 +542,7 @@ class Ai(BaseService):
             return self._finish(turn, error=f"Внутренняя ошибка Jarvis AI: {e}")
         return self._finish(turn)
 
-    def _messages(self, turn: Turn, *, has_agent_tool: bool) -> list[dict[str, Any]]:
+    def _messages(self, turn: Turn, *, has_agent_tool: bool, apps: str = "") -> list[dict[str, Any]]:
         settings = self.ctx.settings.value
         memory = ""
         if settings.ai.memory:
@@ -548,6 +557,7 @@ class Ai(BaseService):
             memory=memory,
             has_agent_tool=has_agent_tool,
             active=self._active_context(),
+            apps=apps,
         )
         vision = self.llm.config(turn.model or None).vision
         current = {"role": "user", "content": user_content(turn.text, turn.images, vision)}

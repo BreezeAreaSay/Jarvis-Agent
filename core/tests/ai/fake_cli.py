@@ -5,7 +5,9 @@
 или .gemini/settings.json рабочей папки с подстановкой переменных окружения (Gemini CLI).
 
 Окружение: FAKE_CLI_KIND — claude | gemini | qwen; FAKE_CLI_SCENARIO — JSON-файл с очередью сценариев
-(каждый запуск берёт первый); FAKE_CLI_LOG — JSON-строки о запусках (argv, stdin, окружение, настройки).
+(каждый запуск берёт первый; запуск с просьбой ответить одним JSON — первый сценарий-ответ JSON: план агента
+составляется параллельно с его работой); FAKE_CLI_LOG — JSON-строки о запусках (argv, stdin, окружение,
+настройки). Очередь и журнал правятся под блокировкой файла: запуски идут одновременно.
 
 Шаги сценария: {"say": текст}, {"tool": имя, "args": {...}}, {"error": {"code", "text"}},
 {"result_error": текст}, {"rate_limit": {"resetsAt": …}}, {"retry": категория}, {"sleep": секунды},
@@ -13,6 +15,7 @@
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -38,15 +41,40 @@ def arg(argv: list[str], name: str) -> str | None:
     return None
 
 
-def next_scenario() -> dict[str, Any]:
+@contextlib.contextmanager
+def locked(path: str) -> Any:
+    """Блокировка файла на время «прочитать — поправить — записать» (запуски идут одновременно)."""
+    try:
+        import fcntl
+    except ImportError:  # Windows: тесты здесь идут по одному
+        yield
+        return
+    with open(path + ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _json_answer(scenario: dict[str, Any]) -> bool:
+    steps = scenario.get("steps") or []
+    say = steps[0].get("say") if len(steps) == 1 and isinstance(steps[0], dict) else None
+    return isinstance(say, str) and say.lstrip().startswith("{")
+
+
+def next_scenario(stdin: str = "") -> dict[str, Any]:
     path = os.environ.get("FAKE_CLI_SCENARIO")
     if not path or not Path(path).exists():
         return {"steps": [{"say": "Готов."}]}
-    queue = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not queue:
-        return {"steps": [{"say": "Готов."}]}
-    current = queue.pop(0)
-    Path(path).write_text(json.dumps(queue, ensure_ascii=False), encoding="utf-8")
+    with locked(path):
+        queue = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not queue:
+            return {"steps": [{"say": "Готов."}]}
+        wants_json = "одним JSON" in stdin
+        index = next((i for i, item in enumerate(queue) if _json_answer(item) == wants_json), 0)
+        current = queue.pop(index)
+        Path(path).write_text(json.dumps(queue, ensure_ascii=False), encoding="utf-8")
     return current
 
 
@@ -139,7 +167,7 @@ async def main() -> int:
     if short is not None:
         return short
     stdin = sys.stdin.read()
-    scenario = next_scenario()
+    scenario = next_scenario(stdin + " ".join(argv))
     log_path = os.environ.get("FAKE_CLI_LOG")
     record: dict[str, Any] = {
         "kind": KIND,
@@ -185,10 +213,11 @@ async def main() -> int:
         if not log_path:
             return
         path = Path(log_path)
-        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-        lines = [line for line in lines if line.strip() and json.loads(line).get("run") != record["run"]]
-        lines.append(json.dumps(record, ensure_ascii=False))
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        with locked(log_path):
+            lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+            lines = [line for line in lines if line.strip() and json.loads(line).get("run") != record["run"]]
+            lines.append(json.dumps(record, ensure_ascii=False))
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     save()
 

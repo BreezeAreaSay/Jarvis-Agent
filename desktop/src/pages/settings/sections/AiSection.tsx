@@ -165,6 +165,30 @@ export default function AiSection() {
             onChange={(v) => patch({ ai: { mode: v } })}
           />
         </Setting>
+        <Setting
+          name="Скорость ответа"
+          desc="«Быстро» — модель думает меньше и отвечает сразу; «Тщательно» — дольше, но обдуманнее"
+        >
+          <Tabs
+            value={ai.speed ?? "fast"}
+            items={[
+              { value: "fast", label: "Быстро" },
+              { value: "balanced", label: "Обычно" },
+              { value: "deep", label: "Тщательно" },
+            ]}
+            onChange={(v) => patch({ ai: { speed: v } })}
+          />
+        </Setting>
+        <Setting
+          name="Сразу запускать агента"
+          desc="В режиме «Всё вместе» просьбы вроде «напиши Ане в телеграме…» сразу берёт агент — без лишнего ответа чата"
+        >
+          <Toggle
+            checked={ai.auto_agent ?? true}
+            onChange={(v) => patch({ ai: { auto_agent: v } })}
+            label="Сразу запускать агента"
+          />
+        </Setting>
         <Setting name="Поиск в интернете" desc="Свежие новости, погода, курсы — с источниками">
           <Toggle checked={ai.web_search} onChange={(v) => patch({ ai: { web_search: v } })} label="Поиск в интернете" />
         </Setting>

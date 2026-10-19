@@ -30,6 +30,7 @@ from rapidfuzz import fuzz, process
 
 from jarvis.ai.format import iso_local, one_line, parse_when
 from jarvis.ai.policy import (
+    APP_SCHEMES,
     RISKY_KEYS,
     SEARCH_HOSTS,
     SEND_KEYS,
@@ -41,7 +42,7 @@ from jarvis.ai.policy import (
 )
 from jarvis.ai.web import WebClient, check_public_url, site_name
 from jarvis.platform.base import AppInfo, PlatformError, WindowInfo
-from jarvis.services import Source, UserFacingError
+from jarvis.services import ExecResult, Source, UserFacingError
 
 if TYPE_CHECKING:
     from jarvis.context import AppContext
@@ -311,11 +312,23 @@ async def foreground_for_input(ctx: "AppContext") -> WindowInfo | None:
 # --- обработчики: команды и ПК ---------------------------------------------------------------------------
 
 
+async def run_jarvis_command(
+    ctx: "AppContext", text: str, command_id: str, source: Source
+) -> ExecResult | None:
+    """Команда Jarvis по точному id (из подсказок о программах), иначе — по фразе; не нашлась — None."""
+    if command_id:
+        entry = ctx.commands.get_entry(command_id) if hasattr(ctx.commands, "get_entry") else None
+        if entry is not None:
+            return await ctx.commands.run_command(command_id, None, source)
+    return await ctx.commands.run_text(text, source) if text else None
+
+
 async def _run_command(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
-    text = _str(args, "text")
-    if not text:
+    text, command_id = _str(args, "text"), _str(args, "id")
+    if not text and not command_id:
         return ToolOutput.fail("не указана команда")
-    result = await env.ctx.commands.run_text(text, "ai")
+    text = text or command_id
+    result = await run_jarvis_command(env.ctx, text, command_id, "ai")
     if result is None:
         return ToolOutput(
             "Команда не найдена. Попробуй другие инструменты (launch_app, open_url, set_volume, "
@@ -387,11 +400,17 @@ async def _launch_app(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
 
 async def _open_url(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
     url = _str(args, "url")
+    if url.casefold().startswith(APP_SCHEMES):
+        # адрес программы (чат Telegram, раздел Параметров, поиск Spotify): открывает место, не отправляет
+        await env.ctx.run_platform(env.ctx.platform.open_url, url)
+        return ToolOutput(f"Открыто: {url}", title=f"Открыть {one_line(url, 60)}", detail="Выполнено")
     if not re.match(r"https?://", url, re.I):
         if re.match(r"^[\w.-]+\.[a-zа-я]{2,}(/.*)?$", url, re.I):
             url = "https://" + url
         else:
-            return ToolOutput.fail("нужна ссылка http или https")
+            return ToolOutput.fail(
+                "нужна ссылка http(s) или адрес программы: tg:, ms-settings:, spotify:, mailto:, whatsapp:"
+            )
     parsed = urlparse(url)
     host = (parsed.hostname or "").casefold()
     known = bool(SEARCH_HOSTS.search(host)) or host in env.user_text.casefold()
@@ -746,9 +765,16 @@ def builtin_tools() -> list[Tool]:
             "run_command",
             "Выполнить команду Jarvis на компьютере пользователя — так, как если бы он сказал её голосом: "
             "«сверни все окна», «включи музыку», «громкость 30», «открой YouTube», «выключи компьютер через "
-            "час». Одна команда на вызов; составную просьбу выполняй несколькими вызовами по порядку. Если "
-            "команда не найдена — попробуй другие инструменты.",
-            _obj({"text": _s("Одна команда по-русски, коротко, в повелительном наклонении")}, ["text"]),
+            "час». Одна команда на вызов; составную просьбу выполняй несколькими вызовами по порядку. "
+            "Готовую команду программы из подсказок вызывай по её id — выполнится именно она. Если команда "
+            "не найдена — попробуй другие инструменты.",
+            _obj(
+                {
+                    "text": _s("Одна команда по-русски, коротко, в повелительном наклонении"),
+                    "id": _s("Точный id команды из подсказок о программах, например pack.telegram.search"),
+                },
+                ["text"],
+            ),
             _run_command,
             lambda a: _cap(_str(a, "text")),
             action=True,
@@ -984,8 +1010,18 @@ def builtin_tools() -> list[Tool]:
         ),
         Tool(
             "open_url",
-            "Открыть сайт или ссылку в браузере по умолчанию.",
-            _obj({"url": _s("Адрес (http или https)")}, ["url"]),
+            "Открыть сайт или ссылку в браузере по умолчанию, или место в программе по её адресу: "
+            "tg://resolve?domain=имя (чат Telegram), ms-settings:… (раздел Параметров), spotify:search:…, "
+            "mailto:…, whatsapp://send?phone=…",
+            _obj(
+                {
+                    "url": _s(
+                        "Адрес: https://… или адрес программы (tg:, ms-settings:, spotify:, mailto:, "
+                        "whatsapp:)"
+                    )
+                },
+                ["url"],
+            ),
             _open_url,
             lambda a: f"Открыть {site_name(_str(a, 'url')) or _str(a, 'url')}",
             action=True,

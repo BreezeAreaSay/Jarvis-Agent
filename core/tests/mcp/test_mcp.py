@@ -284,6 +284,14 @@ async def test_stdio_server_round_trip(ctx: AppContext, events: EventLog) -> Non
         assert set(specs) == {"mcp__eho__add", "mcp__eho__echo", "mcp__eho__fail"}
         assert specs["mcp__eho__add"]["parameters"]["properties"]["a"]["type"] == "integer"
         assert mcp.tool_title("mcp__eho__add") == "Эхо: add"
+        # инструкции сервера (initialize) — для подсказок модели
+        assert mcp.server_notes() == [
+            {
+                "name": "Эхо",
+                "prefix": "mcp__eho__",
+                "instructions": "Эхо: складывает числа и повторяет текст.",
+            }
+        ]
         assert await mcp.call("mcp__eho__add", {"a": 2, "b": 3}) == "5"
         assert await mcp.call("mcp__eho__echo", {"text": "привет"}) == "привет"
         with pytest.raises(UserFacingError, match="вернул ошибку"):

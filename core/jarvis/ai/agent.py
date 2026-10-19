@@ -39,12 +39,13 @@ from urllib.parse import urlparse
 
 from rapidfuzz import fuzz, process
 
-from jarvis.ai import playbooks, vision
+from jarvis.ai import apphints, playbooks, vision
 from jarvis.ai.catalog import AGENT_ACTIONS
 from jarvis.ai.chats import ChatStore, ui_message
 from jarvis.ai.format import chat_title, now_text, one_line, speech_text
 from jarvis.ai.llm import LlmClient, LlmError, LlmFormatError, ToolCall, Usage
 from jarvis.ai.policy import (
+    APP_SCHEMES,
     CLOSE_KEYS,
     RISKY_KEYS,
     SEARCH_HOSTS,
@@ -57,7 +58,7 @@ from jarvis.ai.policy import (
     normalize_combo,
     tool_risk,
 )
-from jarvis.ai.tools import SHELL_RE, Tool, launch_app, mcp_tool, untrusted
+from jarvis.ai.tools import SHELL_RE, Tool, launch_app, mcp_tool, run_jarvis_command, untrusted
 from jarvis.ai.uia import SNAPSHOT_LIMIT, UiBackend, UiSnapshot, create_ui, format_snapshot
 from jarvis.ai.web import site_name
 from jarvis.db import new_id
@@ -75,7 +76,7 @@ FINISHED = ("done", "stopped", "error")
 OUTCOMES = ("done", "partial", "failed")
 POOR_ELEMENTS = 6  # меньше интерактивных элементов — окно плохо видно UI Automation, к снимку нужна картинка
 OPAQUE_EXES = frozenset({"telegram.exe", "ayugram.exe", "kotatogram.exe", "64gram.exe"})
-URL_SCHEMES = ("http://", "https://", "tg://", "ms-settings:", "spotify:", "mailto:")
+URL_SCHEMES = ("http://", "https://", *APP_SCHEMES)
 MAX_MCP_RESULT = 8000
 MAX_MCP_TOOLS = 64  # больше инструментов провайдеры не принимают (вместе с действиями агента)
 
@@ -209,6 +210,7 @@ class AgentRun:
     ask_once: bool = False  # это действие человек велел спрашивать всегда (разрешения инструментов)
     outcome: str = ""
     given: set[str] = field(default_factory=set)  # подсказки по программам, которые модель уже получила
+    plan_sent: bool = False  # план (он составляется параллельно) уже показан модели
     mcp: dict[str, "Action"] = field(default_factory=dict)  # инструменты серверов MCP на этот запуск
     usage: Usage = field(default_factory=Usage)
     started: float = field(default_factory=time.time)
@@ -326,9 +328,9 @@ class Agent(BaseService):
         super().__init__(ctx)
         self.ui: UiBackend = create_ui(ctx.platform)  # тесты подставляют свой
         self.chats = ChatStore(ctx)
-        self.settle_s = 0.8  # пауза после действия, чтобы окно успело обновиться
-        self.launch_settle_s = 2.0
-        self.pointer_delay_s = 0.35  # курсор агента долетает до цели — потом действие (видно, что он делает)
+        self.settle_s = 0.5  # пауза после действия, чтобы окно успело обновиться
+        self.launch_settle_s = 1.2  # программа уже показала окно (launch_app ждёт его) — дать ей дорисоваться
+        self.pointer_delay_s = 0.2  # курсор агента долетает до цели — потом действие (видно, что он делает)
         self._run: AgentRun | None = None
         self._runs: dict[str, AgentRun] = {}
         self._actions: dict[str, Action] = {a.name: a for a in self._make_actions()}
@@ -488,12 +490,13 @@ class Agent(BaseService):
     # --- ход работы --------------------------------------------------------------------------------------
     async def _execute(self, run: AgentRun) -> None:
         status, summary, error = "error", "", ""
+        plan_task: asyncio.Future[None] | None = None
         try:
             self._set(run, "planning", "Составляю план…")
             windows = await self._windows_text()
-            run.plan = await self._plan(run, windows)
-            run.total = len(run.plan)
-            run.step = 1 if run.total else 0
+            # план составляется параллельно: агент не ждёт его и сразу берётся за дело, а план появится
+            # в панели и у модели (в ответе на ближайшее действие), как только будет готов
+            plan_task = asyncio.ensure_future(self._plan_later(run, windows))
             self._set(run, "running", "Приступаю")
             summary = await self._loop(run, windows)
             status = "done"
@@ -508,7 +511,23 @@ class Agent(BaseService):
         except Exception as e:
             log.exception("агент упал")
             error = summary = f"Внутренняя ошибка агента: {e}"
+        if plan_task is not None and not plan_task.done():
+            plan_task.cancel()
         await self._complete(run, status, summary, error)
+
+    async def _plan_later(self, run: AgentRun, windows: str) -> None:
+        try:
+            steps = await self._plan(run, windows)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.info("план для агента не составлен", exc_info=True)
+            return
+        if not steps or run.finished:
+            return
+        run.plan, run.total = steps, len(steps)
+        run.step = min(max(run.step, 1), run.total)
+        self._set(run)
 
     def _summary_prefix(self, run: AgentRun, head: str) -> str:
         done = [a["title"] for a in run.actions if a.get("ok")]
@@ -676,8 +695,7 @@ class Agent(BaseService):
 
     async def _first_message(self, run: AgentRun, windows: str) -> tuple[str, list[dict[str, Any]]]:
         parts = [f"Задача: {run.task}", *self._context(run)]
-        if run.plan:
-            parts.append("План:\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(run.plan, 1)))
+        plan_at = len(parts)
         parts.append(untrusted("Открытые окна", windows))
         exes = [m.group(1) for m in re.finditer(r"\(([^()]+\.exe)\)", windows, re.I)]
         titles = [m.group(1) for m in re.finditer(r"«([^»]+)»", windows)]
@@ -685,7 +703,16 @@ class Agent(BaseService):
         if hints:
             run.given.update(p.id for p in hints)
             parts.append(playbooks.render(hints))
-        text, extras = await self._look(run)
+        # команды паков: для программ задачи и для окна впереди (остальные — когда окажутся впереди)
+        active = [m.group(1) for m in re.finditer(r"\(([^()]+\.exe)\) — активное", windows, re.I)]
+        extra, shown = apphints.agent_hints(self.ctx, run.task, active, hints, run.mcp)
+        run.given.update(f"pack:{pack}" for pack in shown)
+        if extra:
+            parts.append(extra)
+        text, extras = await self._look(run)  # пока снимается окно, план (он параллельно) обычно готов
+        if run.plan:
+            run.plan_sent = True
+            parts.insert(plan_at, "План:\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(run.plan, 1)))
         if "Элементы окна недоступны" in text:
             parts.append("(Действуй клавишами, командами, адресами и запуском программ.)")
         parts.append(text)
@@ -840,7 +867,12 @@ class Agent(BaseService):
             if outcome.detail:
                 card["detail"] = outcome.detail
             run.actions.append(card)
-        return outcome.content, outcome.extras
+        content = outcome.content
+        if run.plan and not run.plan_sent:
+            run.plan_sent = True
+            steps = "\n".join(f"{i}. {s}" for i, s in enumerate(run.plan, 1))
+            content += f"\n\nПлан работы (номер шага — параметр step в действиях):\n{steps}"
+        return content, outcome.extras
 
     # --- подтверждения ----------------------------------------------------------------------------------
     @property
@@ -980,14 +1012,26 @@ class Agent(BaseService):
         return shot
 
     def _new_playbook(self, run: AgentRun, fg: WindowInfo) -> str:
+        """Впереди новая программа: её приёмы и готовые команды (каждой программы — один раз за задачу)."""
+        parts: list[str] = []
         playbook = playbooks.for_exe(fg.exe)
         if playbook is None:
             found = playbooks.relevant("", [], [fg.title], limit=1)
             playbook = found[0] if found else None
-        if playbook is None or playbook.id in run.given:
-            return ""
-        run.given.add(playbook.id)
-        return playbooks.render([playbook])
+        if playbook is not None and playbook.id not in run.given:
+            run.given.add(playbook.id)
+            parts.append(playbooks.render([playbook]))
+        key = f"exe:{fg.exe.casefold()}"
+        if fg.exe and key not in run.given:
+            run.given.add(key)
+            given = [g[5:] for g in run.given if g.startswith("pack:")]
+            commands, shown = apphints.pack_hints(
+                self.ctx, [fg.exe], playbook.packs if playbook else (), skip=given
+            )
+            run.given.update(f"pack:{pack}" for pack in shown)
+            if commands:
+                parts.append(commands)
+        return "\n\n".join(parts)
 
     async def _look(self, run: AgentRun, *, force_shot: bool = False) -> tuple[str, list[dict[str, Any]]]:
         """Снимок окна впереди (не окна Jarvis): текст для модели и, если нужно и можно, картинка окна."""
@@ -1305,7 +1349,9 @@ class Agent(BaseService):
         url = _arg(args, "url")
         low = url.casefold()
         if not low.startswith(URL_SCHEMES):
-            return Outcome(False, "Ошибка: нужна ссылка https, tg:, ms-settings:, spotify: или mailto:")
+            return Outcome(
+                False, "Ошибка: нужна ссылка https, tg:, ms-settings:, spotify:, mailto: или whatsapp:"
+            )
         parsed = urlparse(url)
         host = (parsed.hostname or "").casefold()
         # ссылка с данными на незнакомый сайт может унести их наружу (инструкция из чужого текста) — спросить
@@ -1318,10 +1364,10 @@ class Agent(BaseService):
         return await self._observe(run, self.launch_settle_s, f"Открыто: {url}")
 
     async def _run_command(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
-        text = _arg(args, "text")
+        text, command_id = _arg(args, "text"), _arg(args, "id")
         if self._ask(run):
-            await self._approve(run, f"Выполнить команду «{text}»?")
-        result = await self.ctx.commands.run_text(text, "agent")
+            await self._approve(run, f"Выполнить команду «{text or command_id}»?")
+        result = await run_jarvis_command(self.ctx, text, command_id, "agent")
         if result is None:
             return Outcome(False, "Команда не найдена", "Команда не найдена")
         report = f"{result.title}: {result.message or ('выполнено' if result.ok else 'ошибка')}"
@@ -1465,12 +1511,16 @@ class Agent(BaseService):
             ),
             Action(
                 "run_command",
-                "Выполнить команду Jarvis («сверни все окна», «громкость 30», «пауза», «открой YouTube»).",
-                {"text": _s("Команда по-русски")},
+                "Выполнить команду Jarvis («сверни все окна», «громкость 30», «пауза», «открой YouTube») или "
+                "готовую команду программы по id из подсказки (Jarvis сам переключится на её окно).",
+                {
+                    "text": _s("Команда по-русски"),
+                    "id": _s("Точный id команды из подсказки (pack.telegram.search) — выполнится именно она"),
+                },
                 ["text"],
                 self._run_command,
-                lambda r, a: f"Выполняю «{_arg(a, 'text')}»",
-                lambda r, a: one_line(_arg(a, "text"), 60).capitalize(),
+                lambda r, a: f"Выполняю «{_arg(a, 'text') or _arg(a, 'id')}»",
+                lambda r, a: one_line(_arg(a, "text") or _arg(a, "id"), 60).capitalize(),
             ),
             Action(
                 "wait",

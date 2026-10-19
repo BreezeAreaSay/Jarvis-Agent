@@ -10,6 +10,7 @@ import asyncio
 import logging
 import threading
 import time
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from rapidfuzz import fuzz, process
@@ -356,6 +357,49 @@ class Commands(BaseService):
             items.append(item)
         return items
 
+    def app_commands(self, apps: Iterable[str] = (), packs: Iterable[str] = ()) -> list[dict[str, Any]]:
+        """Паки команд для программ (процесс «Telegram.exe» или id пака) — подсказка ИИ и агенту.
+
+        [{pack, name, app, installed, items: [{id, name, phrase, keys}]}]: у установленного пака — его
+        включённые команды (run_command по id выполнит именно их), у неустановленного — только сочетания
+        клавиш и адреса его команд (keys), чтобы нажимать их самому. keys — «ctrl+f», «steam://open/games»;
+        пусто — другое.
+        """
+        exes = {a.casefold() for a in apps if a}
+        wanted = set(packs)
+        installed = set(self.ctx.settings.value.packs)
+        out: list[dict[str, Any]] = []
+        for pack in self.packs.all():
+            if pack.id not in wanted and (not pack.app or pack.app.casefold() not in exes):
+                continue
+            items: list[dict[str, Any]] = []
+            if pack.id in installed:
+                for entry in self._entries.values():
+                    if entry.pack == pack.id and entry.command.enabled:
+                        items.append(_command_hint(entry.command))
+            else:
+                items = [h for h in (_command_hint(c) for c in pack.commands) if h["keys"]]
+            if items:
+                out.append(
+                    {
+                        "pack": pack.id,
+                        "name": pack.name,
+                        "app": pack.app,
+                        "installed": pack.id in installed,
+                        "items": items,
+                    }
+                )
+        return out
+
+    def added_commands(self, limit: int = 40) -> list[dict[str, Any]]:
+        """Команды, которые человек добавил сам: свои и сценарии (включённые) — чтобы ИИ знал о них."""
+        out = [
+            _command_hint(e.command)
+            for e in self._entries.values()
+            if e.command.enabled and (e.source == "user" or e.command.category == "scenarios")
+        ]
+        return out[: max(0, limit)]
+
     # --- список и правка --------------------------------------------------------------------------
     def get_entry(self, command_id: str) -> Entry | None:
         return self._entries.get(command_id)
@@ -507,6 +551,28 @@ class Commands(BaseService):
 
     async def build(self, description: str) -> dict[str, Any]:
         return await builder.build(self, description)
+
+
+_HINT_KEYS = frozenset({"Keys.Press", "Launch.Url"})
+_HINT_SKIP = frozenset({"App.Focus", "Wait"})
+
+
+def _command_hint(command: Command) -> dict[str, Any]:
+    """Команда для подсказки ИИ: id, имя, первая фраза и её клавиши/адрес, если команда только из них."""
+    keys: list[str] = []
+    for action in command.actions:
+        if action.type in _HINT_SKIP:
+            continue
+        if action.type not in _HINT_KEYS or not action.value:
+            keys = []
+            break
+        keys.append(action.value)
+    return {
+        "id": command.id,
+        "name": command.name,
+        "phrase": command.phrases[0] if command.phrases else "",
+        "keys": " → ".join(keys),
+    }
 
 
 def _in_category(entry: Entry, category: str) -> bool:

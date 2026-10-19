@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from jarvis import paths
+from jarvis.ai import apphints
 from jarvis.ai.chatgpt import prompt as context_prompt
 from jarvis.ai.chatgpt.backend import CHAT_MODE_DENIED
 from jarvis.ai.cli import errors, locate, prompt
@@ -872,6 +873,7 @@ class CliBackend:
             mode=turn.mode,
             memory=memory,
             has_agent_tool="run_agent" in allowed,
+            apps=await apphints.chat_hints(self.ctx, turn.text, allowed),
         )
         sent: dict[str, str] = dict(saved.get("sent") or {}) if saved else {}
         context = context_prompt.context_text(sections, sent)

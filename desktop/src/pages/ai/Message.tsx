@@ -1,5 +1,6 @@
 // Сообщения чата: пузырь человека (акцент), ответ ассистента (аватар, Markdown, «Выполнено ✓», источники,
-// «Запомнил: …», ошибка с «Повторить») и ответ, который пишется прямо сейчас.
+// «Запомнил: …», ошибка с «Повторить», у удачного дела агента — «Запомнить как сценарий») и ответ, который
+// пишется прямо сейчас.
 import {
   Bot,
   Brain,
@@ -12,12 +13,14 @@ import {
   RotateCcw,
   Sparkles,
   Square,
+  Workflow,
   Wrench,
 } from "lucide-react";
 import { memo, useState } from "react";
+import { api } from "@/api/client";
 import { bridge } from "@/lib/bridge";
 import { navigate } from "@/lib/router";
-import { Button, cx, Dots, notify } from "@/ui";
+import { Button, cx, Dots, notify, notifyError } from "@/ui";
 import { Markdown } from "./Markdown";
 import { LOOKUP_TOOL } from "./store";
 import type { MetaExtra, PendingReply, ThreadMessage, ToolRow } from "./types";
@@ -236,6 +239,47 @@ export const UserMessage = memo(function UserMessage({ m }: { m: ThreadMessage }
   );
 });
 
+// --- «Запомнить как сценарий»: те же шаги в следующий раз — сразу, без ИИ --------------------------------
+function RecipeButton({ m }: { m: ThreadMessage }) {
+  const recipe = m.meta?.recipe;
+  const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (!recipe) return null;
+  const id = saved || recipe.scenario_id;
+  if (id)
+    return (
+      <Button size="sm" variant="ghost" icon={<Check />} onClick={() => navigate("commands", "scenarios", id)}>
+        Сохранено сценарием
+      </Button>
+    );
+  const save = async () => {
+    setBusy(true);
+    try {
+      const res = await api.post<{ scenario: { id: string; name: string } }>("/api/agent/scenario", {
+        chat_id: m.chat_id,
+        message_id: m.id,
+      });
+      setSaved(res.scenario.id);
+      notify(`Сценарий «${res.scenario.name}»: в следующий раз сделаю сразу, без ИИ`, "ok");
+    } catch (e) {
+      notifyError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Button
+      size="sm"
+      icon={<Workflow />}
+      loading={busy}
+      title={`${recipe.actions.length} шаг(ов) — повторю по фразе «${recipe.request}»`}
+      onClick={save}
+    >
+      Запомнить как сценарий
+    </Button>
+  );
+}
+
 export const AssistantMessage = memo(function AssistantMessage({
   m,
   onRetry,
@@ -268,6 +312,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           <div className="ai-msg-tools">
             <span className="faint tiny">{fmtTime(m.created)}</span>
             <CopyButton text={m.content} />
+            <RecipeButton m={m} />
           </div>
         )}
       </div>

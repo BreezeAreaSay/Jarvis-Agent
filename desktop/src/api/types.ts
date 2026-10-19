@@ -377,6 +377,8 @@ export interface UiMessage {
     status?: string;
     stopped?: boolean;
     agent?: { run_id: string; status: string; steps: number; plan: string[] };
+    /** Удачный прогон агента, который можно запомнить сценарием (POST /api/agent/scenario). */
+    recipe?: { request: string; actions: { type: string; value: string }[]; scenario_id?: string };
   };
 }
 

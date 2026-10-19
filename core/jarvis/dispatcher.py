@@ -12,6 +12,9 @@ Jarvis отвечает голосом (если не включён тихий 
 и музыка не заиграла) или человек сам научил, как это делать: в памяти правило «когда я прошу включить
 музыку — открой Яндекс Музыку и нажми плей», и его начало — та же команда. Тогда дело сразу берёт агент
 с этим правилом (если ИИ настроен, режим не «Чат» и включено «Сразу запускать агента»).
+
+«Запомни это» («сохрани как сценарий») сразу после удачного дела агента — оно становится сценарием с теми же
+шагами и фразой человека: в следующий раз — сразу, без ИИ.
 """
 
 import logging
@@ -22,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from jarvis import text as textops
 from jarvis.db import now
-from jarvis.services import ExecResult, Source
+from jarvis.services import ExecResult, Source, UserFacingError
 
 if TYPE_CHECKING:
     from jarvis.context import AppContext
@@ -32,6 +35,7 @@ log = logging.getLogger(__name__)
 OK_PHRASES = ("Готово, {address}.", "Сделано, {address}.", "Выполнено.", "Есть, {address}.")
 UNKNOWN_SAY = "Не понял команду, {address}."
 NO_AI_SAY = "Такой команды нет, а ИИ не настроен, {address}."
+NOTED_SAY = "Понял, учту."  # поправка агенту посреди работы
 # правило из памяти: «когда я прошу включить музыку, надо…» — «включить музыку» до запятой или «надо»
 _RULE = re.compile(
     r"(?<!\w)(?:когда|если|как только)\s+(?:я\s+)?(?:прошу|попрошу|говорю|скажу|хочу|захочу)\s+"
@@ -39,6 +43,11 @@ _RULE = re.compile(
     re.I,
 )
 _REMEMBER = re.compile(r"^\s*(?:запомни|не забудь)\s*,?\s*(?:что\s+)?", re.I)
+# «запомни это» сразу после дела агента — запомнить его сценарием (в следующий раз — без ИИ, сразу)
+_SAVE_RUN = re.compile(
+    r"^(?:(?:запомни|сохрани)\s+(?:это(?:\s+как\s+сценарий)?|как\s+сценарий)|запомни\s+как\s+(?:это\s+)?делать"
+    r"|сделай\s+(?:из\s+этого\s+)?сценарий)(?:,?\s+пожалуйста)?$"
+)
 MAX_RULES = 30  # записей памяти с правилами, которые сверяем с командой
 # чем стала фраза, пока работает агент (Agent.interject), — для истории
 AGENT_REPLY = {
@@ -53,6 +62,13 @@ class MainDispatcher:
         self.ctx = ctx
         self._last_text = ""
         self._last_at = 0.0
+        add_stock = getattr(getattr(ctx, "tts", None), "add_stock", None)
+        if callable(add_stock):
+            add_stock(self.stock_phrases)
+
+    def stock_phrases(self) -> list[str]:
+        """Частые короткие ответы голосом: их звук готовится заранее и хранится на диске — звучат сразу."""
+        return [self._fmt(p) for p in (*OK_PHRASES, UNKNOWN_SAY, NO_AI_SAY)] + [NOTED_SAY]
 
     # --- история ------------------------------------------------------------------------------------
     def _history_add(
@@ -144,14 +160,19 @@ class MainDispatcher:
             self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "stop"})
             return {"kind": "stop"}
 
+        agent = getattr(self.ctx, "agent", None)
+        busy = bool(getattr(agent, "busy", False))
+        recent = getattr(agent, "recent_recipe", None)
+        if not busy and callable(recent) and recent() and _SAVE_RUN.match(raw.casefold().strip(" .!?")):
+            return await self._save_run(raw, source, speak)
+
         # команды
         match = None
         try:
             match = self.ctx.commands.match(raw)
         except Exception:
             log.exception("разбор команды упал: %r", raw)
-        agent = getattr(self.ctx, "agent", None)
-        if getattr(agent, "busy", False) and (match is None or getattr(agent, "waiting_answer", False)):
+        if busy and (match is None or getattr(agent, "waiting_answer", False)):
             return await self._to_agent(raw, source, speak)
         if match is not None:
             rule = self._taught_rule(match) if self._agent_ready() else ""
@@ -217,7 +238,13 @@ class MainDispatcher:
         elif result.ok and settings.speak_confirmations == "short":
             # программа только запускается — «Открываю», а не «Готово»: что она открылась, мы ещё не видели
             app = str(result.data.get("app") or "")
-            await self._say(f"Открываю {app}." if app else self._fmt(random.choice(OK_PHRASES)), speak)
+            if app:
+                keep = getattr(self.ctx.tts, "keep", None)
+                if callable(keep):
+                    keep(f"Открываю {app}.")  # название программы — не личное: звук хранится на диске
+                await self._say(f"Открываю {app}.", speak)
+            else:
+                await self._say(self._fmt(random.choice(OK_PHRASES)), speak)
         elif not result.ok:
             await self._say(result.message or "Не получилось.", speak)
         self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "command", "ok": result.ok})
@@ -232,7 +259,7 @@ class MainDispatcher:
         detail = AGENT_REPLY.get(kind, "Агент уже закончил")
         item = self._history_add(source, raw, "ai", "ok" if delivered else "error", title=raw, detail=detail)
         if kind == "note":
-            await self._say("Понял, учту.", speak)
+            await self._say(NOTED_SAY, speak)
         self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "ai", "ok": delivered})
         current = getattr(agent, "current", None)
         return {
@@ -244,6 +271,28 @@ class MainDispatcher:
             "error": "" if delivered else detail,
             "history": item,
         }
+
+    async def _save_run(self, raw: str, source: Source, speak: bool) -> dict[str, Any]:
+        """«Запомни это»: последнее удачное дело агента — сценарием с теми же шагами и фразой человека."""
+        try:
+            scenario = self.ctx.agent.save_scenario()
+        except UserFacingError as e:
+            result = ExecResult(False, "Запомнить сценарием", str(e), icon="error")
+        else:
+            result = ExecResult(
+                True,
+                f"Сценарий «{scenario.get('name', '')}»",
+                "Сохранён: в следующий раз — сразу, без ИИ",
+                icon="ai",
+                say=self._fmt("Запомнил, {address}. В следующий раз сделаю сразу."),
+                data={"scenario_id": scenario.get("id", "")},
+            )
+        status = "ok" if result.ok else "error"
+        item = self._history_add(source, raw, "command", status, title=result.title, detail=result.message)
+        self.toast(result.title, result.message, status=status, icon=result.icon)
+        await self._say(result.say or result.message, speak)
+        self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "command", "ok": result.ok})
+        return {"kind": "command", "result": result.to_json(), "history": item}
 
     def _agent_ready(self) -> bool:
         """Дело можно сразу отдать агенту: ИИ включён и настроен, режим не «Чат», «Сразу запускать агента»."""

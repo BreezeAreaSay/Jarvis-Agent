@@ -309,6 +309,11 @@ class Scenarios(BaseService):
         if any(r["name"].casefold() == key for sid, r in self._items.items() if sid != exclude):
             raise UserFacingError(f"Сценарий «{name}» уже есть — выберите другое название")
 
+    def unique_name(self, base: str) -> str:
+        """Название, которого ещё нет: «Доброе утро», «Доброе утро 2»…"""
+        with self._lock:
+            return self._unique_name(base)
+
     def _unique_name(self, base: str) -> str:
         taken = {r["name"].casefold() for r in self._items.values()}
         if base.casefold() not in taken:

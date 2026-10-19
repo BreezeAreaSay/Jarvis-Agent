@@ -162,6 +162,24 @@ def render_screen(
     return _draw(image, rect, elements=elements, title=title, max_side=max_side, focus=focus)
 
 
+def render_pixels(
+    bgra: bytes,
+    size: tuple[int, int],
+    area: Rect,
+    *,
+    focus: Rect | None = None,
+    elements: list[UiElement] | None = None,
+    title: str = "",
+    max_side: int = MAX_SIDE,
+) -> Shot:
+    """Пиксели экрана (BGRA, без PNG — быстрее) части экрана area (left, top, right, bottom: монитор окна
+    впереди) → Shot экрана: окно обведено, его элементы подписаны, сетка."""
+    from PIL import Image
+
+    image = Image.frombuffer("RGB", size, bgra, "raw", "BGRX", 0, 1)
+    return _draw(image, area, elements=elements, title=title, max_side=max_side, focus=focus)
+
+
 def _draw(
     image: Any,
     rect: Rect,

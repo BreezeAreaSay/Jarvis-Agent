@@ -162,6 +162,24 @@ async def test_dispatcher_runs_command_and_records_history(ctx: AppContext, even
     assert unknown["kind"] == "unknown"
 
 
+async def test_stock_voice_phrases_and_app_names_are_kept(ctx: AppContext) -> None:
+    # частые ответы Jarvis готовятся заранее (диспетчер и ИИ сами говорят Tts, какие)
+    sentences = ctx.tts._stock_sentences()  # type: ignore[attr-defined]
+    assert {"Готово, сэр.", "Не понял команду, сэр.", "Понял, учту.", "Сейчас сделаю, сэр."} <= set(sentences)
+    ctx.settings.patch({"profile": {"address": ""}})
+    assert "Готово." in ctx.tts._stock_sentences()  # type: ignore[attr-defined]
+    # «Открываю Telegram.» — название программы: звук можно хранить на диске
+    part = MatchedPart("launch.app", "Открыть Telegram", "открой телеграм", 95.0)
+    ctx.commands.match = lambda text: CommandMatch(text, [part])  # type: ignore[method-assign]
+
+    async def execute(m: CommandMatch, source: str) -> ExecResult:
+        return ExecResult(True, "Открыть Telegram", "Запускаю", data={"app": "Telegram"})
+
+    ctx.commands.execute = execute  # type: ignore[method-assign]
+    await ctx.dispatcher.handle("открой телеграм", "text")
+    assert "Открываю Telegram." in ctx.tts._keep  # type: ignore[attr-defined]
+
+
 class FakeAi:
     """ИИ для диспетчера: настроен; ask записывает, с какой задачей звали агента."""
 

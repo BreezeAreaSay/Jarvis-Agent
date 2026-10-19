@@ -14,6 +14,7 @@ import pytest
 from jarvis.ai import agent as agent_module
 from jarvis.ai import vision
 from jarvis.context import AppContext
+from jarvis.platform.base import WindowInfo
 from tests.ai.fakes import FakeUi, ScriptedLlm, Spec, calls, completion, reply
 
 PLAN = reply(json.dumps({"steps": ["Открыть почту", "Написать письмо", "Отправить"]}))
@@ -258,6 +259,110 @@ async def test_yes_or_no_phrase_answers_the_agent_approval(
     assert (
         last.startswith("Пользователь перебил: «нет, напиши лучше Маше»") and "Пользователь отклонил" in last
     )
+
+
+async def test_late_plan_is_not_cut_with_old_snapshots(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi) -> None:
+    agent: Any = ctx.agent
+    steps = [
+        calls(("ui_click", {"id": "e1"})),
+        calls(("ui_type", {"id": "e1", "text": "ivan@example.com"})),
+        calls(("finish", {"summary": "Готово."})),
+        calls(("finish", {"summary": "Готово."})),
+    ]
+    first_step = asyncio.Event()
+
+    async def respond(request: httpx.Request, body: dict[str, Any]) -> httpx.Response:
+        if "response_format" in body:  # план приходит, когда агент уже взялся за дело
+            await first_step.wait()
+            return httpx.Response(200, json=completion(PLAN, body.get("model", "")))
+        first_step.set()
+        return httpx.Response(200, json=completion(steps.pop(0), body.get("model", "")))
+
+    llm.add(*[respond] * (len(steps) + 1))
+    await agent.wait(await agent.run("Напиши Ивану"))
+    assert "План:" not in llm.requests[1]["messages"][1]["content"]  # в первом сообщении плана ещё нет
+    tools = tool_results(llm)
+    with_plan = [t for t in tools if "План работы" in t]
+    # план — до снимка окна: снимок этого шага давно вырезан, а план остался
+    assert len(with_plan) == 1 and "1. Открыть почту" in with_plan[0]
+    assert with_plan[0].endswith("(устаревший снимок окна скрыт)")
+
+
+async def test_phrase_after_the_result_is_a_new_request(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
+) -> None:
+    agent: Any = ctx.agent
+    seen: dict[str, Any] = {}
+    original = agent.finish_summary
+
+    def finish_summary(run: Any, args: dict[str, Any]) -> str:
+        summary = original(run, args)
+        # итог принят, агент вот-вот закончит: реплика — уже не ему (иначе бы потерялась)
+        seen["busy"], seen["kind"] = agent.busy, agent.interject("нет, не Ане, а Маше")
+        return str(summary)
+
+    agent.finish_summary = finish_summary
+    llm.add(PLAN, calls(("finish", {"summary": "Написал Ане."})))
+    await agent.wait(await agent.run("Напиши Ане"))
+    assert seen == {"busy": False, "kind": ""}
+
+
+async def test_codex_or_cli_run_continues_with_a_late_interjection(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
+) -> None:
+    agent: Any = ctx.agent
+
+    class Runner:
+        """Codex или программа человека: первый заход закончился без finish, пока человек перебивал."""
+
+        def __init__(self) -> None:
+            self.firsts: list[str] = []
+
+        def problem(self) -> str:
+            return ""
+
+        async def complete(self, messages: Any, json_schema: Any = None, usage: Any = None) -> dict[str, Any]:
+            return {"steps": ["Открыть почту"]}
+
+        async def run_agent(self, agent: Any, run: Any, *, system: str, first: str, specs: Any) -> str:
+            self.firsts.append(first)
+            if len(self.firsts) == 1:
+                agent.interject("и закрой окно")
+                return "Кажется, всё."
+            return str(agent.finish_summary(run, {"status": "partial", "summary": "Окно не закрыл."}))
+
+    runner = Runner()
+    agent._chatgpt = lambda: runner
+    result = await agent.wait(await agent.run("Открой почту"))
+    assert result.summary == "Окно не закрыл." and len(runner.firsts) == 2
+    again = runner.firsts[1]
+    assert again.startswith("Продолжение той же задачи: «Открой почту». Уже сделано: ничего.")
+    assert "Пользователь перебил: «и закрой окно»" in again and "[Снимок окна]" in again
+
+
+async def test_windows_that_open_or_close_are_reported(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi) -> None:
+    agent: Any = ctx.agent
+    platform: Any = ctx.platform
+    dialog = WindowInfo(9001, "Сохранение документа", "notepad.exe", 77)
+
+    def open_dialog() -> None:
+        platform.windows.append(dialog)
+
+    def close_dialog() -> None:
+        platform.windows.remove(dialog)
+
+    llm.add(
+        PLAN,
+        after(calls(("press_keys", {"combo": "ctrl+s"})), open_dialog),
+        after(calls(("press_keys", {"combo": "esc"})), close_dialog),
+        calls(("finish", {"status": "partial", "summary": "Не сохранил."})),
+    )
+    await agent.wait(await agent.run("Сохрани документ"))
+    first, second, *_ = tool_results(llm)
+    # экран текстом — и модели без картинок: что открылось и что закрылось после действия
+    assert "Окна на экране с прошлого снимка" in first
+    assert "появилось: «Сохранение документа» (notepad.exe)" in first
+    assert "закрылось: «Сохранение документа» (notepad.exe)" in second and "появилось" not in second
 
 
 def test_screen_shot_shows_the_monitor_of_the_front_window() -> None:

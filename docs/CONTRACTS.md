@@ -561,6 +561,14 @@ UI Automation страницу видимой вкладки (`jarvis/ai/browser
 в чате — `meta.agent.journal: true` (кнопка «Как он это делал»). Обе — категории «Приватности» (`agent_notes`,
 `agent_journal`).
 
+Проверочные задачи агента (`core/evals`, [EVALS.md](EVALS.md)) — вне программы (в сборку не входят), но держатся
+за такие точки агента: `Agent.ui` (`snapshot`, `click`, `set_text`, `element_at`, `owner_at`), `Agent.toast_source`
+(`access`, `fetch`, `close`), `settle_s`, `launch_settle_s`, `pointer_delay_s`; `run`, `wait`, `stop_run`, `interject`,
+`waiting_answer`, `current` (`AgentRun.usage`, `count`, `journal.dir`); события `agent.step` (`index`, `status`),
+`agent.state` (`waiting` с текстом «Жду ответа: …»), `confirm.request`; строка снимка окна (`format_snapshot`) и
+подписи картинок («Снимок экрана — W×H точек», «Лупа: кусок экрана W×H точек, ×Z — картинка A×B») — по ним модель
+по сценарию находит элементы и точки. Меняешь что-то из этого — `uv run pytest tests/evals`.
+
 Провайдер `chatgpt` — «ChatGPT (подписка)» (`jarvis/ai/chatgpt`): модели GPT по подписке ChatGPT через Codex
 app-server (SDK `openai-codex==0.163.0` с бинарём Codex, ≈150 МБ, скачивается в `<data>/pylib` по кнопке; extra
 `chatgpt` в pyproject). Вход — `<data>/codex-home` (CODEX_HOME; вход прежнего Jarvis там же и подхватывается сам),

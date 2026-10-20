@@ -1,7 +1,8 @@
 """Зрение агента: снимок экрана или окна, с которым он работает, для модели, понимающей картинки.
 
 После каждого действия агент видит весь экран (render_screen): что открылось, всплыло, где курсор, — окно
-впереди на нём обведено. Мониторов несколько — только тот, где окно впереди: крупнее детали.
+впереди на нём обведено. Мониторов несколько — монитор окна впереди крупно (с метками и сеткой), остальные
+следом мельче, для обзора (render_other): что открыто и всплыло там.
 Инструмент screenshot — крупно одно окно (PrintWindow — даже перекрытое; свёрнутое не снять). Поверх — метки
 элементов UI Automation окна впереди (e12 у кнопки — «Set-of-Marks»: модель нажимает ui_click по id, а не
 гадает координаты) и бледная сетка через каждые 100 точек картинки с подписями по краям — по ней модель
@@ -23,6 +24,7 @@ from jarvis.ai.uia import UiElement
 log = logging.getLogger(__name__)
 
 MAX_SIDE = 1280  # больше по стороне не отдаём: дорого и не нужно
+OTHER_SIDE = 960  # другие мониторы — только обзор: мельче
 GRID = 100  # шаг сетки в точках картинки
 JPEG_QUALITY = 78
 
@@ -39,6 +41,7 @@ class Shot:
     rect: Rect  # left, top, right, bottom — физические точки экрана
     hwnd: int = 0  # снимок окна; 0 — снимок экрана
     title: str = ""  # заголовок окна (у снимка экрана — окна впереди)
+    where: str = ""  # другой монитор, только обзор: где он («справа от основного»)
 
     def to_screen(self, x: float, y: float) -> tuple[int, int]:
         left, top, right, bottom = self.rect
@@ -56,12 +59,19 @@ class Shot:
         return 0 <= x < self.width and 0 <= y < self.height
 
     def caption(self) -> str:
+        if self.where:
+            return (
+                f"Другой монитор ({self.where}) — {self.width}×{self.height} точек, только для обзора: "
+                "click_point и метки — по картинке монитора с окном впереди. Работать здесь — переключись "
+                "на окно этого монитора (focus_window), и он станет главной картинкой."
+            )
         if not self.hwnd:
             front = f"; окно впереди «{self.title}» обведено жёлтым" if self.title else ""
             return (
                 f"Снимок экрана — {self.width}×{self.height} точек{front}. Метки e… — id элементов окна "
                 f"впереди (жми ui_click по id). Сетка — через каждые {GRID} точек; click_point принимает "
-                "координаты этой картинки. Панель и курсор агента Jarvis на снимке — это ты, их не нажимай."
+                "координаты этой картинки. Если на снимке видны панель и курсор агента Jarvis — это ты, их "
+                "не нажимай."
             )
         return (
             f"Снимок окна «{self.title}» — {self.width}×{self.height} точек. Метки e… — id элементов "
@@ -180,6 +190,26 @@ def render_pixels(
     return _draw(image, area, elements=elements, title=title, max_side=max_side, focus=focus)
 
 
+def render_other(bgra: bytes, size: tuple[int, int], area: Rect, main: Rect) -> Shot:
+    """Пиксели другого монитора (area) → Shot для обзора: мельче, без сетки и меток; main — монитор окна
+    впереди (главная картинка), от него — «справа», «слева», «над», «под»."""
+    from PIL import Image
+
+    image = Image.frombuffer("RGB", size, bgra, "raw", "BGRX", 0, 1)
+    shot = _draw(image, area, max_side=OTHER_SIDE, grid=False)
+    shot.where = side_of(area, main)
+    return shot
+
+
+def side_of(area: Rect, main: Rect) -> str:
+    """Где монитор area от главного main — словами."""
+    dx = (area[0] + area[2]) - (main[0] + main[2])
+    dy = (area[1] + area[3]) - (main[1] + main[3])
+    if abs(dx) >= abs(dy):
+        return "справа от основного" if dx > 0 else "слева от основного"
+    return "под основным" if dy > 0 else "над основным"
+
+
 def _draw(
     image: Any,
     rect: Rect,
@@ -230,13 +260,15 @@ def _draw(
     return shot
 
 
-def message(shot: Shot, note: str = "") -> dict[str, Any]:
-    """Сообщение модели со снимком (role user: картинки в ответах инструментов понимают не все провайдеры)."""
-    text = shot.caption() + (f" {note}" if note else "")
-    return {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": text},
-            {"type": "image_url", "image_url": {"url": shot.url}},
-        ],
-    }
+def message(shot: Shot, note: str = "", others: list[Shot] | None = None) -> dict[str, Any]:
+    """Сообщение модели со снимком (role user: картинки в ответах инструментов понимают не все провайдеры);
+    others — другие мониторы, следом за главной картинкой (одним сообщением: старые снимки скрываются
+    вместе)."""
+    if others:
+        note = f"Другие мониторы — следующими картинками ({len(others)}). {note}".strip()
+    content: list[dict[str, Any]] = []
+    for i, part in enumerate([shot, *(others or [])]):
+        text = part.caption() + (f" {note}" if note and i == 0 else "")
+        content.append({"type": "text", "text": text})
+        content.append({"type": "image_url", "image_url": {"url": part.url}})
+    return {"role": "user", "content": content}

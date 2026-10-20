@@ -175,7 +175,9 @@ async def test_ask_user_answer_in_chat(ctx: AppContext, llm: ScriptedLlm, ui: Fa
     result = await agent.wait(run_id)
 
     assert result.status == "done" and result.summary == "Написал Ане Петровой."
-    assert tool_results(llm) == ["Ответ пользователя: «Петровой»"]  # вопрос ничего не менял — без проверки
+    # вопрос ничего не менял — без проверки; со свежим снимком: пока человек отвечал, экран мог измениться
+    (answer,) = tool_results(llm)
+    assert answer.startswith("Ответ пользователя: «Петровой»\n\n[Снимок окна]")
     assert result.actions[0] == {
         "title": "Вопрос: Какой Ане: Петровой или Смирновой?",
         "ok": True,
@@ -208,7 +210,8 @@ async def test_ask_user_by_voice_and_without_answer(
     )
     await agent.wait(await agent.run("Напиши Ане", "voice"))
     assert "Какой Ане?" in spoken and listened == [20.0]  # вопрос вслух, ответ — сразу, без «Джарвис»
-    assert tool_results(llm) == ["Ответ пользователя: «Смирновой»"]
+    (answer,) = tool_results(llm)
+    assert answer.startswith("Ответ пользователя: «Смирновой»")
 
     monkeypatch.setattr(agent_module, "ASK_TIMEOUT_S", 0.05)
     llm.add(
@@ -317,6 +320,7 @@ async def test_codex_or_cli_run_continues_with_a_late_interjection(
 
         def __init__(self) -> None:
             self.firsts: list[str] = []
+            self.images: list[list[str]] = []
 
         def problem(self) -> str:
             return ""
@@ -324,8 +328,11 @@ async def test_codex_or_cli_run_continues_with_a_late_interjection(
         async def complete(self, messages: Any, json_schema: Any = None, usage: Any = None) -> dict[str, Any]:
             return {"steps": ["Открыть почту"]}
 
-        async def run_agent(self, agent: Any, run: Any, *, system: str, first: str, specs: Any) -> str:
+        async def run_agent(
+            self, agent: Any, run: Any, *, system: str, first: str, specs: Any, images: Any = None
+        ) -> str:
             self.firsts.append(first)
+            self.images.append(list(images or []))
             if len(self.firsts) == 1:
                 agent.interject("и закрой окно")
                 return "Кажется, всё."
@@ -338,6 +345,15 @@ async def test_codex_or_cli_run_continues_with_a_late_interjection(
     again = runner.firsts[1]
     assert again.startswith("Продолжение той же задачи: «Открой почту». Уже сделано: ничего.")
     assert "Пользователь перебил: «и закрой окно»" in again and "[Снимок окна]" in again
+    assert runner.images == [[], []]  # модель без картинок — первое сообщение без снимка экрана
+
+    # модель понимает картинки — картинка экрана с первым сообщением каждого захода
+    ctx.settings.patch({"ai": {"vision": "on"}})
+    runner.firsts.clear()
+    runner.images.clear()
+    await agent.wait(await agent.run("Открой почту"))
+    assert len(runner.images) == 2
+    assert all(len(urls) == 1 and urls[0].startswith("data:image/jpeg;base64,") for urls in runner.images)
 
 
 async def test_windows_that_open_or_close_are_reported(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi) -> None:

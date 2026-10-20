@@ -1381,9 +1381,17 @@ class ChatGpt:
 
     # --- агент --------------------------------------------------------------------------------------
     async def run_agent(
-        self, agent: "Agent", run: "AgentRun", *, system: str, first: str, specs: list[dict[str, Any]]
+        self,
+        agent: "Agent",
+        run: "AgentRun",
+        *,
+        system: str,
+        first: str,
+        specs: list[dict[str, Any]],
+        images: list[str] | None = None,
     ) -> str:
-        """Работа агента ходом Codex: инструменты — действия агента; вернёт итог (finish) для чата."""
+        """Работа агента ходом Codex: инструменты — действия агента; вернёт итог (finish) для чата. images —
+        картинки экрана (data URL) к первому сообщению."""
         from jarvis.ai.agent import AgentLimit
 
         problem = self.problem()
@@ -1474,7 +1482,7 @@ class ChatGpt:
                 self._start_turn(
                     runtime,
                     thread_id,
-                    [{"type": "text", "text": first}],
+                    self._items(first, images or []),
                     {"model": model, "effort": self._agent_effort(model)},
                 )
             )

@@ -1,9 +1,10 @@
 """Проводник и просмотр открытых файлов.
 
 Проводник: папки слева (TreeItem), адресная строка (ctrl+l, alt+d, f4), поиск по папке (ctrl+e, ctrl+f),
-файлы — ListItem: щелчок выделяет, двойной щелчок или Enter открывает, Delete — в Корзину (рискованное
-действие), alt+up и backspace — на уровень выше. Медленная папка (slow: путь → секунды мира) первый раз
-показывает «Работаем над этим…» без файлов — как Проводник с большой или сетевой папкой.
+файлы — ListItem: щелчок выделяет (и забирает фокус у полей), двойной щелчок или Enter открывает, Delete — в
+Корзину (рискованное действие), alt+up и backspace — на уровень выше. Пути — без учёта регистра. Медленная
+папка (slow: путь → секунды мира) показывает «Работаем над этим…» без файлов, пока не пройдёт столько секунд
+с первого захода в неё (зайти ещё раз — не быстрее) — как Проводник с большой или сетевой папкой.
 
 Viewer — что открывается двойным щелчком: документ Word, PDF в Edge, картинка; текст — в Блокноте (его
 открывает сам Блокнот).
@@ -44,6 +45,7 @@ class Explorer(App):
     def __init__(self, world: World, *, slow: dict[str, float] | None = None) -> None:
         super().__init__(world)
         self.slow = dict(slow or {})
+        self.ready: dict[str, float] = {}  # медленная папка → когда (время мира) она догрузится
         self.recycled: list[str] = []
 
     @property
@@ -65,10 +67,11 @@ class Explorer(App):
         window.data.update(folder=folder, selected="", query="", error="")
         window.values["search"] = ""
         window.values["address"] = folder or HOME_TITLE
-        delay = self.slow.pop(folder, 0.0)
-        window.data["ready_at"] = self.world.now() + delay
-        if delay:
-            self.world.after(delay, self.world.touch)
+        now = self.world.now()
+        ready = self.ready.setdefault(folder, now + self.slow[folder]) if folder in self.slow else 0.0
+        window.data["ready_at"] = ready
+        if ready > now:
+            self.world.after(ready - now, self.world.touch)
         window.title = f"{folder_title(folder)} — Проводник"
         window.focus = ""
         self.world.record(
@@ -92,6 +95,11 @@ class Explorer(App):
         return sorted((i for i in found if query in norm(i[0].rsplit("\\", 1)[-1])), key=lambda i: norm(i[0]))
 
     # --- действия ------------------------------------------------------------------------------------
+    def open_folder(self, folder: str) -> bool:
+        """Папку открыли адресом или командой («открой загрузки») — новое окно Проводника на ней."""
+        self.open_main(folder=folder)
+        return True
+
     def open_item(self, window: Window, path: str, is_dir: bool) -> None:
         if is_dir:
             self.go(window, path)
@@ -115,11 +123,11 @@ class Explorer(App):
     def navigate(self, window: Window) -> None:
         text = window.values.get("address", "").strip().strip('"').replace("%USERPROFILE%", HOME).rstrip("\\")
         titles = {norm(title): path for path, title in FOLDERS.items()}
-        path = titles.get(norm(text), text)
+        path = titles.get(norm(text)) or self.world.real_folder(text) or text
         if norm(text) in (norm(HOME_TITLE), ""):
             path = ""
         if path and path not in self.world.folders:
-            if path in self.world.files:
+            if self.world.real_file(path) is not None:
                 self.world.open_path(path)
                 return
             window.data["error"] = f"Не удаётся найти «{text}»"

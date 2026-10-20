@@ -39,6 +39,7 @@ FOLDERS = {  # папки пользователя: путь → как их з�
     HOME + "\\Music": "Музыка",
 }
 EDITABLE = frozenset({"Edit", "Document"})
+LIST_KINDS = frozenset({"ListItem", "DataItem", "TreeItem"})
 
 
 def norm(text: str) -> str:
@@ -105,7 +106,31 @@ class Window:
         return self.app.pid
 
     def widgets(self) -> list[Widget]:
-        return self.app.view(self)
+        """Кнопки заголовка («Свернуть», «Развернуть», «Закрыть» — их видит и UI Automation) и виджеты
+        сцены."""
+        width, world = self.size[0], self.app.world
+        chrome = [
+            Widget(
+                "title:min",
+                "Button",
+                "Свернуть",
+                (width - 150, 0, width - 106, TITLE_BAR),
+                style="chrome",
+                on_click=lambda: world.minimize(self),
+            ),
+            Widget(
+                "title:max", "Button", "Развернуть", (width - 106, 0, width - 62, TITLE_BAR), style="chrome"
+            ),
+            Widget(
+                "title:close",
+                "Button",
+                "Закрыть",
+                (width - 62, 0, width - 18, TITLE_BAR),
+                style="chrome",
+                on_click=lambda: world.close(self),
+            ),
+        ]
+        return chrome + self.app.view(self)
 
     def widget(self, key: str) -> Widget | None:
         return next((w for w in self.widgets() if w.key == key), None)
@@ -267,6 +292,12 @@ class World:
     def touch(self) -> None:
         self.version += 1
 
+    def set_step(self, step: int) -> None:
+        """Агент начал действие номер step (прогон — по событию agent.step); задачам — событие «step»."""
+        with self.lock:
+            self.step = step
+            self.emit("step", step)
+
     def record(self, kind: str, what: str = "", *, window: Window | None = None, **data: Any) -> Event:
         with self.lock:
             self.seq += 1
@@ -339,12 +370,30 @@ class World:
             return True
 
     def front(self, window: Window) -> None:
+        """Окно — вперёд; у него открыт диалог — вперёд и диалог (модальный); «Пуск» закрывается, как в
+        жизни."""
         with self.lock:
-            if window in self.windows:
-                self.windows.remove(window)
-                self.windows.append(window)
-                window.minimized = False
-                self.touch()
+            if window not in self.windows:
+                return
+            for start in [w for w in self.windows if w.data.get("start") and w is not window]:
+                self.windows.remove(start)
+            self.windows.remove(window)
+            self.windows.append(window)
+            window.minimized = False
+            dialog = self.modal(window)
+            if dialog is not None:
+                self.windows.remove(dialog)
+                self.windows.append(dialog)
+            self.touch()
+
+    def minimize(self, window: Window) -> None:
+        with self.lock:
+            window.minimized = True
+            self.record("window", f"свёрнуто «{window.title}»", window=window)
+
+    def modal(self, window: Window) -> Window | None:
+        """Открытый диалог этого окна («Сохранение», «Сохранить изменения?»): пока он есть, окно не нажать."""
+        return next((w for w in self.windows if w.kind == "dialog" and w.data.get("owner") is window), None)
 
     @property
     def foreground(self) -> Window | None:
@@ -448,13 +497,23 @@ class World:
             if widget.kind == "Edit" and not widget.multiline:
                 text = text.replace("\r", "").replace("\n", " ")
             old = "" if window.selected_all else window.values.get(widget.key, widget.value)
-            self._set_value(window, widget, old + text)
+            caret = f"caret:{widget.key}"
+            if widget.kind == "Document" and caret in window.data and not window.selected_all:
+                at = max(
+                    0, min(int(window.data[caret]), len(old))
+                )  # курсор внутри текста (у открытого файла — 0)
+                self._set_value(window, widget, old[:at] + text + old[at:])
+                window.data[caret] = at + len(text)
+            else:
+                window.data.pop(caret, None)  # курсор — в конце
+                self._set_value(window, widget, old + text)
             self.record("type", text, window=window, how=how, field=widget.name or widget.key)
 
     def set_text(self, window: Window, widget: Widget, text: str) -> None:
         """UI Automation: ValuePattern.SetValue — содержимое поля заменяется, фокус — в поле."""
         with self.lock:
             window.focus = widget.key
+            window.data.pop(f"caret:{widget.key}", None)
             self._set_value(window, widget, text)
             self.record("type", text, window=window, how="uia", field=widget.name or widget.key)
 
@@ -477,6 +536,11 @@ class World:
             self.touch()
 
     def _global_key(self, combo: str, window: Window | None) -> bool:
+        if combo in ("win", "win+s", "ctrl+esc"):
+            start = next((a for a in self.apps if getattr(a, "start", False)), None)
+            if start is not None:
+                start.launch()
+            return True
         if combo == "win+e":
             self.launch("explorer.exe")
             return True
@@ -509,9 +573,23 @@ class World:
         if combo == "ctrl+a" and widget is not None:
             window.selected_all = True
             return
+        caret = f"caret:{widget.key}" if widget is not None else ""
+        if combo in ("ctrl+end", "ctrl+home") and widget is not None and widget.kind == "Document":
+            if combo == "ctrl+home":
+                window.data[caret] = 0
+            else:
+                window.data.pop(caret, None)
+            window.selected_all = False
+            return
         if combo in ("backspace", "delete") and widget is not None:
             value = window.values.get(widget.key, widget.value)
-            self._set_value(window, widget, "" if window.selected_all else value[:-1])
+            at = int(window.data.get(caret, len(value)))
+            if window.selected_all:
+                self._set_value(window, widget, "")
+            elif at > 0:
+                self._set_value(window, widget, value[: at - 1] + value[at:])
+                if caret in window.data:
+                    window.data[caret] = at - 1
             return
         if combo == "enter":
             if widget is not None and widget.on_enter is not None:
@@ -546,6 +624,11 @@ class World:
             if window is None:
                 self.record("click", f"рабочий стол ({x}, {y})")
                 return
+            dialog = self.modal(window)
+            if dialog is not None:  # окно с открытым диалогом не нажать: диалог мигает впереди
+                self.front(dialog)
+                self.record("click", f"мимо диалога «{dialog.title}»", window=window)
+                return
             if window is not self.foreground:
                 self.front(window)
             if button != "left":
@@ -569,6 +652,10 @@ class World:
             if widget.editable:
                 window.focus = widget.key
                 window.selected_all = False
+                if widget.kind == "Document":
+                    window.data.pop(f"caret:{widget.key}", None)  # щелчок под текстом — курсор в конце
+            elif widget.kind in LIST_KINDS:
+                window.focus = widget.key  # пункт списка забирает фокус у поля: Delete и Enter — уже ему
             action = widget.on_double if double and widget.on_double is not None else widget.on_click
             if action is not None:
                 action()
@@ -603,8 +690,28 @@ class World:
             if browser is not None:
                 browser.url(url)
 
+    def real_folder(self, path: str) -> str | None:
+        """Папка мира с этим путём без учёта регистра (как в Windows; %USERPROFILE% — домашняя) или None."""
+        want = (
+            path.strip().strip('"').replace("/", "\\").replace("%USERPROFILE%", HOME).rstrip("\\").casefold()
+        )
+        return next((f for f in self.folders if f.casefold() == want), None)
+
+    def real_file(self, path: str) -> str | None:
+        want = path.strip().strip('"').replace("/", "\\").replace("%USERPROFILE%", HOME).casefold()
+        return next((f for f in self.files if f.casefold() == want), None)
+
     def open_path(self, path: str) -> None:
         with self.lock:
+            folder = self.real_folder(path)
+            if folder is not None:  # «открой загрузки»: папка — в Проводнике, это не «открытый файл»
+                self.record("open", folder, folder=True)
+                for app in self.apps:
+                    opener = getattr(app, "open_folder", None)
+                    if callable(opener) and opener(folder):
+                        return
+                return
+            path = self.real_file(path) or path
             self.opened.append(path)
             self.record("open", path)
             for app in self.apps:
@@ -626,7 +733,7 @@ class World:
         )
 
     def installed(self) -> list[AppInfo]:
-        return [app.info() for app in self.apps]
+        return [info for info in (app.info() for app in self.apps) if info is not None]
 
 
 def _inside(rect: Rect, x: int, y: int) -> bool:

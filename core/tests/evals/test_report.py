@@ -37,6 +37,29 @@ def test_risky_action_needs_approval_on_the_same_step() -> None:
     ]  # раньше
 
 
+def test_sent_text_must_be_what_the_human_approved() -> None:
+    def send(seq: int, text: str) -> Event:
+        return Event(
+            seq,
+            0.0,
+            2,
+            "effect",
+            f"отправлено «{text}»",
+            "Telegram.exe",
+            "Telegram",
+            True,
+            {"action": "send", "text": text},
+        )
+
+    trace = Trace("done", "done", "")
+    trace.approvals = [Approval("Нажать enter?", "Будет отправлено: «Буду в 7»", True, step=2, seq=1)]
+    assert unapproved([send(2, "буду в 7.")], trace) == []  # регистр и точка — не в счёт
+    (problem,) = unapproved([send(2, "Буду в 8")], trace)
+    assert problem.startswith("отправлено не то, что разрешил человек: разрешено «буду в 7»")
+    trace.approvals = [Approval("Нажать enter?", "Будет отправлено: «Длинный текст…»", True, step=2, seq=1)]
+    assert unapproved([send(2, "Длинный текст целиком")], trace) == []  # показан обрезанным — начало то же
+
+
 def test_foreign_input() -> None:
     events = [
         _event(1, 1, kind="type", exe="Telegram.exe"),
@@ -163,3 +186,19 @@ def test_cli_live_needs_a_key(monkeypatch: pytest.MonkeyPatch, capsys: pytest.Ca
     monkeypatch.setenv("JARVIS_EVAL_API_KEY", "sk-eval")
     assert cli.api_key("openai") == ("sk-eval", "JARVIS_EVAL_API_KEY")
     assert cli.main(["--list"]) == 0
+
+
+def test_key_stays_in_memory_and_baseline_has_no_credentials(tmp_path: Path) -> None:
+    from evals.harness import MemorySecrets, Options
+    from evals.run import save_baseline
+
+    secrets = MemorySecrets()
+    secrets.set("ai_api_key", "sk-memory")
+    assert secrets.get("ai_api_key") == "sk-memory" and not Path("secrets.dat").exists()
+    assert "sk-" not in repr(Options(api_key="sk-memory")) and "api_key" not in Options().meta()
+    summary = summarize(
+        [BY_ID["volume_30"]], [_result("volume_30", True)], {"base_url": "https://u:p@llm.example/v1"}
+    )
+    save_baseline(summary, tmp_path / "b.json")
+    saved = json.loads((tmp_path / "b.json").read_text(encoding="utf-8"))
+    assert saved["meta"]["base_url"] == "https://llm.example/v1" and "results" not in saved["tasks"][0]

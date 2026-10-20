@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from evals.sim.apps.explorer import Explorer, Viewer
 from evals.sim.apps.mail import Mail, MailApp
-from evals.sim.apps.misc import Browser, Cloud, Feedback, Generic
+from evals.sim.apps.misc import Browser, Cloud, Feedback, Generic, Start
 from evals.sim.apps.music import Music
 from evals.sim.apps.notepad import Notepad
 from evals.sim.apps.settings import Settings
@@ -145,4 +145,5 @@ class Desktop:
             ("Visual Studio Code", "Code.exe"),
         ):
             world.install(Generic(world, name, exe))
+        world.install(Start(world))
         return desktop

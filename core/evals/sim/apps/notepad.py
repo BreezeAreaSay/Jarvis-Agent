@@ -1,10 +1,10 @@
 """Блокнот: документ, меню «Файл», окно «Сохранить как», вопрос о несохранённых изменениях.
 
-Документ — Document для UI Automation (ui_type заменяет весь текст); набор с клавиатуры дописывает в конец
-(курсор всегда там). ctrl+s сохраняет файл, у нового — открывает «Сохранить как»: папки слева, поле
-«Имя файла:» (в нём уже выделено «*.txt»: набор заменит), «Сохранить». Имя может быть и полным путём
-(«%USERPROFILE%\\Desktop\\Покупки.txt»). Несохранённое — «*» в заголовке; закрыть такое окно — вопрос
-«Сохранить изменения…?».
+Документ — Document для UI Automation (ui_type заменяет весь текст); набор с клавиатуры — туда, где курсор:
+у открытого файла он в начале, щелчок под текстом и ctrl+end — в конец, ctrl+home — в начало. ctrl+s сохраняет
+файл, у нового — открывает «Сохранить как»: папки слева, поле «Имя файла:» (в нём уже выделено «*.txt»: набор
+заменит), «Сохранить». Имя может быть и полным путём («%USERPROFILE%\\Desktop\\Покупки.txt»), регистр букв
+в пути не важен. Несохранённое — «*» в заголовке; закрыть такое окно — вопрос «Сохранить изменения…?».
 """
 
 import os
@@ -51,6 +51,8 @@ class Notepad(App):
         text = self.world.files.get(path, "") if path else ""
         window = self.world.open(self, "", self.rect, data={"path": path, "saved": text}, focus="doc")
         window.values["doc"] = text
+        if path:
+            window.data["caret:doc"] = 0  # как в настоящем Блокноте: курсор в начале файла
         self._title(window)
         return window
 
@@ -106,12 +108,12 @@ class Notepad(App):
             dialog.data["error"] = "Введите имя файла"
             return
         path = resolve_path(name, str(dialog.data["folder"]))
-        folder = path.rsplit("\\", 1)[0]
-        if folder not in self.world.folders and not any(
-            p.startswith(folder + "\\") for p in self.world.files
-        ):
+        folder, _, file_name = path.rpartition("\\")
+        real = self.world.real_folder(folder)  # пути в Windows — без учёта регистра
+        if real is None:
             dialog.data["error"] = f"Папка «{folder}» не найдена"
             return
+        path = self.world.real_file(real + "\\" + file_name) or real + "\\" + file_name
         editor = self.editor(dialog)
         self.world.close(dialog, force=True)
         self.save(editor, path)
@@ -164,9 +166,13 @@ class Notepad(App):
         if combo == "esc" and menu:
             window.data["menu"] = False
             return True
-        if combo in ("ctrl+end", "end"):
+        if combo in ("ctrl+end", "end", "ctrl+home", "home"):
             window.focus = "doc"
             window.selected_all = False
+            if combo in ("ctrl+home", "home"):
+                window.data["caret:doc"] = 0
+            else:
+                window.data.pop("caret:doc", None)
             return True
         return False
 

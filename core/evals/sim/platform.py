@@ -64,8 +64,11 @@ class SimPlatform(FakePlatform):
     def close_app(self, name: str) -> int:
         self._call("close_app", name)
         with self.world.lock:
+            want = name.casefold().removesuffix(".exe")
             closed = [
-                w for w in self.world.windows if name.casefold() in (w.exe.casefold(), w.app.name.casefold())
+                w
+                for w in self.world.windows
+                if want and (want in w.exe.casefold() or want in w.app.name.casefold())
             ]
             for window in closed:
                 self.world.close(window, force=True)

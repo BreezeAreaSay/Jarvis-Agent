@@ -55,18 +55,23 @@ def test_snapshot_shows_only_ui_automation(desktop: Desktop) -> None:
     ui = SimUi(world)
     snap = ui.snapshot()
     assert (snap.window, snap.app, snap.pid) == ("Telegram", "Telegram.exe", tg.pid)
+    # кнопки заголовка и поле «Поиск»; список чатов — только картинкой
     assert [(e.id, e.kind, e.name) for e in snap.elements] == [
-        ("e1", "Edit", "Поиск")
-    ]  # список чатов — картинкой
-    assert snap.elements[0].rect == tg.screen_rect(tg.widget("search").rect)  # type: ignore[union-attr]
-    assert ui.set_text("e1", "Аня") == "текст вставлен" and tg.values["search"] == "Аня"
-    assert ui.element_at(*snap.elements[0].center) == ("Поиск", "Edit")
-    assert ui.owner_at(*snap.elements[0].center) == (tg.pid, "Telegram")
+        ("e1", "Button", "Свернуть"),
+        ("e2", "Button", "Развернуть"),
+        ("e3", "Button", "Закрыть"),
+        ("e4", "Edit", "Поиск"),
+    ]
+    search = snap.elements[3]
+    assert search.rect == tg.screen_rect(tg.widget("search").rect)  # type: ignore[union-attr]
+    assert ui.set_text("e4", "Аня") == "текст вставлен" and tg.values["search"] == "Аня"
+    assert ui.element_at(*search.center) == ("Поиск", "Edit")
+    assert ui.owner_at(*search.center) == (tg.pid, "Telegram")
     with pytest.raises(UiError):
         ui.click("e9")
     desktop.telegram.open(tg, "Мама")
     names = [e.name for e in ui.snapshot().elements]
-    assert names == ["Поиск", "Написать сообщение…"]
+    assert names[3:] == ["Поиск", "Написать сообщение…"]
     # нажатие через UI Automation — «в фоне»: окно вперёд не выходит
     mail = desktop.mail.open_main()
     world.front(mail)
@@ -77,6 +82,67 @@ def test_snapshot_shows_only_ui_automation(desktop: Desktop) -> None:
     world.close(tg, force=True)
     with pytest.raises(UiError, match="Окно закрылось"):
         ui.click(message.id)
+
+
+def test_title_bar_modal_dialog_and_start_menu(desktop: Desktop) -> None:
+    world = desktop.world
+    platform = SimPlatform(world)
+    ui = SimUi(world)
+    popup = desktop.zoom.popup()
+    close = next(e for e in ui.snapshot().elements if e.name == "Закрыть")
+    platform.mouse_click(*close.center)  # крестик в заголовке закрывает окно
+    assert popup not in world.windows
+    editor = desktop.notepad.open_main()
+    platform.type_text("черновик")
+    platform.press_keys("ctrl+s")
+    dialog = world.foreground
+    assert dialog is not None and dialog.kind == "dialog"
+    platform.mouse_click(editor.rect[0] + 300, editor.rect[3] - 60)  # мимо диалога — он остаётся впереди
+    platform.window_action("focus", editor.hwnd)
+    assert world.foreground is dialog and editor.values["doc"] == "черновик"
+    world.close(dialog, force=True)
+    # «Пуск»: win, набрать, Enter — запуск лучшего совпадения; ввод туда — не «чужое окно»
+    platform.press_keys("win")
+    assert world.foreground is not None and world.foreground.exe == "SearchHost.exe"
+    platform.type_text("параметры")
+    platform.press_keys("enter")
+    assert world.foreground.exe == "SystemSettings.exe"  # type: ignore[union-attr]
+    assert not any(w.exe == "SearchHost.exe" for w in world.windows)
+    platform.press_keys("win")
+    platform.type_text("отчёт за сентябрь")
+    platform.press_keys("enter")
+    assert world.opened == [HOME + "\\Documents\\Отчёт за сентябрь.docx"]
+    assert "Поиск Windows" not in {a.name for a in platform.list_apps()}
+
+
+def test_cursor_in_document(desktop: Desktop) -> None:
+    world = desktop.world
+    platform = SimPlatform(world)
+    ui = SimUi(world)
+    editor = desktop.notepad.open_main(path=HOME + "\\Documents\\Дела.txt")
+    platform.type_text("Сначала: ")  # у открытого файла курсор в начале
+    assert editor.values["doc"].startswith("Сначала: Купить корм коту")
+    platform.press_keys("ctrl+end")
+    platform.type_text("\nВ конце")
+    assert editor.values["doc"].endswith("Оплатить интернет\nВ конце")
+    platform.press_keys("ctrl+home")
+    platform.press_keys("backspace")  # в начале — стирать нечего
+    platform.type_text("!")
+    assert editor.values["doc"].startswith("!Сначала")
+    doc = next(e for e in ui.snapshot().elements if e.kind == "Document")
+    ui.click(doc.id)  # щелчок под текстом — курсор в конце
+    platform.type_text(".")
+    assert editor.values["doc"].endswith("В конце.")
+
+
+def test_folders_and_paths(desktop: Desktop) -> None:
+    world = desktop.world
+    platform = SimPlatform(world)
+    platform.open_path(HOME.lower() + "\\downloads")  # «открой загрузки»: папка — в Проводнике, не «файл»
+    window = world.foreground
+    assert window is not None and window.title == "Загрузки — Проводник" and world.opened == []
+    platform.open_path("c:\\users\\me\\documents\\отчёт за август.docx")
+    assert world.opened == [HOME + "\\Documents\\Отчёт за август.docx"]  # путь — как он есть в мире
 
 
 def test_picture_of_the_screen_follows_the_world(desktop: Desktop) -> None:
@@ -155,6 +221,8 @@ def test_slow_folder_and_explorer_keys(desktop: Desktop) -> None:
     world._t0 -= 9  # прошло 9 секунд мира
     names = [e.name for e in ui.snapshot().elements]
     assert "Счёт №125 от 15.10.pdf" in names
+    window = desktop.explorer.open_main(folder=HOME + "\\Downloads")  # уже догрузилась — сразу
+    assert not desktop.explorer.loading(window)
     platform = SimPlatform(world)
     platform.press_keys("ctrl+l")
     platform.type_text("%USERPROFILE%\\Documents")
@@ -183,7 +251,10 @@ def test_notepad_save_as_and_unsaved_question(desktop: Desktop) -> None:
     snap = ui.snapshot()
     desk = next(e for e in snap.elements if e.name == "Рабочий стол")
     ui.click(desk.id)
-    platform.type_text("Покупки")  # «*.txt» было выделено — набор заменил его
+    platform.type_text("в никуда")  # фокус ушёл в дерево папок: в поле имени ничего не попало
+    assert dialog.values["name"] == "*.txt"
+    platform.press_keys("tab")  # tab — в поле имени, «*.txt» выделено: набор заменит его
+    platform.type_text("Покупки")
     platform.press_keys("enter")
     assert world.files[HOME + "\\Desktop\\Покупки.txt"] == "Купить молоко"
     assert world.foreground is editor and editor.title == "Покупки — Блокнот"

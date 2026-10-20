@@ -1,6 +1,6 @@
 """Одна попытка задачи: свой каталог данных и контекст ядра, мир задачи вместо Windows, агент как в жизни.
 
-Каждая попытка — с чистого листа: временный каталог данных (настройки, база, журнал агента, ключ),
+Каждая попытка — с чистого листа: временный каталог данных (настройки, база, журнал агента),
 build_context("fake"), затем ctx.platform = SimPlatform(мир), ctx.agent.ui = SimUi(мир), уведомления —
 SimToasts(мир). Модель — настоящая (живой режим: провайдер и ключ из параметров прогона) или по сценарию
 (ScriptedLlm с эталонным решением задачи). «Человек» (SimUser) отвечает на просьбы о разрешении и на вопросы
@@ -8,18 +8,21 @@ ask_user так, как велит задача, и всё записывает:
 
 После попытки: след (Trace) — итог агента, разрешения, вопросы, шаги, время, токены; журнал агента
 (шаги, ответы, картинки экрана) копируется в папку прогона (у неудачных — всегда), временный каталог
-удаляется вместе с ключом.
+удаляется. Ключ провайдера — только в памяти (MemorySecrets): на диск он не пишется вовсе.
 """
 
 import asyncio
 import contextlib
 import shutil
+import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from evals.report import scrub
 from evals.script import Driver, scripted_llm
 from evals.sim.desktop import Desktop
 from evals.sim.platform import SimPlatform
@@ -27,6 +30,7 @@ from evals.sim.ui import SimToasts, SimUi
 from evals.tasks.base import Approval, Question, Task, Trace
 from jarvis import paths
 from jarvis.services import UserFacingError
+from jarvis.settings import Secrets
 
 SCRIPTED_KEY = "sk-scripted"  # не настоящий: детерминированный режим в сеть не ходит
 
@@ -81,6 +85,26 @@ class Outcome:
     script_errors: list[str] = field(default_factory=list)
 
 
+class MemorySecrets(Secrets):
+    """Секреты попытки — только в памяти процесса: ключ провайдера не ложится в secrets.dat."""
+
+    def __init__(self, bus: Any = None) -> None:
+        self.path = Path(".")
+        self._bus = bus
+        self._lock = threading.Lock()
+        self._values: dict[str, str] = {}
+
+    def set(self, name: str, value: str) -> None:
+        with self._lock:
+            value = value.strip()
+            if value:
+                self._values[name] = value
+            else:
+                self._values.pop(name, None)
+        if self._bus is not None:
+            self._bus.publish("secrets.changed", {"name": name, "set": bool(value)})
+
+
 class SimUser:
     """Человек у компьютера: решает «Разрешить?» и отвечает на вопросы агента — как велит задача."""
 
@@ -105,9 +129,7 @@ class SimUser:
 
     def _step(self, event: Any) -> None:
         if event.data.get("status") == "running":
-            world = self.desktop.world
-            with world.lock:
-                world.step = int(event.data.get("index") or 0)
+            self.desktop.world.set_step(int(event.data.get("index") or 0))
             self.titles.append(str(event.data.get("title") or ""))
 
     def _confirm(self, event: Any) -> None:
@@ -162,6 +184,7 @@ async def attempt(task: Task, options: Options, *, label: str = "") -> Outcome:
     driver: Driver | None = None
     try:
         world = desktop.world
+        ctx.secrets = MemorySecrets(ctx.bus)
         ctx.platform = SimPlatform(world)
         agent: Any = ctx.agent
         agent.ui = SimUi(world)
@@ -249,6 +272,8 @@ async def attempt(task: Task, options: Options, *, label: str = "") -> Outcome:
         ctx.db.close()
         paths.set_data_dir(previous)
         shutil.rmtree(folder, ignore_errors=True)
+        if folder.exists():
+            print(f"Временный каталог попытки не удалился: {folder}", file=sys.stderr)
 
 
 def _keep_journal(source: Path, options: Options, label: str) -> Path | None:
@@ -258,4 +283,5 @@ def _keep_journal(source: Path, options: Options, label: str) -> Path | None:
     target = options.out_dir / "journals" / label
     shutil.rmtree(target, ignore_errors=True)
     shutil.copytree(source, target)
+    scrub(target, options.api_key)  # сразу: прерванный прогон не оставит ключ в журнале
     return target

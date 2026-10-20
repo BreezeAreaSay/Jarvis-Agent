@@ -1,15 +1,16 @@
 """Музыкальная программа (Spotify, Яндекс Музыка): главная с обложками плейлистов и плеер внизу.
 
-Как у настоящих: клавиша «Play» (медиаклавиша, кнопка плеера) без выбранного трека ничего не включает —
-нужно щёлкнуть плейлист на главной. cards_uia=False — обложки только нарисованы (UI Automation их не видит,
-нужны картинка и click_point); кнопки плеера и название трека видны всегда. Сеанс воспроизведения Windows
-(now_playing) — то, что играет.
+Как у Яндекс Музыки с «Моей волной»: клавиша «Play» (медиаклавиша, кнопка плеера) без выбранного трека ничего
+не включает — нужно щёлкнуть плейлист на главной. Адреса spotify: выводят окно Spotify вперёд.
+cards_uia=False — обложки только нарисованы (UI Automation их не видит, нужны картинка и click_point); кнопки
+плеера и название трека видны всегда. Сеанс воспроизведения Windows (now_playing) — то, что играет.
 """
 
 from evals.sim.world import App, Widget, Window, World
 from jarvis.platform.base import MediaInfo
 
-PLAYLISTS: dict[str, list[tuple[str, str]]] = {
+Playlists = dict[str, list[tuple[str, str]]]
+PLAYLISTS: Playlists = {
     "Мой микс дня": [("Night Drive", "Neon Coast"), ("Slow Lights", "Aurora Lane")],
     "Для бега": [("Run", "Pulse Theory"), ("Faster", "Kilometer")],
     "Спокойная музыка": [("Rain Garden", "Mila Sato"), ("Low Tide", "Harbor")],
@@ -29,10 +30,12 @@ class Music(App):
         exe: str = "Spotify.exe",
         title: str = "Spotify Premium",
         cards_uia: bool = True,
+        playlists: Playlists | None = None,
     ) -> None:
         super().__init__(world)
         self.name, self.exe, self.title = name, exe, title
         self.cards_uia = cards_uia
+        self.playlists = dict(playlists or PLAYLISTS)
         self.playlist: str | None = None
         self.track = 0
         self.playing = False
@@ -42,7 +45,7 @@ class Music(App):
     def current(self) -> tuple[str, str] | None:
         if self.playlist is None:
             return None
-        tracks = PLAYLISTS[self.playlist]
+        tracks = self.playlists[self.playlist]
         return tracks[self.track % len(tracks)]
 
     def play(self, playlist: str) -> None:
@@ -61,6 +64,14 @@ class Music(App):
         self.world.record(
             "effect", f"{self.name}: {'играет' if self.playing else 'пауза'}", app=self, action="toggle"
         )
+
+    def url(self, url: str) -> bool:
+        if not (url.casefold().startswith("spotify:") and self.exe.casefold() == "spotify.exe"):
+            return False
+        window = self.main() or self.open_main()
+        self.world.front(window)
+        self.world.record("effect", f"{self.name}: адрес {url}", window=window, action="url", url=url)
+        return True
 
     def media(self, key: str) -> None:
         if key == "play_pause":
@@ -97,7 +108,7 @@ class Music(App):
             Widget("hello", "Text", "Добрый день", (250, 56, 800, 90), size=26, style="header"),
             Widget("made", "Text", "Подборки для вас", (250, 104, 800, 126), size=15, style="muted"),
         ]
-        for i, playlist in enumerate(PLAYLISTS):
+        for i, playlist in enumerate(self.playlists):
             left = 250 + i * 250
             rect = (left, 140, left + 220, 420)
             items.append(

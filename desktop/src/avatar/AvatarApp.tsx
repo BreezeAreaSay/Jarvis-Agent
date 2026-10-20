@@ -140,14 +140,20 @@ export default function AvatarApp() {
 
   const hidden =
     !settings || !active || !settings.avatar.desktop || (fullscreen && settings.avatar.hide_fullscreen);
-  // окно — только пока сфера видна: показать сразу, спрятать, когда догаснет
+  // окно — только пока сфера видна: показать сразу, спрятать, когда догаснет; сфера создаётся заново при
+  // каждом появлении — её анимация стартует в уже показанном окне и не работает, пока окна нет
+  const [orb, setOrb] = useState(false);
   useEffect(() => {
     if (!hidden) {
+      setOrb(true);
       bridge.send("avatar:active", true);
       return;
     }
     setHover(false);
-    const timer = window.setTimeout(() => bridge.send("avatar:active", false), FADE_MS);
+    const timer = window.setTimeout(() => {
+      setOrb(false);
+      bridge.send("avatar:active", false);
+    }, FADE_MS);
     return () => clearTimeout(timer);
   }, [hidden]);
   // выключенный микрофон — не то же, что ядро не отвечает (av-offline): серее и с красным значком
@@ -210,7 +216,7 @@ export default function AvatarApp() {
       }}
     >
       <div className="av-orb">
-        <JarvisOrb scale={ORB_SCALE} iridescent animated={settings?.avatar.animated ?? true} />
+        {orb && <JarvisOrb scale={ORB_SCALE} iridescent animated={settings?.avatar.animated ?? true} />}
       </div>
       {!hidden && muted && !dragging && <MutedBadge />}
       {!hidden && hover && !dragging && <MediaControls media={media} />}

@@ -1,150 +1,70 @@
-// Живой аватар на рабочем столе: сфера Jarvis во всё маленькое прозрачное окно и тонкое кольцо состояния
-// голоса (слушаю — ярче, думаю — бегущая дуга, говорю — пульсирует с речью). Перетаскивается мышью (окно
-// двигает главный процесс), щелчок открывает Jarvis, правый щелчок — меню; под указателем — кнопки плеера.
-// Микрофон выключен — сфера серее и с красным значком (щелчок по значку включает микрофон).
+// Живой аватар на рабочем столе: переливающаяся всеми цветами сфера Jarvis из частиц (JarvisOrb) — только пока
+// Jarvis слушает, думает или говорит; в остальное время окна нет (главный процесс прячет его по avatar:active,
+// чтобы прозрачный квадрат не ловил мышь). Слушает — сфера волнуется от громкости, говорит — волны от его голоса.
+// Перетаскивается мышью (окно двигает главный процесс), щелчок — «стоп» (перестать слушать, замолчать), правый
+// щелчок — меню; под указателем — кнопки плеера. Микрофон выключен — сфера серее и с красным значком.
 import "@/styles/overlay.css";
 import { MicOff, Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/api/client";
 import { onEvent } from "@/api/events";
-import type { MediaInfo } from "@/api/types";
-import { Orb } from "@/components/Orb";
+import type { MediaInfo, VoiceState } from "@/api/types";
+import { JarvisOrb } from "@/components/JarvisOrb";
 import { bridge } from "@/lib/bridge";
 import { levels } from "@/lib/levels";
-import { accentRgb } from "@/lib/theme";
 import { useApp } from "@/store/app";
 import { cx } from "@/ui";
 
-const ORB_SCALE = 0.36;
+const ORB_SCALE = 0.3;
 const DRAG_THRESHOLD = 4;
+const ACTIVE: VoiceState[] = ["listening", "processing", "speaking"];
+const LINGER_MS = 1200; // между «думаю» и ответом голосом бывает пауза — сфера не мигает
+const FADE_MS = 320; // столько гаснет сфера, потом главный процесс прячет окно
 
-/** Кольцо состояния голоса поверх сферы. Рисуется, только пока есть что показать. */
-function StateRing() {
-  const ref = useRef<HTMLCanvasElement>(null);
-  const accent = useApp((s) => s.settings?.interface.accent ?? "#3B82F6");
-  const animated = useApp((s) => (s.settings ? s.settings.interface.animations && s.settings.avatar.animated : true));
-  const opts = useRef({ accent, animated });
-  opts.current = { accent, animated };
-
+/** Jarvis слушает, думает или говорит (с задержкой на исчезновение). */
+function useVoiceActive(): boolean {
+  const [active, setActive] = useState(false);
   useEffect(() => {
-    const canvas = ref.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    let raf = 0;
-    let last = performance.now();
-    let alpha = 0;
-    let level = 0;
-    let angle = 0;
-    let w = 0;
-    let h = 0;
-    let drawn = "";
-    const stateKey = () => `${levels.state}|${levels.speaking}`;
-
-    const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      w = canvas.clientWidth || window.innerWidth;
-      h = canvas.clientHeight || window.innerHeight;
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-
-    const draw = (now: number) => {
-      raf = 0;
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
-      const { accent: color, animated: anim } = opts.current;
-      const state = levels.state;
-      const speaking = levels.speaking || state === "speaking";
-      const listening = state === "listening";
-      const processing = state === "processing";
-      const error = state === "error";
-      const target = listening ? 0.95 : processing ? 0.8 : speaking ? 0.7 : error ? 0.35 : 0;
-      const lvl = listening ? levels.mic : speaking ? levels.tts : 0;
-      alpha += (target - alpha) * Math.min(1, dt * (anim ? 7 : 60));
-      level += (lvl - level) * Math.min(1, dt * (lvl > level ? 16 : 6));
-      angle += dt * (anim ? 4.2 : 0);
-
-      ctx.clearRect(0, 0, w, h);
-      if (alpha > 0.01) {
-        const rgb = error ? [248, 113, 113] : accentRgb(color);
-        const cx = w / 2;
-        const cy = h / 2;
-        const base = Math.min(w, h) * ORB_SCALE * 1.17;
-        const r = base * (1 + (speaking ? level * 0.07 : listening ? level * 0.04 : 0));
-        const width = 2 + (listening || speaking ? level * 3.5 : 0);
-        ctx.save();
-        ctx.lineCap = "round";
-        ctx.shadowColor = `rgba(${rgb.join(",")}, ${0.8 * alpha})`;
-        ctx.shadowBlur = 10 + level * 14;
-        if (processing && anim) {
-          // бледное кольцо и бегущая по нему дуга
-          ctx.strokeStyle = `rgba(${rgb.join(",")}, ${0.22 * alpha})`;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(cx, cy, r, 0, Math.PI * 2);
-          ctx.stroke();
-          const grad = ctx.createConicGradient(angle, cx, cy);
-          grad.addColorStop(0, `rgba(${rgb.join(",")}, 0)`);
-          grad.addColorStop(0.3, `rgba(${rgb.join(",")}, ${alpha})`);
-          grad.addColorStop(0.31, `rgba(${rgb.join(",")}, 0)`);
-          grad.addColorStop(1, `rgba(${rgb.join(",")}, 0)`);
-          ctx.strokeStyle = grad;
-          ctx.lineWidth = 3;
-          ctx.beginPath();
-          ctx.arc(cx, cy, r, angle, angle + Math.PI * 0.62);
-          ctx.stroke();
-        } else {
-          ctx.strokeStyle = `rgba(${rgb.join(",")}, ${(listening ? 0.85 : 0.6) * alpha})`;
-          ctx.lineWidth = width;
-          ctx.beginPath();
-          ctx.arc(cx, cy, r, 0, Math.PI * 2);
-          ctx.stroke();
-          if (listening) {
-            ctx.strokeStyle = `rgba(255, 255, 255, ${0.35 * alpha})`;
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.arc(cx, cy, r, 0, Math.PI * 2);
-            ctx.stroke();
-          }
-        }
-        ctx.restore();
-      }
-      // кадры — только пока кольцо живое (слушает/думает/говорит) или плавно появляется/гаснет
-      drawn = stateKey();
-      const live = anim && (listening || processing || speaking);
-      if (!document.hidden && (live || Math.abs(target - alpha) > 0.01)) raf = requestAnimationFrame(draw);
-    };
-
-    const kick = () => {
-      if (!raf) {
-        last = performance.now();
-        raf = requestAnimationFrame(draw);
+    let state: VoiceState = levels.state;
+    let speaking = levels.speaking;
+    let timer = 0;
+    const check = () => {
+      if (speaking || ACTIVE.includes(state)) {
+        clearTimeout(timer);
+        timer = 0;
+        setActive(true);
+      } else if (!timer) {
+        timer = window.setTimeout(() => {
+          timer = 0;
+          setActive(false);
+        }, LINGER_MS);
       }
     };
-    resize();
-    const ro = new ResizeObserver(() => {
-      resize();
-      kick();
-    });
-    ro.observe(canvas);
-    const offs = [onEvent("voice.state", kick), onEvent("tts.state", kick), onEvent("voice.wake", kick)];
-    document.addEventListener("visibilitychange", kick);
-    // страховка: состояние могло смениться без события (переподключение) — дешёвая проверка раз в 0,5 с
-    const poll = window.setInterval(() => {
-      if (!raf && stateKey() !== drawn) kick();
-    }, 500);
-    kick();
+    const offs = [
+      onEvent<{ state: VoiceState }>("voice.state", (e) => {
+        state = e.data.state;
+        check();
+      }),
+      onEvent<{ voice?: { state?: VoiceState } }>("hello", (e) => {
+        state = e.data.voice?.state ?? state;
+        check();
+      }),
+      onEvent<{ speaking: boolean }>("tts.state", (e) => {
+        speaking = !!e.data.speaking;
+        check();
+      }),
+      onEvent("voice.wake", () => {
+        state = "listening";
+        check();
+      }),
+    ];
+    check();
     return () => {
-      cancelAnimationFrame(raf);
-      clearInterval(poll);
-      ro.disconnect();
+      clearTimeout(timer);
       for (const off of offs) off();
-      document.removeEventListener("visibilitychange", kick);
     };
   }, []);
-
-  return <canvas ref={ref} className="av-ring" aria-hidden />;
+  return active;
 }
 
 /** Микрофон выключен: красный значок на сфере — щелчок включает (сфера при этом не открывает Jarvis). */
@@ -200,6 +120,7 @@ function MediaControls({ media }: { media: MediaInfo | null }) {
 export default function AvatarApp() {
   const settings = useApp((s) => s.settings);
   const connected = useApp((s) => s.connected);
+  const active = useVoiceActive();
   const [fullscreen, setFullscreen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [hover, setHover] = useState(false);
@@ -217,7 +138,18 @@ export default function AvatarApp() {
       .catch(() => undefined);
   }, [connected]);
 
-  const hidden = !!settings && (!settings.avatar.desktop || (fullscreen && settings.avatar.hide_fullscreen));
+  const hidden =
+    !settings || !active || !settings.avatar.desktop || (fullscreen && settings.avatar.hide_fullscreen);
+  // окно — только пока сфера видна: показать сразу, спрятать, когда догаснет
+  useEffect(() => {
+    if (!hidden) {
+      bridge.send("avatar:active", true);
+      return;
+    }
+    setHover(false);
+    const timer = window.setTimeout(() => bridge.send("avatar:active", false), FADE_MS);
+    return () => clearTimeout(timer);
+  }, [hidden]);
   // выключенный микрофон — не то же, что ядро не отвечает (av-offline): серее и с красным значком
   const muted = connected && !!settings && !settings.voice.enabled;
 
@@ -257,14 +189,15 @@ export default function AvatarApp() {
       bridge.send("avatar:drag", { screenX: e.screenX, screenY: e.screenY });
       bridge.send("avatar:drag-end");
     } else if (!cancelled) {
-      bridge.send("main:show");
+      // «стоп»: перестать слушать, замолчать, бросить ответ (как «стоп» голосом)
+      void api.post("/api/stop").catch(() => undefined);
     }
   };
 
   return (
     <div
       className={cx("av-root", hidden && "av-hidden", !connected && "av-offline", muted && "av-muted", dragging && "av-dragging")}
-      title={dragging || hover ? undefined : muted ? "Jarvis — микрофон выключен. Нажмите, чтобы открыть" : "Jarvis — нажмите, чтобы открыть"}
+      title={dragging || hover ? undefined : "Jarvis — нажмите, чтобы остановить"}
       onPointerEnter={() => setHover(true)}
       onPointerLeave={() => setHover(false)}
       onPointerDown={onPointerDown}
@@ -276,16 +209,11 @@ export default function AvatarApp() {
         bridge.send("avatar:menu");
       }}
     >
-      {!hidden && (
-        <>
-          <div className="av-orb">
-            <Orb scale={ORB_SCALE} />
-          </div>
-          <StateRing />
-          {muted && !dragging && <MutedBadge />}
-          {hover && !dragging && <MediaControls media={media} />}
-        </>
-      )}
+      <div className="av-orb">
+        <JarvisOrb scale={ORB_SCALE} iridescent animated={settings?.avatar.animated ?? true} />
+      </div>
+      {!hidden && muted && !dragging && <MutedBadge />}
+      {!hidden && hover && !dragging && <MediaControls media={media} />}
     </div>
   );
 }

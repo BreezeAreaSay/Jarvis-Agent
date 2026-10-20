@@ -4,6 +4,8 @@
 // думает — вращается быстрее, по сфере бежит полоса «сканирования»; говорит — волны от громкости речи
 // (tts.level). Canvas 2D без зависимостей: в покое — 30 кадров в секунду, вне экрана и в свёрнутом окне —
 // ничего; «Анимации» выключены или в системе «уменьшить движение» — неподвижный кадр.
+// iridescent — вместо цвета темы сфера переливается: точки разных оттенков, весь круг цветов проходит за
+// ~15 с в покое и быстрее, пока Jarvis слушает или говорит (аватар на рабочем столе).
 import { useEffect, useRef } from "react";
 import { levels } from "@/lib/levels";
 import { accentRgb } from "@/lib/theme";
@@ -23,6 +25,10 @@ export interface JarvisOrbProps {
   rings?: boolean;
   /** Фиксированный цвет вместо цвета темы. */
   color?: string;
+  /** Переливаться всеми цветами вместо цвета темы. */
+  iridescent?: boolean;
+  /** false — неподвижный кадр (своя настройка анимации, например у аватара); по умолчанию — как в интерфейсе. */
+  animated?: boolean;
   onClick?: () => void;
   title?: string;
 }
@@ -35,6 +41,11 @@ const RING_CAMERA = 12; // кольца — почти без перспекти
 const MERIDIANS = 9;
 const PARALLELS = [-0.62, -0.32, 0, 0.32, 0.62];
 const RING_STEPS = 72;
+// переливание: оттенок точки = общий оттенок + сдвиг по её месту на сфере; спрайты — по ступеням оттенка
+const HUE_STEP = 10;
+const HUE_SPREAD = 110; // насколько расходятся оттенки точек на сфере, градусы
+const HUE_SPEED = 24; // градусов в секунду в покое
+const HUE_SPEED_LIVE = 70; // добавка, пока слушает или говорит (по «энергии» сферы)
 
 function mix(rgb: Rgb, target: number, amount: number): Rgb {
   return rgb.map((c) => Math.round(c + (target - c) * amount)) as Rgb;
@@ -42,6 +53,18 @@ function mix(rgb: Rgb, target: number, amount: number): Rgb {
 
 function css([r, g, b]: Rgb, a: number): string {
   return `rgba(${r}, ${g}, ${b}, ${a.toFixed(3)})`;
+}
+
+/** Яркий насыщенный цвет по оттенку (HSL, s 0.9, l 0.62). */
+function hueRgb(hue: number): Rgb {
+  const h = (((hue % 360) + 360) % 360) / 60;
+  const s = 0.9;
+  const l = 0.62;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((h % 2) - 1));
+  const m = l - c / 2;
+  const [r, g, b] = h < 1 ? [c, x, 0] : h < 2 ? [x, c, 0] : h < 3 ? [0, c, x] : h < 4 ? [0, x, c] : h < 5 ? [x, 0, c] : [c, 0, x];
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
 }
 
 /** Точки на сфере, равномерно: спираль Фибоначчи. */
@@ -96,14 +119,17 @@ export function JarvisOrb({
   reactivity = 1,
   rings = true,
   color,
+  iridescent = false,
+  animated: animatedProp,
   onClick,
   title,
 }: JarvisOrbProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const accent = useApp((s) => s.settings?.interface.accent ?? "#3B82F6");
-  const animated = useApp((s) => s.settings?.interface.animations ?? true);
-  const opts = useRef({ accent: color ?? accent, animated, state, scale, reactivity, rings });
-  opts.current = { accent: color ?? accent, animated, state, scale, reactivity, rings };
+  const animatedUi = useApp((s) => s.settings?.interface.animations ?? true);
+  const animated = animatedUi && animatedProp !== false;
+  const opts = useRef({ accent: color ?? accent, animated, state, scale, reactivity, rings, iridescent });
+  opts.current = { accent: color ?? accent, animated, state, scale, reactivity, rings, iridescent };
   const kick = useRef<() => void>(() => undefined);
 
   useEffect(() => {
@@ -116,6 +142,18 @@ export function JarvisOrb({
     let count = 400;
     let sprite: HTMLCanvasElement | null = null;
     let spriteFor = "";
+    const hueSprites = new Map<number, HTMLCanvasElement>(); // ступень оттенка → светящаяся точка
+    const spriteOfHue = (hue: number): HTMLCanvasElement => {
+      const steps = 360 / HUE_STEP;
+      const bucket = ((Math.round(hue / HUE_STEP) % steps) + steps) % steps;
+      let found = hueSprites.get(bucket);
+      if (!found) {
+        found = makeSprite(hueRgb(bucket * HUE_STEP));
+        hueSprites.set(bucket, found);
+      }
+      return found;
+    };
+    let hue = Math.random() * 360;
     let energy = 0.2;
     let level = 0;
     let spin = Math.random() * Math.PI * 2;
@@ -158,7 +196,8 @@ export function JarvisOrb({
       const step = lastDraw ? Math.min(0.066, (now - lastDraw) / 1000) : dt;
       lastDraw = now;
 
-      const rgb = accentRgb(o.accent);
+      if (live && o.iridescent) hue = (hue + step * (HUE_SPEED + HUE_SPEED_LIVE * Math.max(0, energy - 0.22))) % 360;
+      const rgb = o.iridescent ? hueRgb(hue) : accentRgb(o.accent);
       const key = rgb.join(",");
       if (!sprite || spriteFor !== key) {
         sprite = makeSprite(rgb);
@@ -203,9 +242,10 @@ export function JarvisOrb({
       // ореол: гаснет до края холста, иначе виден квадрат
       const haloR = Math.max(R * 0.4, Math.min(R * 1.75, half - 1));
       const halo = ctx.createRadialGradient(cx, cy, R * 0.15, cx, cy, haloR);
+      const haloOuter = o.iridescent ? hueRgb(hue + HUE_SPREAD) : rgb;
       halo.addColorStop(0, css(rgb, 0.3 + 0.18 * energy + 0.2 * flash));
-      halo.addColorStop(0.45, css(rgb, 0.1 + 0.08 * energy));
-      halo.addColorStop(1, css(rgb, 0));
+      halo.addColorStop(0.45, css(haloOuter, 0.1 + 0.08 * energy));
+      halo.addColorStop(1, css(haloOuter, 0));
       ctx.fillStyle = halo;
       ctx.fillRect(0, 0, w, h);
 
@@ -315,7 +355,11 @@ export function JarvisOrb({
         }
         alpha = Math.min(1, alpha * (0.85 + 0.4 * energy + 0.3 * flash));
         ctx.globalAlpha = alpha;
-        ctx.drawImage(img, sx - size / 2, sy - size / 2, size, size);
+        // переливание: оттенок привязан к месту на сфере (вращается вместе с ней) и бежит по ней волной
+        const dot = o.iridescent
+          ? spriteOfHue(hue + HUE_SPREAD * (py * 0.8 + 0.45 * Math.sin(px * 2.4 + pz * 1.3 + t * 0.9)))
+          : img;
+        ctx.drawImage(dot, sx - size / 2, sy - size / 2, size, size);
       }
       ctx.globalAlpha = 1;
 
@@ -432,7 +476,7 @@ export function JarvisOrb({
   }, []);
 
   // включили анимации, сменили состояние или цвет — перезапустить цикл
-  useEffect(() => kick.current(), [animated, state, accent, color, scale]);
+  useEffect(() => kick.current(), [animated, state, accent, color, scale, iridescent]);
 
   return (
     <canvas

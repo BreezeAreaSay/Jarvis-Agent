@@ -1,16 +1,17 @@
-// «Аватар и питомец»: живая сфера на рабочем столе (предпросмотр) и плагин «Питомец».
+// «Аватар и питомец»: переливающаяся сфера на рабочем столе (предпросмотр) и плагин «Питомец».
 import { ArrowRight, Crosshair, PawPrint, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { api } from "@/api/client";
 import type { PluginInfo } from "@/api/types";
 import { AppIcon } from "@/components/AppIcon";
-import { LogoMark, Orb } from "@/components/Orb";
+import { JarvisOrb } from "@/components/JarvisOrb";
+import { LogoMark } from "@/components/Orb";
 import { navigate } from "@/lib/router";
 import { Button, Card, cx, notify, notifyError, Setting, Slider, Toggle } from "@/ui";
 import { useApi, useSettingsPatch } from "../kit";
 
 /** Рабочий стол в миниатюре с аватаром в углу — размер и включение видны сразу. */
-function DesktopPreview({ size, on, onTop }: { size: number; on: boolean; onTop: boolean }) {
+function DesktopPreview({ size, on, onTop, animated }: { size: number; on: boolean; onTop: boolean; animated: boolean }) {
   const px = Math.round(44 + ((size - 60) / (400 - 60)) * 116);
   return (
     <div className="desk-preview" aria-hidden>
@@ -21,7 +22,7 @@ function DesktopPreview({ size, on, onTop }: { size: number; on: boolean; onTop:
       </div>
       {onTop && on && <div className="dp-window" />}
       <div className={cx("dp-orb", !on && "off")} style={{ width: px, height: px }}>
-        <Orb scale={0.42} reactivity={1.2} />
+        <JarvisOrb scale={0.3} iridescent animated={animated} />
       </div>
       {!on && <div className="dp-off">Аватар выключен</div>}
       <div className="dp-taskbar">
@@ -86,9 +87,9 @@ export default function AvatarSection() {
   const a = settings.avatar;
   return (
     <div className="stack">
-      <Card icon={<Sparkles />} title="Аватар на рабочем столе" sub="Живая сфера Jarvis: дышит в покое и пульсирует, когда вы говорите">
+      <Card icon={<Sparkles />} title="Аватар на рабочем столе" sub="Сфера Jarvis переливается всеми цветами и появляется, только пока он слушает, думает или говорит">
         <div className="avatar-layout">
-          <DesktopPreview size={size ?? a.size} on={a.desktop} onTop={a.on_top} />
+          <DesktopPreview size={size ?? a.size} on={a.desktop} onTop={a.on_top} animated={a.animated} />
           <div className="grow col" style={{ gap: 0 }}>
             <Setting name="Аватар на рабочем столе">
               <Toggle checked={a.desktop} onChange={(v) => patch({ avatar: { desktop: v } })} label="Аватар на рабочем столе" />
@@ -123,7 +124,7 @@ export default function AvatarSection() {
           </div>
         </div>
         <div className="row faint tiny" style={{ marginTop: 10, gap: 8 }}>
-          <span>Перетащите аватар мышью, чтобы поставить его в удобное место.</span>
+          <span>Перетащите сферу мышью, чтобы поставить её в удобное место; щелчок по ней — «стоп».</span>
           {a.position && (
             <button type="button" className="link-btn" onClick={() => patch({ avatar: { position: null } })}>
               <Crosshair /> Вернуть в правый нижний угол

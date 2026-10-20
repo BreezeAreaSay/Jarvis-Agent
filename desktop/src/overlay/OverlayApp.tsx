@@ -1,5 +1,6 @@
 // Оверлей — прозрачное окно поверх всех программ на рабочей области основного экрана (над панелью задач):
-// строка голоса, уведомления, подтверждения, агент, субтитры, диктовка, чтение вслух, конспект и питомец.
+// уведомления, подтверждения, план агента, субтитры, диктовка, чтение вслух, конспект и питомец. Что Jarvis
+// слушает или говорит, показывает сфера-аватар (src/avatar), а не строка в оверлее.
 // Окно сквозное для мыши: ловят её только интерактивные элементы (см. clickthrough.ts).
 import "@/styles/overlay.css";
 import { useRef } from "react";
@@ -18,7 +19,6 @@ import { FocusOverlay } from "./Focus";
 import { Pet } from "./pet/Pet";
 import { DictationPill, ReaderPlayer, RecordingBadges, Subtitles } from "./PluginViews";
 import { Toasts } from "./Toasts";
-import { VoicePill } from "./VoicePill";
 
 const READER_W = 360;
 const READER_H = 236;
@@ -76,9 +76,6 @@ export default function OverlayApp() {
         <FocusOverlay hidden={hidden} />
       </ErrorBoundary>
       <div className="ov-top">
-        <ErrorBoundary silent area="оверлей: строка голоса">
-          <VoicePill hidden={hidden} />
-        </ErrorBoundary>
         <ErrorBoundary silent area="оверлей: агент">
           <AgentPanel hidden={hidden} />
         </ErrorBoundary>

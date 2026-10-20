@@ -1,7 +1,8 @@
-// «Jarvis AI»: провайдер и подключение, характер, возможности, агент, расходы.
+// «Jarvis AI»: провайдер и подключение, характер, возможности, агент, рисование картинок, расходы.
 import { Bot, Brain, CircleDollarSign, Plug, Sparkles, Wand } from "lucide-react";
 import { Card, cx, Setting, Slider, Tabs, Toggle } from "@/ui";
 import { AccountPanel, AiConnection, isAccountProvider, ProviderCards, useAiConfigured } from "../ai";
+import { ImagesCard } from "../ImagesCard";
 import { LazyText, NumberField, ProgressBar, useApi, useSettingsPatch } from "../kit";
 
 interface Usage {
@@ -236,6 +237,8 @@ export default function AiSection() {
           />
         </Setting>
       </Card>
+
+      <ImagesCard />
 
       <UsageCard />
     </div>

@@ -19,6 +19,7 @@ from jarvis.platform import Platform
 from jarvis.settings import Secrets, SettingsStore
 
 if TYPE_CHECKING:
+    from jarvis.ai.images import Images
     from jarvis.confirm import Confirmations
     from jarvis.retention import Retention
     from jarvis.scenarios.service import Scenarios
@@ -82,6 +83,7 @@ class AppContext:
         self.voice: VoiceService
         self.tts: TtsService
         self.ai: AiService
+        self.images: Images
         self.agent: AgentService
         self.notes: NotesService
         self.mcp: McpService

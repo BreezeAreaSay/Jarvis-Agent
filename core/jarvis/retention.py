@@ -3,8 +3,9 @@
 
 Очистка по срокам идёт раз в сутки (первая — через минуту после запуска): старая история команд, чаты без
 новых сообщений (закреплённые не трогаем), старые сообщения голосового чата, скрытые результаты инструментов и
-картинки в старых сообщениях (текст переписки остаётся), записи созвонов «Конспекта» и журналы. Временные
-записи памяти с истёкшим сроком удаляются всегда. Итог — событие data.purged {removed, ts}.
+картинки в старых сообщениях — приложенные и нарисованные (текст переписки остаётся), записи созвонов
+«Конспекта» и журналы. Временные записи памяти с истёкшим сроком удаляются всегда. Итог — событие data.purged
+{removed, ts}.
 
 Удалённое из базы затирается в файле (PRAGMA secure_delete в jarvis.db). Журналы интерфейса (ui.log,
 updater.log) пишет Electron в свою папку — их ядро не видит.
@@ -58,6 +59,7 @@ CATEGORIES: tuple[Category, ...] = (
     Category(
         "voice_chats", "Голосовой чат, Telegram и пульт", "Что вы спрашивали у Jarvis AI голосом и с телефона"
     ),
+    Category("images", "Нарисованные картинки", "Что Jarvis нарисовал в чатах; текст переписки остаётся"),
     Category("memory", "Память", "Что Jarvis запомнил о вас по вашей просьбе"),
     Category("notes", "Заметки", "В том числе конспекты созвонов"),
     Category("tasks", "Задачи", "Список дел"),
@@ -203,6 +205,11 @@ class Retention(BaseService):
             return self._chat_stats("chat")
         if cid == "voice_chats":
             return self._chat_stats("voice")
+        if cid == "images":
+            rows = self._generated_rows()
+            count = sum(len(loads(r["meta"], {}).get("images") or []) for r in rows)
+            size = sum(len(dumps(loads(r["meta"], {}).get("images") or []).encode()) for r in rows)
+            return count, size
         if cid == "memory":
             return self._count("SELECT COUNT(*) FROM memory"), self._count(
                 "SELECT SUM(LENGTH(CAST(text AS BLOB))) FROM memory"
@@ -315,6 +322,8 @@ class Retention(BaseService):
             if kind == "voice":
                 db.execute("DELETE FROM kv WHERE key LIKE 'voice_chat:%'")
             return len(ids)
+        if cid == "images":
+            return self._drop_images(self._generated_rows())
         if cid == "memory":
             return int(self.ctx.notes.memory_clear()) if hasattr(self.ctx.notes, "memory_clear") else 0
         if cid in _TABLES:
@@ -345,6 +354,28 @@ class Retention(BaseService):
                 self.ctx.secrets.set(name, "")
             return len(names)
         raise UserFacingError(f"Эти данные так не удалить: {cid}")
+
+    def _generated_rows(self) -> list[dict[str, Any]]:
+        """Ответы ассистента с нарисованными картинками (jarvis.ai.images: meta.images + meta.generated)."""
+        return self.ctx.db.query(
+            "SELECT id, meta FROM messages WHERE role='assistant' AND meta LIKE '%\"generated\"%'"
+        )
+
+    def _drop_images(self, rows: list[dict[str, Any]]) -> int:
+        """Убрать картинки из сообщений (текст остаётся, meta.images_removed — сколько было); вернёт число
+        картинок."""
+        removed = 0
+        for row in rows:
+            meta = loads(row["meta"], {}) or {}
+            images = meta.pop("images", None)
+            meta.pop("generated", None)
+            if not images:
+                continue
+            count = len(images) if isinstance(images, list) else 1
+            meta["images_removed"] = int(meta.get("images_removed") or 0) + count
+            self.ctx.db.update("messages", row["id"], {"meta": json.dumps(meta, ensure_ascii=False)})
+            removed += count
+        return removed
 
     def _delete_chat(self, chat_id: str) -> None:
         """Чат целиком — через Jarvis AI: вместе с ним забываются тред Codex и сессии программ-провайдеров."""
@@ -458,18 +489,15 @@ class Retention(BaseService):
             "UPDATE messages SET content=? WHERE role='tool' AND created < ? AND LENGTH(content) > ?",
             (TOOL_PLACEHOLDER, before, len(TOOL_PLACEHOLDER)),
         ).rowcount
+        # картинки старых сообщений: приложенные человеком и нарисованные Jarvis
         rows = db.query(
-            "SELECT id, meta FROM messages WHERE role='user' AND created < ? AND meta LIKE '%\"images\"%'",
+            "SELECT id, meta FROM messages WHERE role IN ('user', 'assistant') AND created < ? "
+            "AND meta LIKE '%\"images\"%'",
             (before,),
         )
         for row in rows:
-            meta = loads(row["meta"], {}) or {}
-            images = meta.pop("images", None)
-            if not images:
-                continue
-            meta["images_removed"] = len(images) if isinstance(images, list) else 1
-            db.update("messages", row["id"], {"meta": json.dumps(meta, ensure_ascii=False)})
-            count += 1
+            if self._drop_images([row]):
+                count += 1
         return count
 
     def _keep_audio(self) -> bool:

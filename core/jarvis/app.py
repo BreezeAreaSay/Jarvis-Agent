@@ -26,6 +26,7 @@ def build_context(platform_name: str = "auto") -> AppContext:
     ctx.confirmations = Confirmations(ctx)
 
     from jarvis.ai.agent import Agent
+    from jarvis.ai.images import Images
     from jarvis.ai.service import Ai
     from jarvis.commands.service import Commands
     from jarvis.desks.service import Desks
@@ -49,6 +50,7 @@ def build_context(platform_name: str = "auto") -> AppContext:
     ctx.tts = Tts(ctx)
     ctx.voice = Voice(ctx)
     ctx.ai = Ai(ctx)
+    ctx.images = Images(ctx)  # картинки Jarvis AI: «нарисуй…» в чате (OpenAI gpt-image-1)
     ctx.mcp = Mcp(ctx)
     ctx.agent = Agent(ctx)
     ctx.plugins = Plugins(ctx)
@@ -68,6 +70,7 @@ START_ORDER = (
     "sysops",
     "tts",
     "ai",
+    "images",
     "mcp",
     "agent",
     "plugins",

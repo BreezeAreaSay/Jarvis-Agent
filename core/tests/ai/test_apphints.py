@@ -157,6 +157,7 @@ def test_telegram_recipe_uses_real_tool_names(ctx: AppContext) -> None:
         ("напиши маше что опоздаю на десять минут", True),
         ("поставь будильник на семь тридцать", True),
         ("нарисуй круг в фигме", True),
+        ("нарисуй в пейнте домик", True),
         ("открой ворд и напиши письмо маме", True),
         ("включи тёмную тему", True),
         ("создай папку на рабочем столе", True),
@@ -187,6 +188,10 @@ def test_telegram_recipe_uses_real_tool_names(ctx: AppContext) -> None:
         ("удали последнюю заметку", False),
         ("найди файл отчёт", False),
         ("Сделай что-нибудь", False),
+        # картинку рисует чат (generate_image)
+        ("нарисуй кота в космосе", False),
+        ("Джарвис, нарисуй закат над морем в стиле аниме", False),
+        ("изобрази меня рыцарем", False),
     ],
 )
 def test_app_task_detection(text: str, agent: bool) -> None:

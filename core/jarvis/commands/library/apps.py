@@ -8,12 +8,18 @@ from jarvis.commands.library.base import variants as v
 from jarvis.commands.textutil import normalize
 
 _MAX_ALIASES = 5
+_MAX_GAME_ALIASES = 9  # игры зовут по-разному: «кс», «контра», «каэс»…
+# игру не только открывают: «поставь игру CS2», «давай поиграем в доту»
+GAME_VERBS = (
+    "(открой|запусти|включи|поставь|запусти игру|включи игру|поставь игру|давай поиграем в|давай сыграем в|"
+    "хочу поиграть в|хочу сыграть в)"
+)
 
 
 def _aliases(app: KnownApp) -> list[str]:
     skip = {normalize(a) for a in app.no_phrases}
     out = [normalize(a) for a in app.aliases if normalize(a) not in skip]
-    return list(dict.fromkeys(out))[:_MAX_ALIASES]
+    return list(dict.fromkeys(out))[: _MAX_GAME_ALIASES if app.kind == "game" else _MAX_ALIASES]
 
 
 def _app_commands(app: KnownApp) -> list[Builtin]:
@@ -22,6 +28,8 @@ def _app_commands(app: KnownApp) -> list[Builtin]:
     open_verbs = (
         "(открой|запусти)" if app.kind in ("system", "office", "dev", "tool") else "(открой|запусти|включи)"
     )
+    if app.kind == "game" and app.launch.startswith(("steam://rungameid/", "com.epicgames.launcher://apps/")):
+        open_verbs = GAME_VERBS
     c = "apps"
     return [
         cmd(
@@ -64,12 +72,29 @@ def _app_commands(app: KnownApp) -> list[Builtin]:
 def _generic() -> list[Builtin]:
     c = "apps"
     return [
+        # «запусти игровой режим» (не «открой игровой режим» — это страница параметров Windows): окна
+        # свёрнуты, Steam — библиотека; любимую игру сразу — свой сценарий с Launch.App «CS2»
+        cmd(
+            "games.mode",
+            "Игровой режим",
+            v(
+                "(запусти|включи|активируй) игровой режим",
+                "игровой режим (включи|запусти|активируй)",
+                "(запусти|включи) протокол игры",
+            ),
+            [("Window.MinimizeAll", ""), ("Launch.Url", "steam://open/games")],
+            category=c,
+            icon="steam",
+            say="Игровой режим: окна свёрнуты, библиотека Steam открыта.",
+        ),
         cmd(
             "apps.open",
             "Открыть программу",
             v(
                 "(открой|запусти) {app}",
                 "(открой|запусти) (программу|приложение|игру) {app}",
+                "(поставь|включи) игру {app}",
+                "(давай|хочу) (поиграем|сыграем|поиграть|сыграть) в {app}",
             ),
             [("Launch.App", "{app}")],
             category=c,

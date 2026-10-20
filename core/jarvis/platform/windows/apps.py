@@ -733,7 +733,11 @@ def scan_inventory() -> list[AppInfo]:
             log.warning("shell:AppsFolder не прочитана: %s", e)
     if not start_apps and not shortcuts:
         raise PlatformError("Не удалось получить список программ")
-    return merge_inventory(start_apps, shortcuts, resolve_app_path)
+    apps = merge_inventory(start_apps, shortcuts, resolve_app_path)
+    # игры Steam, Epic, GOG — тоже программы: «запусти CS2» — ссылкой лаунчера, без кликов по его окну
+    from jarvis.platform.windows import games
+
+    return games.merge(apps, games.scan())
 
 
 def com_thread_init() -> Callable[[], None]:

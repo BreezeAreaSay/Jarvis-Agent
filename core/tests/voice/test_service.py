@@ -310,6 +310,22 @@ async def test_no_follow_up_while_media_plays(rig: Rig, monkeypatch: pytest.Monk
         await rig.voice.stop()
 
 
+async def test_can_follow_only_while_listening(rig: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    """«Что-нибудь ещё?» — только если голос слушает, продолжение не выключено и не играет музыка."""
+    assert not rig.voice.can_follow(question=True)  # голос ещё не запущен
+    await rig.voice.start()
+    try:
+        assert rig.voice.can_follow(question=True)
+        rig.ctx.settings.patch({"voice": {"follow_up_s": 0}})
+        assert not rig.voice.can_follow(question=True)
+        rig.ctx.settings.patch({"voice": {"follow_up_s": 6}})
+        watcher = SimpleNamespace(media=MediaInfo(title="Трек", status="playing"))
+        monkeypatch.setattr(rig.ctx, "widgets", SimpleNamespace(watcher=watcher), raising=False)
+        assert not rig.voice.can_follow(question=True)
+    finally:
+        await rig.voice.stop()
+
+
 def test_has_multilingual_follows_whisper_models(ctx: AppContext) -> None:
     models = InstalledModels(installed=False)
     rig = Rig(ctx, models)

@@ -18,6 +18,11 @@ Jarvis отвечает голосом (если не включён тихий 
 
 С персоной «Джарвис» ответ на команду — в его характере (jarvis.voice.character): «Сворачиваю все окна, сэр.»;
 долгая команда (погода из сети, музыка) сразу отвечает «Секунду, сэр.», а итог звучит следом.
+
+После удачного дела голосом Jarvis спрашивает «Что-нибудь ещё, сэр?» и слушает продолжение без «Джарвис»
+(voice.ask_more; только если окно продолжения правда откроется — voice.can_follow); «нет», «всё», «ничего» в
+ответ — «Как скажете, сэр.», и он перестаёт слушать. После «спасибо», «скройся», выключения и сна — не
+спрашивает: разговор окончен.
 """
 
 import logging
@@ -39,6 +44,29 @@ OK_PHRASES = ("Готово, {address}.", "Сделано, {address}.", "Вып�
 UNKNOWN_SAY = "Не понял команду, {address}."
 NO_AI_SAY = "Такой команды нет, а ИИ не настроен, {address}."
 NOTED_SAY = "Понял, учту."  # поправка агенту посреди работы
+ASK_MORE = ("Что-нибудь ещё, {address}?", "Ещё что-нибудь, {address}?", "Что-то ещё, {address}?")
+END_TALK_SAY = ("Как скажете, {address}.", "Хорошо, {address}.", "Обращайтесь, {address}.")
+ASK_MORE_WINDOW_S = 60.0  # «нет» дольше этого после «Что-нибудь ещё?» — уже не ответ на него
+# «нет», «всё», «ничего» в ответ на «Что-нибудь ещё?» — разговор окончен
+_DECLINE = re.compile(
+    r"^(?:(?:нет|неа|не)(?: спасибо| не надо| ничего| больше ничего| все)?|ничего(?: не надо| больше)?|"
+    r"больше ничего|не надо|(?:это |пока |на этом |вот и )?все(?: спасибо)?|пока ничего|спасибо все|хватит|"
+    r"отбой|достаточно|свободен|можешь идти)$"
+)
+# после этих команд разговор окончен — «Что-нибудь ещё?» не спрашиваем
+_ENDS_TALK = re.compile(
+    r"^builtin\.(?:jarvis\.(?:thanks|hide|silent_on|mic_off)|"
+    r"system\.(?:lock|sleep|hibernate\w*|logoff\w*|shutdown\w*|restart\w*))$"
+)
+
+
+def _declines(text: str) -> bool:
+    """«Нет, спасибо», «это всё», «ничего» — ответ «нет» на «Что-нибудь ещё?»."""
+    words = re.sub(r"[^\w\s-]", " ", text.casefold().replace("ё", "е"))
+    words = re.sub(r"^(?:джарвис|jarvis)\s+", "", " ".join(words.split()))
+    return bool(_DECLINE.match(words))
+
+
 # правило из памяти: «когда я прошу включить музыку, надо…» — «включить музыку» до запятой или «надо»
 _RULE = re.compile(
     r"(?<!\w)(?:когда|если|как только)\s+(?:я\s+)?(?:прошу|попрошу|говорю|скажу|хочу|захочу)\s+"
@@ -65,13 +93,15 @@ class MainDispatcher:
         self.ctx = ctx
         self._last_text = ""
         self._last_at = 0.0
+        self._asked_more_at = 0.0  # когда спросили «Что-нибудь ещё?» (0 — не спрашивали)
         add_stock = getattr(getattr(ctx, "tts", None), "add_stock", None)
         if callable(add_stock):
             add_stock(self.stock_phrases)
 
     def stock_phrases(self) -> list[str]:
         """Частые короткие ответы голосом: их звук готовится заранее и хранится на диске — звучат сразу."""
-        return [self._fmt(p) for p in (*OK_PHRASES, UNKNOWN_SAY, NO_AI_SAY)] + [NOTED_SAY]
+        phrases = (*OK_PHRASES, UNKNOWN_SAY, NO_AI_SAY, *ASK_MORE, *END_TALK_SAY)
+        return [self._fmt(p) for p in phrases] + [NOTED_SAY]
 
     # --- история ------------------------------------------------------------------------------------
     def _history_add(
@@ -112,7 +142,7 @@ class MainDispatcher:
         address = self._address()
         out = phrase.format(address=address)
         if not address:
-            out = out.replace(", .", ".").replace(" ,", ",").replace(",.", ".")
+            out = out.replace(", .", ".").replace(", ?", "?").replace(" ,", ",").replace(",.", ".")
         return out
 
     async def _say(self, text: str, speak: bool, *, interrupt: bool = True) -> None:
@@ -162,6 +192,10 @@ class MainDispatcher:
             await self.stop()
             self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "stop"})
             return {"kind": "stop"}
+
+        asked, self._asked_more_at = self._asked_more_at, 0.0
+        if source == "voice" and asked and time.monotonic() - asked < ASK_MORE_WINDOW_S and _declines(raw):
+            return await self._end_talk(raw, speak)
 
         agent = getattr(self.ctx, "agent", None)
         busy = bool(getattr(agent, "busy", False))
@@ -247,10 +281,11 @@ class MainDispatcher:
         spoken = None
         if speak and character is not None:
             spoken = character.spoken(result, confirmations=confirmations)
+        text, interrupt = "", True
         if spoken:
-            await self._say(spoken, speak, interrupt=not acked)
+            text, interrupt = spoken, not acked
         elif result.say:
-            await self._say(result.say, speak, interrupt=not acked)
+            text, interrupt = result.say, not acked
         elif result.ok and confirmations:
             # программа только запускается — «Открываю», а не «Готово»: что она открылась, мы ещё не видели
             app = str(result.data.get("app") or "")
@@ -258,13 +293,43 @@ class MainDispatcher:
                 keep = getattr(self.ctx.tts, "keep", None)
                 if callable(keep):
                     keep(f"Открываю {app}.")  # название программы — не личное: звук хранится на диске
-                await self._say(f"Открываю {app}.", speak)
+                text = f"Открываю {app}."
             else:
-                await self._say(self._fmt(random.choice(OK_PHRASES)), speak)
+                text = self._fmt(random.choice(OK_PHRASES))
         elif not result.ok:
-            await self._say(result.message or "Не получилось.", speak, interrupt=not acked)
+            text, interrupt = result.message or "Не получилось.", not acked
+        ends = any(_ENDS_TALK.match(p.command_id) for p in match.parts)
+        more = self._ask_more(text, speak) if result.ok and not ends else ""
+        if text:
+            await self._say(f"{text} {more}" if more else text, speak, interrupt=interrupt)
+        if more:
+            self.ctx.voice.follow_up(question=True)
         self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "command", "ok": result.ok})
         return {"kind": "command", "result": result.to_json(), "history": item}
+
+    def _ask_more(self, said: str, speak: bool) -> str:
+        """«Что-нибудь ещё, сэр?» к ответу голосом — только если Jarvis правда будет слушать продолжение
+        (voice.can_follow: голос слушает, продолжение не выключено, не играет музыка, лимит окон не
+        исчерпан)."""
+        settings = self.ctx.settings.value.voice
+        if not speak or not said.strip() or said.rstrip().endswith("?"):
+            return ""
+        if not settings.ask_more or settings.silent_mode:
+            return ""
+        can_follow = getattr(self.ctx.voice, "can_follow", None)
+        try:
+            if not callable(can_follow) or not can_follow(question=True):
+                return ""
+        except Exception:
+            return ""
+        self._asked_more_at = time.monotonic()
+        return self._fmt(random.choice(ASK_MORE))
+
+    async def _end_talk(self, raw: str, speak: bool) -> dict[str, Any]:
+        """«Нет», «всё» в ответ на «Что-нибудь ещё?»: коротко ответить и больше не слушать без «Джарвис»."""
+        await self._say(self._fmt(random.choice(END_TALK_SAY)), speak)
+        self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "end"})
+        return {"kind": "end"}
 
     async def _to_agent(self, raw: str, source: Source, speak: bool) -> dict[str, Any]:
         """Фраза, пока агент работает: ему — ответом на вопрос, решением о разрешении или поправкой
@@ -367,10 +432,12 @@ class MainDispatcher:
         else:
             short = (result.spoken or result.text).strip()
             self._history_update(item, status="ok", detail=_one_line(result.text, 140))
-            await self._say(short, speak)
+            question = short.rstrip().endswith("?")
+            more = "" if question else self._ask_more(short, speak)
+            await self._say(f"{short} {more}" if more else short, speak)
             if speak:
                 # Jarvis спросил — ответ слушаем без слова-активатора (и это не «бесконечный разговор»)
-                self.ctx.voice.follow_up(question=short.rstrip().endswith("?"))
+                self.ctx.voice.follow_up(question=question or bool(more))
         self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "ai", "ok": not result.error})
         return {
             "kind": "ai",

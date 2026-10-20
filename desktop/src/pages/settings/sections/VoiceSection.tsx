@@ -308,6 +308,17 @@ function WakeCard() {
         />
       </Setting>
       <Setting
+        name="«Что-нибудь ещё?»"
+        desc="После ответа голосом Jarvis спрашивает и ещё слушает без активатора; «нет» или «всё» — перестаёт"
+      >
+        <Toggle
+          checked={v.ask_more ?? true}
+          disabled={v.follow_up_s === 0}
+          onChange={(on) => patch({ voice: { ask_more: on } })}
+          label="Спрашивать «Что-нибудь ещё?»"
+        />
+      </Setting>
+      <Setting
         name="Клавиша «держи и говори»"
         desc={
           pttError ? (

@@ -68,6 +68,7 @@ class VoiceSettings(_Model):
     language: CommandLanguage = "ru"
     end_silence_ms: int = Field(450, ge=300, le=2000)  # столько тишины после речи — фраза закончилась
     follow_up_s: int = Field(6, ge=0, le=30)  # слушать продолжение без активатора после ответа
+    ask_more: bool = True  # после ответа голосом — «Что-нибудь ещё?» и слушать продолжение без активатора
     ptt_key: str = ""  # клавиша «держи и говори», например "right ctrl"; "" — выключено
     earcons: bool = True  # короткие звуки «слушаю», «готово», «ошибка»
     max_utterance_s: int = Field(15, ge=3, le=60)

@@ -548,3 +548,21 @@ def test_drop_closes_cloud() -> None:
     assert clouds and not clouds[0].closed
     listener.drop()
     assert clouds[0].closed and listener.utt is None
+
+
+def test_can_follow_tells_whether_a_window_will_open(rig: Rig) -> None:
+    """«Что-нибудь ещё?» спрашиваем, только если окно продолжения откроется (лимиты окон подряд)."""
+    listener, _, script, clock = rig
+    assert listener.can_follow() and listener.can_follow(question=True)
+    for i in range(lst.MAX_FOLLOW_CHAIN):
+        listener.follow_up(4.0)
+        feed(listener, script.silence(0.4), clock)
+        say(rig, f"фраза {i}")
+    assert not listener.can_follow() and listener.can_follow(question=True)
+    for i in range(lst.MAX_FOLLOW_TOTAL - lst.MAX_FOLLOW_CHAIN):
+        listener.follow_up(4.0, question=True)
+        feed(listener, script.silence(0.4), clock)
+        say(rig, f"ответ {i}")
+    assert not listener.can_follow(question=True)
+    say(rig, "джарвис спасибо")  # обратились по имени — счёт с начала
+    assert listener.can_follow()

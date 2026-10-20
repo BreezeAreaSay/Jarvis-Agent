@@ -4,7 +4,7 @@
 import { create } from "zustand";
 import { api } from "@/api/client";
 import { onEvent } from "@/api/events";
-import type { Chat, UiMessage } from "@/api/types";
+import type { Chat, GeneratedInfo, UiMessage } from "@/api/types";
 import { navigate } from "@/lib/router";
 import { useApp } from "@/store/app";
 import { notifyError } from "@/ui";
@@ -42,6 +42,7 @@ const newPending = (): PendingReply => ({
   status: null,
   tools: [],
   memory: [],
+  images: [],
   startedAt: Date.now(),
   updatedAt: Date.now(),
 });
@@ -79,14 +80,18 @@ function finalizePending(chatId: string, p: PendingReply, extra: Partial<UiMessa
         .map((t) => ({ title: t.title, ok: t.status !== "error", detail: t.detail }));
   const sources = extra.sources ?? [];
   const memory = p.memory.length ? p.memory : extra.memory;
-  if (!p.text.trim() && !actions.length && !sources.length && !memory?.length && !extra.error) return null;
+  const images = p.images.length
+    ? { images: p.images.map((i) => i.src), generated: p.images.map((i) => i.info ?? { prompt: "" }) }
+    : {};
+  if (!p.text.trim() && !actions.length && !sources.length && !memory?.length && !extra.error && !p.images.length)
+    return null;
   return {
     id: p.messageId ?? localId(),
     chat_id: chatId,
     role: "assistant",
     content: p.text,
     created: nowS(),
-    meta: { ...extra, actions, sources, ...(memory?.length ? { memory } : {}) },
+    meta: { ...extra, actions, sources, ...(memory?.length ? { memory } : {}), ...images },
   };
 }
 
@@ -457,6 +462,14 @@ export function bindAiEvents() {
       if (key !== DRAFT && (t.pending || key === s.lastKey)) s.loadThread(key);
   });
 
+  // в «Приватности» удалили картинки (или их убрала очистка по срокам) — открытые чаты перечитать
+  const reloadOpen = () => {
+    const s = st.getState();
+    for (const [key, t] of Object.entries(s.threads)) if (key !== DRAFT && t.loaded && !t.pending) s.loadThread(key);
+  };
+  onEvent("data.cleared", reloadOpen);
+  onEvent("data.purged", reloadOpen);
+
   // сторож: ответ «пишется», а событий давно нет
   setInterval(() => {
     const now = Date.now();
@@ -566,6 +579,18 @@ export function bindAiEvents() {
         ? p.tools.map((x) => (x.call_id === call_id ? { ...x, ...row, title: row.title || x.title } : x))
         : [...p.tools, row];
       return { pending: { ...p, messageId: p.messageId ?? message_id ?? null, tools } };
+    });
+  });
+
+  // нарисованная картинка — в ответ, который сейчас пишется (итог с meta.images придёт в chat.message)
+  onEvent<{ chat_id: string; message_id?: string; image: string; info?: GeneratedInfo }>("chat.image", (e) => {
+    const { chat_id, message_id, image, info } = e.data;
+    if (!thread(chat_id) || !image) return;
+    patch(chat_id, (t) => {
+      if (message_id && t.messages.some((m) => m.id === message_id)) return {};
+      const p = t.pending ?? newPending();
+      if (p.images.some((i) => i.src === image)) return {};
+      return { pending: { ...p, messageId: p.messageId ?? message_id ?? null, images: [...p.images, { src: image, info }] } };
     });
   });
 

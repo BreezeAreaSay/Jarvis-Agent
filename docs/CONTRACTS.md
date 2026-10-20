@@ -390,6 +390,7 @@ error|disabled, error, tools: [{name, description}]}` — секретные `en
 | `chat.tool` | `{chat_id, message_id, call_id, name, title, status: running\|ok\|error, detail?}` |
 | `chat.done` | `{chat_id, message_id, text, sources, actions, usage, stopped?}` |
 | `chat.error` | `{chat_id, message_id?, error}` |
+| `chat.image` | `{chat_id, message_id, image, info}` — картинка, нарисованная в ответе (`generate_image`), до конца ответа |
 | `memory.added` | `{item: MemoryItem}` — «Запомнил: Аня не ест мясо» (при замене факта — тот же id) |
 | `memory.updated` | `{item: MemoryItem}` — человек поправил запись |
 | `memory.deleted` | `{id}` |
@@ -404,6 +405,26 @@ error|disabled, error, tools: [{name, description}]}` — секретные `en
 | `ai.configured` | `{configured}` — изменилось «ИИ настроен» (ключ, провайдер, адрес, каталог, вход в ChatGPT или программу) |
 | `ai.cli` | `{provider, state: installing\|log\|installed\|error\|login\|auth, line?, version?, error?, opened?, logged_in?}` — установка программы-провайдера, окно терминала для входа, смена состояния входа |
 | `ai.chatgpt` | `{state: installing\|installed\|login\|device\|logged_in\|logged_out\|error, error?, version?, account?, auth_url?, verification_url?, user_code?, opened?}` — компонент и вход ChatGPT |
+
+Картинки (`jarvis/ai/images.py`, `jarvis/api/images.py`): рисует OpenAI Images — модель `gpt-image-1`
+(`JARVIS_IMAGE_MODEL` меняет), ответ JPEG; ключ — `openai_api_key`, а если провайдер ИИ — OpenAI, то и
+`ai_api_key` (адрес — его `base_url`, иначе `https://api.openai.com/v1`; прокси — `settings.ai.proxy`). Нет ключа —
+400 с текстом, где его задать (подписка ChatGPT картинки через API не рисует). Расход — строка в `usage` (токены из
+ответа; цена — по токенам gpt-image-1), месячный лимит `ai.monthly_budget` проверяется до запроса.
+
+| Маршрут | Тело | Ответ |
+|---|---|---|
+| `GET /api/images/status` | — | `{available, model, problem}` — есть ли ключ, чтобы рисовать |
+| `POST /api/images/generate` | `{prompt, format?: square\|landscape\|portrait, quality?: low\|medium\|high, references?: [dataURL] (до 4)}` | `{image: dataURL, info: {prompt, size, model, quality}, cost}`; с `references` — `POST /images/edits` (своё фото как образец, `input_fidelity: high`); ошибка OpenAI — 400 с понятным текстом (ключ, регион, проверка безопасности, подтверждение организации, лимит) |
+
+Инструмент чата `generate_image {prompt, format?, quality?, use_reference?}` (режимы «Чат» и «Всё вместе», риск
+`act`, около 30 с): `use_reference` — образец из последнего сообщения человека с картинками. Готовая картинка сразу
+уходит событием `chat.image {chat_id, message_id, image, info: {prompt, size, model, quality}}` (`message_id` — id
+будущего ответа, из `chat.tool` этого вызова), а итог ответа получает `meta.images` (data URL) и `meta.generated`
+(`[{prompt, size, model, quality}]`, по записи на картинку) — ядро дописывает их после сохранения ответа и шлёт
+`chat.message` с этим id ещё раз (следом за `chat.done`). Удачная карточка «Нарисовать: …» интерфейсом не
+показывается — видна сама картинка со «Скачать». Внимание: в режиме «Всё вместе» просьба «нарисуй …» сейчас
+сразу уходит агенту (`apphints.app_task`: «нарисуй» — глагол действия на ПК), «сгенерируй картинку …» — чату.
 
 Подтверждения агента — общий механизм `ctx.confirmations.request(..., kind="agent")` (события `confirm.*`).
 Фраза «агент, …» отправляет задачу агенту в любом режиме чата; «стоп» останавливает и ответ ИИ, и агента.
@@ -658,6 +679,19 @@ Claude Code — только официальным установщиком (`i
 timer, stopwatch, focus, rates, crypto, stocks, news, system, apps, quick, recent, volume, smarthome, pet, ai, worldclock,
 countdown, network, battery, sticky, plugins, desk_links`.
 
+«Системные операции» (`jarvis/widgets/sysops.py`, `jarvis/api/sysops.py`; страница интерфейса `#/system`): нагрузку,
+погоду и «Сейчас играет» панель берёт у виджетов `system`, `weather`, `media`, остальное — здесь.
+
+| Маршрут | Тело | Ответ |
+|---|---|---|
+| `GET /api/system/sensors` | — | `{cpu_temp, gpu_temp, gpu_name, gpu_load, top: [{name, cpu, ram_mb}], updated}` — температура в °C (нет датчика — `null`): видеокарта NVIDIA — `nvidia-smi`, процессор — счётчики WMI «Thermal Zone» (без прав администратора); не нашлось — повтор через 10 минут; `top` — 5 самых загруженных программ (одноимённые процессы — одной строкой, `cpu` — % всех ядер) |
+| `GET /api/system/mixer` | — | `{master: {volume, muted}, items: [{app, title, level, muted, active}]}` — программы со звуком (`platform.app_volumes()`): `app` — имя процесса или `system` (системные звуки), `active` — звучит сейчас; несколько сессий одной программы — одна строка |
+| `POST /api/system/mixer` | `{app, level 0..100}` | то же, что `GET` — громкость одной программы (`platform.app_volume_set`); программа без звука — 400 |
+
+Голосом: «открой системные операции», «покажи панель системы», «мониторинг системы» — динамическая команда
+`sysops:open` (категория `system`) → `ui.show {page: "system"}`; «микшер» остаётся встроенной командой (микшер
+Windows).
+
 `Plugin = {id, name, description, icon, color: [от, до], enabled, config, schema, status: {running, error?, hint?,
 active?, …}, actions: [{id, title}], examples: [фраза]}`. Плагины: `smart_home, dictation, subtitles, summary, reader,
 autolock, second_pc, notify_voice, pet, focus, clipboard, file_search`. `status.hint` — подсказка человеку (что
@@ -845,9 +879,11 @@ briefcase, battery, calendar, bell, music, home, rocket, heart, book, monitor` �
 | `GET /api/logs` | — | `{dir, items: [{name, size, modified}]}` — журналы ядра |
 | `DELETE /api/logs` | — | `{ok, cleared}` — открытые журналы обрезаются, старые копии удаляются |
 
-`DataCategory = {id, title, hint, count, bytes, clearable}`; `id`: `history, chats, voice_chats, memory, notes, tasks,
+`DataCategory = {id, title, hint, count, bytes, clearable}`; `id`: `history, chats, voice_chats, images, memory, notes, tasks,
 events, reminders, clipboard, summaries, screenshots, file_index, voice_cache, usage, logs, secrets` и `models` (не удаляется
 отсюда — «Голос и распознавание»). Чаты удаляются через Jarvis AI — вместе с тредами Codex и сессиями программ.
+`images` — нарисованные картинки в ответах ассистента (`meta.images` при `meta.generated`): очистка убирает их, текст
+остаётся, у сообщения — `meta.images_removed`; по сроку `tool_results_days` картинки уходят и из ответов ассистента.
 
 | Событие | Данные |
 |---|---|

@@ -8,16 +8,17 @@ import { onEvent } from "@/api/events";
 import { PageHeader } from "@/components/PageHeader";
 import { navigate } from "@/lib/router";
 import { useApp } from "@/store/app";
-import { Tabs } from "@/ui";
+import { Tabs, useElementWidth } from "@/ui";
 import "@/styles/ai.css";
 import { ChatList } from "./ChatList";
-import { ChatView } from "./ChatView";
+import { ChatView, OrbRail } from "./ChatView";
 import { NotesView } from "./notes/NotesView";
 import { NOTE_TABS, type NoteTab } from "./notes/tabs";
 import { bindAiEvents, useAi } from "./store";
 import { DRAFT } from "./types";
 
 let lastNotesTab: NoteTab = "notes";
+const RAIL_MIN_WIDTH = 1180;
 
 function replaceRoute(...parts: string[]) {
   location.replace(`#/${parts.map(encodeURIComponent).join("/")}`);
@@ -46,10 +47,13 @@ function ChatScreen({ chatId }: { chatId?: string }) {
     if (gone) navigate("ai", DRAFT);
   }, [gone]);
 
+  // большая сфера справа — только когда чату хватает места (ширину считает и CSS: см. ai.css «ailayout»)
+  const [layout, width] = useElementWidth<HTMLDivElement>();
   return (
-    <div className="ai-layout">
+    <div className="ai-layout" ref={layout}>
       <ChatList activeId={key === DRAFT ? null : key} />
       <ChatView chatKey={key} />
+      {width >= RAIL_MIN_WIDTH && <OrbRail chatKey={key} />}
     </div>
   );
 }

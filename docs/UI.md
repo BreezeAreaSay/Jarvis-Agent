@@ -17,8 +17,10 @@ desktop/
     lib/               bridge.ts (Electron), router.ts (navigate/useRoute), theme.ts, levels.ts
     ui/index.tsx       базовые компоненты: Button, IconButton, Toggle, Slider, Select, Tabs, Check,
                        TextInput, Setting, Card, Modal, Empty, Dots, notify/notifyError, timeAgo
-    components/        Orb (сфера), LogoMark, AppIcon (значки программ по ключу), PageHeader
-    pages/<раздел>/    страницы: home, commands, extensions, ai, settings, profile, onboarding
+    components/        Orb (сфера аватара), JarvisOrb (сфера из частиц: чат, строка голоса), LogoMark, AppIcon
+                       (значки программ по ключу), PageHeader
+    pages/<раздел>/    страницы: home, commands, extensions, ai, system («Системные операции»), settings, profile,
+                       onboarding
     widgets/           виджеты столов: common.tsx (рамка, useWidgetData), core.tsx, extra.tsx, registry.tsx
     overlay/           окно поверх всего: строка голоса, тосты, подтверждения, агент, субтитры, питомец
     avatar/            аватар на рабочем столе

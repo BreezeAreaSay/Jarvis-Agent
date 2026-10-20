@@ -351,6 +351,12 @@ class Listener:
 
         self.post(apply)
 
+    def can_follow(self, *, question: bool = False) -> bool:
+        """Окно продолжения откроется: лимиты окон подряд без «Джарвис» не исчерпаны (из любого потока)."""
+        if not question and self.follow_chain >= MAX_FOLLOW_CHAIN:
+            return False
+        return self.follow_total < MAX_FOLLOW_TOTAL
+
     def ptt(self, pressed: bool) -> None:
         """Клавиша «держи и говори»: нажата — фраза началась, отпущена — закончилась."""
         self.post(lambda now: self._ptt(pressed, now))

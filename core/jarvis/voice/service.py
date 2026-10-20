@@ -194,6 +194,14 @@ class Voice(BaseService):
         if self._phase == "running" or self._thread is not None:
             self.listener.follow_up(secs, question=question)
 
+    def can_follow(self, *, question: bool = False) -> bool:
+        """Откроется ли окно продолжения сейчас: «Что-нибудь ещё?» спрашиваем, только если правда слушаем."""
+        if float(self.ctx.settings.value.voice.follow_up_s) <= 0 or self._media_playing():
+            return False
+        if not (self._phase == "running" or self._thread is not None):
+            return False
+        return self.listener.can_follow(question=question)
+
     def _media_playing(self) -> bool:
         watcher = getattr(getattr(self.ctx, "widgets", None), "watcher", None)
         return getattr(getattr(watcher, "media", None), "status", "") == "playing"

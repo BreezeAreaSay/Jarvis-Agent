@@ -54,6 +54,8 @@ export interface Settings {
     /** Тишина после речи, по которой фраза закончилась, мс. */
     end_silence_ms: number;
     follow_up_s: number;
+    /** После ответа голосом — «Что-нибудь ещё?» и слушать продолжение без активатора. */
+    ask_more: boolean;
     ptt_key: string;
     earcons: boolean;
     max_utterance_s: number;

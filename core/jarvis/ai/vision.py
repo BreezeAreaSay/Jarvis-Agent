@@ -234,15 +234,23 @@ def render_pixels(
     title: str = "",
     max_side: int = MAX_SIDE,
     previous: bytes | None = None,
+    grid: bool = True,
 ) -> Shot:
     """Пиксели экрана (BGRA, без PNG — быстрее) части экрана area (left, top, right, bottom: монитор окна
-    впереди) → Shot экрана: окно обведено, его элементы подписаны, сетка; previous — sig прошлой картинки
-    того же монитора: что изменилось — обвести."""
+    впереди) → Shot экрана: окно обведено, его элементы подписаны, сетка (grid); previous — sig прошлой
+    картинки того же монитора: что изменилось — обвести."""
     from PIL import Image
 
     image = Image.frombuffer("RGB", size, bgra, "raw", "BGRX", 0, 1)
     return _draw(
-        image, area, elements=elements, title=title, max_side=max_side, focus=focus, previous=previous
+        image,
+        area,
+        elements=elements,
+        title=title,
+        max_side=max_side,
+        focus=focus,
+        previous=previous,
+        grid=grid,
     )
 
 
@@ -284,6 +292,7 @@ def render_details(
     window: Rect | None = None,
     elements: list[UiElement] | None = None,
     title: str = "",
+    grid: bool = True,
 ) -> list[Shot]:
     """Крупный план к снимку экрана (тем же пикселям area): окно впереди в родном разрешении — если на снимке
     экрана оно заметно мельче; иначе (окно во весь большой монитор) — самое крупное изменение после действия.
@@ -312,7 +321,7 @@ def render_details(
         return shot
 
     if window is not None:
-        shot = crop(window, DETAIL_SIDE, elements=elements, title=title)
+        shot = crop(window, DETAIL_SIDE, elements=elements, title=title, grid=grid)
         if shot is not None:
             shot.detail = "window"
             return [shot]

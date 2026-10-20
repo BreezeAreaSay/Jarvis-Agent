@@ -326,7 +326,8 @@ TASKS = [
         _popup_check,
         _popup_solution,
         apps=frozenset({"Telegram.exe"}),
-        mistakes={"typed_into_popup": (_popup_blind, "чужое окно")},
+        # ввод вслепую во всплывшее окно агент сам не пускает (WindowChanged): нарушения нет — но и Маме не ушло
+        mistakes={"typed_into_popup": (_popup_blind, "Маме не отправлено")},
         plan=["Открыть чат «Мама»", "Написать «Еду домой»", "Отправить"],
     ),
     Task(

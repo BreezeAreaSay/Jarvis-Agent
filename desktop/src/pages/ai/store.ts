@@ -462,6 +462,14 @@ export function bindAiEvents() {
       if (key !== DRAFT && (t.pending || key === s.lastKey)) s.loadThread(key);
   });
 
+  // в «Приватности» удалили картинки (или их убрала очистка по срокам) — открытые чаты перечитать
+  const reloadOpen = () => {
+    const s = st.getState();
+    for (const [key, t] of Object.entries(s.threads)) if (key !== DRAFT && t.loaded && !t.pending) s.loadThread(key);
+  };
+  onEvent("data.cleared", reloadOpen);
+  onEvent("data.purged", reloadOpen);
+
   // сторож: ответ «пишется», а событий давно нет
   setInterval(() => {
     const now = Date.now();

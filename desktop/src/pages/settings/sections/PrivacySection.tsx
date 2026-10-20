@@ -15,6 +15,7 @@ import {
   HardDrive,
   History,
   Image,
+  Palette,
   KeyRound,
   ListChecks,
   MessagesSquare,
@@ -66,6 +67,7 @@ const ICONS: Record<string, ReactNode> = {
   history: <History />,
   chats: <MessagesSquare />,
   voice_chats: <Mic />,
+  images: <Palette />,
   memory: <Brain />,
   notes: <StickyNote />,
   tasks: <ListChecks />,
@@ -86,6 +88,7 @@ const ICONS: Record<string, ReactNode> = {
 const UNITS: Record<string, [string, string, string]> = {
   chats: ["чат", "чата", "чатов"],
   voice_chats: ["чат", "чата", "чатов"],
+  images: ["картинка", "картинки", "картинок"],
   summaries: ["запись", "записи", "записей"],
   screenshots: ["снимок", "снимка", "снимков"],
   file_index: ["файл", "файла", "файлов"],
@@ -191,6 +194,10 @@ function FlowCard({ settings }: { settings: Settings }) {
       <Note icon={<ShieldCheck />}>
         Погода, курсы, новости и поиск запрашиваются у этих сервисов напрямую — с городом для погоды и текстом запроса,
         без остальных ваших данных.
+      </Note>
+      <Note icon={<Cloud />}>
+        Картинки рисует OpenAI: когда вы просите нарисовать, туда уходят описание картинки и ваше фото-образец, если вы
+        его приложили. Нарисованное хранится в чате на ПК — удалить можно ниже, «Нарисованные картинки».
       </Note>
     </Card>
   );

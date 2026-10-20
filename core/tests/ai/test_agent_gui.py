@@ -469,9 +469,9 @@ def test_vision_mapping_and_auto_detection() -> None:
     Image.new("RGB", (2600, 1800), (10, 10, 10)).save(buffer, "PNG")
     elements = [UiElement("e7", "Отправить", "Button", (1500, 900, 1580, 940))]
     shot = vision.render(buffer.getvalue(), (100, 50, 2700, 1850), elements=elements, hwnd=5, title="Почта")
-    assert (shot.width, shot.height) == (1280, 886) and shot.url.startswith("data:image/jpeg;base64,")
-    assert shot.to_screen(640, 443) == (1400, 950)
-    assert shot.to_image(1400, 950) == (640, 443)
+    assert (shot.width, shot.height) == (1568, 1086) and shot.url.startswith("data:image/jpeg;base64,")
+    assert shot.to_screen(784, 543) == (1400, 950)
+    assert shot.to_image(1400, 950) == (784, 543)
     assert vision.side_of((1920, 0, 3840, 1080), (0, 0, 1920, 1080)) == "справа от основного"
     assert vision.side_of((-2560, 0, 0, 1440), (0, 0, 1920, 1080)) == "слева от основного"
     assert vision.side_of((0, -1080, 1920, 0), (0, 0, 1920, 1080)) == "над основным"
@@ -498,3 +498,78 @@ def test_policy_and_playbooks() -> None:
     found = [p.id for p in playbooks.relevant("напиши в тг маме", ["chrome.exe"], ["Telegram Web"])]
     assert found[:2] == ["telegram", "browser"]
     assert playbooks.for_exe("Telegram.exe") is playbooks.BY_ID["telegram"]
+
+
+async def test_launch_waits_for_the_window_and_brings_it_forward(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent: Any = ctx.agent
+    platform: Any = ctx.platform
+    agent.launch_settle_s = 0.01  # ждать по-настоящему (тесты обычно не ждут)
+    monkeypatch.setattr(agent_module, "SETTLE_POLL_S", 0.0)
+    monkeypatch.setattr(agent_module, "LAUNCH_MORE_S", 0.05)
+    llm.add(
+        PLAN,
+        calls(("launch_app", {"name": "Spotify"})),
+        calls(("finish", {"status": "partial", "summary": "Запустил."})),
+    )
+    await _run(ctx, "Запусти Spotify")
+    # окно программы (уже открытое «Spotify Premium») — выведено вперёд, и модель знает, что открылось
+    focused = [args[1] for name, args in platform.calls if name == "window_action" and args[0] == "focus"]
+    titles = {w.hwnd: w.title for w in platform.windows}
+    assert focused and titles[focused[0]].startswith("Spotify")
+    tool = [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"][-1]["content"]
+    assert tool.startswith("Запущено: Spotify — открылось окно «Spotify")
+
+    # окна нет (программа долго открывается) — подсказка «подожди», а не снимок старого окна
+    monkeypatch.setattr(agent_module, "LAUNCH_WAIT_S", 0.6)
+    monkeypatch.setattr(platform, "launch", lambda target, args="": None)
+    llm.add(
+        PLAN,
+        calls(("launch_app", {"name": "Telegram"})),
+        calls(("finish", {"status": "partial", "summary": "Не открылось."})),
+    )
+    await _run(ctx, "Запусти Telegram")
+    tool = [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"][-1]["content"]
+    assert "окна пока нет: программа ещё открывается" in tool
+
+
+def _pixels(width: int, height: int, light: tuple[int, int, int, int] | None = None) -> bytes:
+    """Экран width×height (тёмный); light — светлый прямоугольник (left, top, right, bottom)."""
+    data = bytearray(bytes([30, 30, 30, 255]) * (width * height))
+    if light is not None:
+        for y in range(light[1], light[3]):
+            data[(y * width + light[0]) * 4 : (y * width + light[2]) * 4] = bytes([230, 230, 230, 255]) * (
+                light[2] - light[0]
+            )
+    return bytes(data)
+
+
+def test_close_up_of_the_window_or_of_what_changed() -> None:
+    # монитор 3840×2160: на снимке экрана (1568 точек) окно 1000×700 ужато в 2,4 раза — следом оно крупно
+    area = (0, 0, 3840, 2160)
+    screen = _pixels(3840, 2160)
+    main = vision.render_pixels(screen, (3840, 2160), area, focus=(100, 100, 1100, 800), previous=b"")
+    (window,) = vision.render_details(
+        screen, (3840, 2160), area, main, window=(100, 100, 1100, 800), title="Telegram"
+    )
+    assert window.detail == "window" and (window.width, window.height) == (1000, 700)
+    assert window.sharper > 2.4 and window.to_screen(500, 350) == (600, 450)
+    assert "Окно «Telegram» крупно" in window.caption() and 'on="window"' in window.caption()
+
+    # окно во весь монитор — крупно то, что изменилось после действия (новое сообщение)
+    after = _pixels(3840, 2160, light=(2400, 1700, 3400, 1900))
+    shot = vision.render_pixels(after, (3840, 2160), area, focus=area, previous=main.sig)
+    assert shot.changes == 1
+    (change,) = vision.render_details(after, (3840, 2160), area, shot, window=area)
+    assert change.detail == "change" and change.rect[0] <= 2400 and change.rect[2] >= 3400
+    assert "Что изменилось после действия — крупно" in change.caption()
+
+    # обычный монитор и окно на нём не мельче — крупный план не нужен
+    small = vision.render_pixels(_pixels(1280, 720), (1280, 720), (0, 0, 1280, 720))
+    assert (
+        vision.render_details(
+            _pixels(1280, 720), (1280, 720), (0, 0, 1280, 720), small, window=(0, 0, 900, 600)
+        )
+        == []
+    )

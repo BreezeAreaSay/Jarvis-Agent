@@ -60,7 +60,15 @@ from jarvis.ai.policy import (
     normalize_combo,
     tool_risk,
 )
-from jarvis.ai.tools import SHELL_RE, Tool, launch_app, mcp_tool, run_jarvis_command, untrusted
+from jarvis.ai.tools import (
+    SHELL_RE,
+    Tool,
+    launch_app,
+    mcp_tool,
+    run_jarvis_command,
+    untrusted,
+    window_appeared,
+)
 from jarvis.ai.uia import SNAPSHOT_LIMIT, UiBackend, UiElement, UiSnapshot, create_ui, format_snapshot
 from jarvis.ai.web import site_name
 from jarvis.commands.validate import MAX_ACTIONS as MAX_RECIPE
@@ -85,6 +93,8 @@ MAX_OTHER_MONITORS = 3  # другие мониторы на картинках 
 SETTLE_POLL_S = 0.1  # после действия окно ещё меняется — смотреть так часто…
 SETTLE_MORE_S = 2.5  # …но не дольше столько сверх паузы после действия
 LAUNCH_MORE_S = 4.0  # после запуска программы или адреса — дольше: она дорисовывается
+LAUNCH_WAIT_S = 15.0  # запуск: ждать окно программы
+FRONT_WAIT_S = 5.0  # ссылка: ждать, пока впереди сменится окно
 URL_SCHEMES = ("http://", "https://", *APP_SCHEMES)
 MAX_MCP_RESULT = 8000
 TOAST_RECHECK_S = 60.0  # нет доступа к уведомлениям Windows — снова спросить не раньше чем через минуту
@@ -166,7 +176,9 @@ AGENT_PROMPT = """Ты — агент Jarvis: сам выполняешь зад
 и координатами. После действия старые id устаревают.
 - Если ты понимаешь картинки, к снимку прикладывается картинка всего экрана: окно впереди обведено, его \
 элементы подписаны метками e…, сетка координат через 100 точек; мониторов несколько — остальные следом, \
-мельче. Смотри на неё после каждого действия, и неудачного тоже: что открылось, что всплыло (окна, \
+мельче; окно впереди, если на снимке оно мелкое, — следом крупно (или крупно то, что изменилось): по \
+ним проверяй мелкое — ушло ли сообщение, галочки, текст ошибки. Смотри на картинки после каждого действия, \
+и неудачного тоже: что открылось, что всплыло (окна, \
 уведомления, ошибки), что изменилось. Зелёным на ней обведено, что изменилось с прошлого снимка; «ничего \
 не изменилось» — действие, скорее всего, не сработало. Крупно одно окно — screenshot; мелкий текст или \
 значок не разобрать — zoom (лупа).
@@ -188,6 +200,8 @@ AGENT_PROMPT = """Ты — агент Jarvis: сам выполняешь зад
 нужная программа, музыка играет, файл сохранён). Подтверждения не видно — проверь ещё или доделай.
 - Не нажимай лишнего, не закрывай чужие окна, окна Jarvis не трогай. Ждать загрузку — wait (до 15 с), \
 а не повторные клики.
+- После launch_app и open_url Jarvis сам ждёт окно программы и выводит его вперёд. Ответ «окна пока нет» — \
+подожди (wait 3–5 с) и посмотри снова, прежде чем действовать: в старом окне ничего не делай.
 - В каждом действии указывай step — номер шага плана.
 
 Разговор с пользователем:
@@ -223,9 +237,10 @@ ask_user одним коротким вопросом и дождись отве
 Сейчас: {now}. {address_rule}"""
 
 VERIFY_PROMPT = """Проверка перед итогом. Задача: «{task}».
-Сверь со снимком ниже (он сделан сейчас) пункт за пунктом. Всё сделано и это видно — снова вызови finish \
-со status=done и в summary назови, что это подтверждает. Чего-то не видно или не сделано — продолжай работу \
-или finish со status=partial."""
+Сверь со снимком ниже (он сделан сейчас) пункт за пунктом; мелкое — по крупному плану окна. Мессенджер: \
+твоё сообщение — последним в переписке нужного чата, в поле ввода его больше нет. Всё сделано и это \
+видно — снова вызови finish со status=done и в summary назови, что это подтверждает. Чего-то не видно или \
+не сделано — продолжай работу или finish со status=partial."""
 
 CONTINUE_PROMPT = """Продолжение той же задачи: «{task}». Уже сделано: {done}. Ты закончил без finish, \
 а пользователь тем временем перебил тебя:
@@ -233,6 +248,11 @@ CONTINUE_PROMPT = """Продолжение той же задачи: «{task}»
 Учти это и продолжай работу; в конце вызови finish."""
 
 STEP_PARAM = {"type": "integer", "description": "Номер шага плана, который ты сейчас выполняешь"}
+ON_PARAM = {
+    "type": "string",
+    "enum": ["screen", "window"],
+    "description": "По какой картинке координаты: screen — снимок экрана (обычно), window — окно крупно",
+}
 # что снимать агенту: монитор окна впереди или весь экран (left, top, right, bottom), виртуальный экран
 # (left, top, width, height) и другие мониторы — для обзора
 ScreenArea = tuple[vision.Rect, tuple[int, int, int, int], list[vision.Rect]]
@@ -285,6 +305,7 @@ class AgentRun:
     snapshot: UiSnapshot | None = None
     target: WindowInfo | None = None  # окно, с которым агент работает
     shot: vision.Shot | None = None  # последний снимок окна картинкой — для click_point
+    window_shot: vision.Shot | None = None  # окно впереди крупно к этому снимку — click_point on="window"
     screen_sig: tuple[vision.Rect, bytes] | None = None  # прошлый экран (монитор, sig): что изменилось
     lesson: dict[str, str] | None = None  # заметка о программе из finish: {app, text} — для итога в чате
     journal: "journal.Journal | None" = None  # журнал работы: шаги и картинки экрана (ai.agent_journal)
@@ -1727,6 +1748,16 @@ class Agent(BaseService):
                         previous=previous,
                     )
                 ]
+                with contextlib.suppress(Exception):  # окно (или что изменилось) крупно — читать мелкое
+                    shots += vision.render_details(
+                        bgra,
+                        (int(width), int(height)),
+                        part,
+                        shots[0],
+                        window=focus,
+                        elements=elements,
+                        title=title,
+                    )
                 for rect, (pixels, w, h) in others:
                     with contextlib.suppress(Exception):
                         shots.append(vision.render_other(pixels, (int(w), int(h)), rect, part))
@@ -1742,8 +1773,43 @@ class Agent(BaseService):
             log.exception("снимок экрана не подготовлен")
             return []
         run.shot = shots[0]
+        run.window_shot = next((s for s in shots if s.detail == "window"), None)
         run.screen_sig = (part, shots[0].sig)
         return shots
+
+    async def _window_ids(self) -> set[int]:
+        try:
+            return {w.hwnd for w in await self.ctx.run_platform(self.ctx.platform.list_windows)}
+        except PlatformError:
+            return set()
+
+    async def _await_window(self, name: str, before: set[int]) -> str:
+        """После запуска: ждать окно программы (до LAUNCH_WAIT_S), вывести его вперёд. Нет окна — подсказка
+        модели вместо снимка старого окна: «программа ещё открывается»."""
+        if self.launch_settle_s <= 0:
+            return ""  # тесты и сценарные прогоны: окно у заглушки появляется сразу
+        window = await window_appeared(self.ctx, name, before, LAUNCH_WAIT_S)
+        if window is None:
+            return (
+                " — окна пока нет: программа ещё открывается (игра через лаунчер — до минуты). Подожди "
+                "(wait 3–5 с) и посмотри снова; в старом окне ничего не делай."
+            )
+        fg = await self._foreground()
+        if fg is None or fg.hwnd != window.hwnd:
+            with contextlib.suppress(PlatformError):  # Windows не всегда даёт новой программе выйти вперёд
+                await self.ctx.run_platform(self.ctx.platform.window_action, "focus", window.hwnd)
+        return f" — открылось окно «{one_line(window.title, 80)}»"
+
+    async def _await_front(self, before: WindowInfo | None) -> None:
+        """После ссылки: подождать, пока впереди сменится окно или его заголовок (до FRONT_WAIT_S)."""
+        if self.launch_settle_s <= 0:
+            return
+        deadline = time.monotonic() + FRONT_WAIT_S
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.25)
+            fg = await self._foreground()
+            if fg is not None and (before is None or fg.hwnd != before.hwnd or fg.title != before.title):
+                return
 
     async def _observe(
         self,
@@ -1948,9 +2014,19 @@ class Agent(BaseService):
             with contextlib.suppress(PlatformError):
                 await self.ctx.run_platform(self.ctx.platform.mouse_move, *saved)
 
-    def _point_of(self, run: AgentRun, fg: WindowInfo, x: float, y: float) -> tuple[int, int]:
+    def _shot_on(self, run: AgentRun, on: str) -> vision.Shot | None:
+        """Картинка, к которой координаты: снимок экрана (screen) или окно крупно (window)."""
+        if on.casefold() == "window":
+            if run.window_shot is None:
+                raise UserFacingError(
+                    "крупного окна к последнему снимку нет — координаты по снимку экрана (on не нужен)"
+                )
+            return run.window_shot
+        return run.shot
+
+    def _point_of(self, run: AgentRun, fg: WindowInfo, x: float, y: float, on: str = "") -> tuple[int, int]:
         """Точка картинки последнего снимка → точка экрана (окно сдвинули — пересчёт по новому месту)."""
-        shot = run.shot
+        shot = self._shot_on(run, on)
         if shot is None:
             raise UserFacingError("нет снимка окна — сначала сделай screenshot")
         if not shot.contains(x, y):
@@ -1978,7 +2054,7 @@ class Agent(BaseService):
         double = bool(args.get("double"))
         what = _arg(args, "what")
         fg = await self._target(run, explicit=True)
-        sx, sy = self._point_of(run, fg, x, y)
+        sx, sy = self._point_of(run, fg, x, y, _arg(args, "on"))
         run.searching = bool(SEARCH_FIELD.search(what))
         run.pointer, run.pointer_window = (sx, sy), fg
         owner_pid, owner_title = await self.ctx.run_platform(self.ui.owner_at, sx, sy)
@@ -2032,7 +2108,7 @@ class Agent(BaseService):
         fg = await self._target(run)
         x, y = _num(args, "x"), _num(args, "y")
         if x is not None and y is not None and run.shot is not None:
-            sx, sy = self._point_of(run, fg, x, y)
+            sx, sy = self._point_of(run, fg, x, y, _arg(args, "on"))
         else:
             sx, sy = _center(fg.rect)
         run.pointer, run.pointer_window = (sx, sy), fg
@@ -2093,9 +2169,12 @@ class Agent(BaseService):
             await self._approve(run, title, detail)  # отказ — Denied
             return True
 
+        before = await self._window_ids()
         launched = await launch_app(self.ctx, name, ask)
+        # программа открывается не сразу: дождаться её окна, вывести вперёд — и только потом смотреть
+        note = await self._await_window(launched, before)
         return await self._observe(
-            run, self.launch_settle_s, f"Запущено: {launched}", more=LAUNCH_MORE_S, retarget=True
+            run, self.launch_settle_s, f"Запущено: {launched}{note}", more=LAUNCH_MORE_S, retarget=True
         )
 
     async def _open_url(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
@@ -2113,7 +2192,9 @@ class Agent(BaseService):
         name = site_name(url) or url
         if self._ask(run, carries_data and not known):
             await self._approve(run, f"Открыть {name}?", f"Адрес: {one_line(url, 160)}")
+        front = await self._foreground()
         await self.ctx.run_platform(self.ctx.platform.open_url, url)
+        await self._await_front(front)  # браузер или программа по ссылке выходит вперёд не сразу
         return await self._observe(
             run, self.launch_settle_s, f"Открыто: {url}", more=LAUNCH_MORE_S, retarget=True
         )
@@ -2161,7 +2242,7 @@ class Agent(BaseService):
         x, y, w, h = (_num(args, key) for key in ("x", "y", "width", "height"))
         if x is None or y is None or w is None or h is None or w < 4 or h < 4:
             return Outcome(False, "Ошибка: нужны x, y, width и height куска на картинке снимка")
-        shot = run.shot
+        shot = self._shot_on(run, _arg(args, "on"))
         if shot is None or shot.hwnd:
             text, extras = await self._look(run)
             shot = run.shot if extras else None
@@ -2242,6 +2323,7 @@ class Agent(BaseService):
                     "what": _s("Что нажимаешь: «поле поиска», «чат Мама», «кнопка отправки»"),
                     "button": {"type": "string", "enum": ["left", "right"], "description": "Кнопка мыши"},
                     "double": {"type": "boolean", "description": "Двойной щелчок"},
+                    "on": ON_PARAM,
                 },
                 ["x", "y", "what"],
                 self._click_point,
@@ -2340,6 +2422,7 @@ class Agent(BaseService):
                     "y": {"type": "number", "description": "Верхний край куска на картинке"},
                     "width": {"type": "number", "description": "Ширина куска на картинке"},
                     "height": {"type": "number", "description": "Высота куска на картинке"},
+                    "on": ON_PARAM,
                 },
                 ["x", "y", "width", "height"],
                 self._zoom,

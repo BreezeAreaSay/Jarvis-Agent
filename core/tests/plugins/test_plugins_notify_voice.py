@@ -138,3 +138,19 @@ async def test_unsupported_without_windows(pctx: AppContext) -> None:
     assert status["supported"] is False and status["access"] == "unsupported" and "Windows" in status["hint"]
     result = await manager(pctx).action("notify_voice", "test", {})
     assert result["text"] == "Telegram: Аня. Привет! Как дела?"
+
+
+async def test_screenshot_tools_are_never_read(pctx: AppContext) -> None:
+    """«Ножницы» показывают уведомление после каждого снимка экрана — его не читаем, даже без фильтров."""
+    plugin = plugin_of(pctx)
+    await plugin.process([])
+    spoken = await plugin.process(
+        [
+            Toast(20, "Ножницы", "Снимок экрана скопирован в буфер обмена", "Выберите здесь, чтобы изменить"),
+            Toast(21, "Snipping Tool", "Screenshot copied to clipboard", "", created=1.0),
+            Toast(22, "Набросок на фрагменте экрана", "Фрагмент сохранён в буфер обмена", created=2.0),
+            Toast(23, "Xbox Game Bar", "Снимок экрана сохранён", created=3.0),
+            Toast(24, "Telegram", "Аня", "Скинь скриншот, пожалуйста", created=4.0),
+        ]
+    )
+    assert spoken == ["Telegram: Аня. Скинь скриншот, пожалуйста"] == said(pctx)

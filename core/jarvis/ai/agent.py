@@ -1650,7 +1650,9 @@ class Agent(BaseService):
         seen, run.toasts = run.toasts, {t.id for t in toasts}
         if seen is None:
             return ""
-        fresh = [t for t in toasts if t.id not in seen][-MAX_TOASTS:]
+        from jarvis.plugins.notify_voice import noise
+
+        fresh = [t for t in toasts if t.id not in seen and not noise(t)][-MAX_TOASTS:]
         lines = [
             one_line(f"{t.app or 'Уведомление'}: {t.title}" + (f" — {t.body}" if t.body else ""), 200)
             for t in fresh

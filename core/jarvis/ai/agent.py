@@ -110,6 +110,9 @@ PASSWORD_NAME = re.compile(
     re.I,
 )
 SEARCH_FIELD = re.compile(r"поиск|search|найти|адрес|address|url|фильтр|filter", re.I)
+SEARCH_KEYS = frozenset({"ctrl+k", "ctrl+f", "ctrl+e", "ctrl+l", "f3", "ctrl+shift+f"})  # открыть поиск
+DELETE_KEYS = frozenset({"delete", "ctrl+d"})  # удалить выделенное (вне поля ввода)
+TEXT_KINDS = frozenset({"Edit", "Document", "ComboBox"})  # в фокусе текст: Delete стирает символ
 SETTINGS_WINDOW = re.compile(r"^(параметры|settings)$|панель управления|control panel", re.I)
 SETTINGS_EXES = frozenset({"systemsettings.exe", "control.exe", "mmc.exe"})
 SETTINGS_CHANGE = re.compile(
@@ -276,6 +279,9 @@ class AgentRun:
     typed: list[tuple[str, str]] = field(default_factory=list)  # (окно, текст) — для «Будет отправлено: …»
     unsent: list[str] = field(default_factory=list)  # набрано в мессенджере после последней отправки
     unsent_hwnd: int = 0
+    searching: bool = (
+        False  # открыт поиск (ctrl+k, щелчок по полю поиска): набранное — запрос, а не сообщение
+    )
     snapshot: UiSnapshot | None = None
     target: WindowInfo | None = None  # окно, с которым агент работает
     shot: vision.Shot | None = None  # последний снимок окна картинкой — для click_point
@@ -1364,18 +1370,33 @@ class Agent(BaseService):
             return ""
         if run.target is not None and run.unsent_hwnd and run.target.hwnd != run.unsent_hwnd:
             return ""
-        text = max(run.unsent, key=len)
-        return text if len(text.split()) >= 2 or len(text) >= 15 else ""
+        # и короткое «ок», «да» — сообщение («ответьте ДА» подтверждает перевод); поиск сюда не попадает
+        return max(run.unsent, key=len).strip()
 
     def _note_typed(self, run: AgentRun, text: str, field_name: str = "") -> None:
         window = self._window(run)
         run.typed.append((window, text))
-        if SEARCH_FIELD.search(field_name):
+        if run.searching or SEARCH_FIELD.search(field_name):
             return
         hwnd = run.target.hwnd if run.target is not None else 0
         if hwnd != run.unsent_hwnd:
             run.unsent, run.unsent_hwnd = [], hwnd
         run.unsent.append(text)
+
+    def _focused(self, run: AgentRun) -> UiElement | None:
+        """Элемент в фокусе по последнему снимку окна (куда печатает type_text и жмёт Delete)."""
+        return (
+            next((e for e in run.snapshot.elements if e.focused), None) if run.snapshot is not None else None
+        )
+
+    def _focused_name(self, run: AgentRun) -> str:
+        focused = self._focused(run)
+        return focused.name if focused is not None else ""
+
+    def _focused_text(self, run: AgentRun) -> bool:
+        """В фокусе — поле ввода или документ: Delete стирает текст, а не файл или письмо."""
+        focused = self._focused(run)
+        return focused is not None and focused.kind in TEXT_KINDS
 
     def _system_panel(self, run: AgentRun) -> bool:
         return self._app(run).casefold() in SYSTEM_PANEL_EXES or bool(SYSTEM_PANEL.search(self._window(run)))
@@ -1397,16 +1418,19 @@ class Agent(BaseService):
         except PlatformError:
             return None
 
-    async def _target(self, run: AgentRun) -> WindowInfo:
+    async def _target(self, run: AgentRun, explicit: bool = False) -> WindowInfo:
         """Окно для ввода: впереди окно той же программы, что и раньше (если впереди окно Jarvis — вернуть
-        фокус окну задачи); другая программа — WindowChanged, ничего не нажимаем."""
+        фокус окну задачи); другая программа — WindowChanged, ничего не нажимаем. explicit — действие по тому,
+        что модель видит в свежем снимке окна впереди (элемент, точка картинки): то окно и становится окном
+        задачи; вслепую (type_text, клавиши) в чужое всплывшее окно — нет."""
         fg = await self._foreground()
         target = run.target
         if fg is None:
             raise WindowChanged(
                 "впереди нет окна программы — открой её (launch_app) или переключись на окно (focus_window)"
             )
-        if target is not None and fg.pid != target.pid and fg.hwnd != target.hwnd:
+        seen = run.snapshot is not None and run.snapshot.pid == fg.pid and run.snapshot.hwnd in (0, fg.hwnd)
+        if target is not None and fg.pid != target.pid and fg.hwnd != target.hwnd and not (explicit and seen):
             raise WindowChanged(
                 f"активное окно сменилось: было «{target.title}», сейчас «{fg.title}» — ничего не сделано. "
                 f"Работать здесь — сделай ui_snapshot; вернуться — focus_window «{target.title}»"
@@ -1481,13 +1505,22 @@ class Agent(BaseService):
         действия или ответа на вопрос): вводить в другое окно впереди можно только после ui_snapshot."""
         fg = await self._foreground()
         parts: list[str] = []
+        changes = [await self._windows_change(run), await self._toasts_change(run)]
+        if (
+            keep_target
+            and run.target is not None
+            and run.windows is not None
+            and run.target.hwnd not in run.windows
+        ):
+            keep_target = False  # окно задачи закрылось (всплывшее окно закрыли): беречь нечего
         if fg is not None:
             previous = run.target
             if previous is not None and previous.pid != fg.pid:
                 if keep_target:
                     parts.append(
                         f"Впереди теперь окно «{fg.title}» ({fg.exe}), а работаешь ты с «{previous.title}»: "
-                        "действовать здесь — сначала ui_snapshot, вернуться — focus_window."
+                        "нажимать его кнопки (ui_click, click_point) можно, вводить вслепую (type_text, "
+                        "клавиши) — нет; работать в нём — ui_snapshot, вернуться — focus_window."
                     )
                 else:
                     parts.append(f"Впереди теперь окно «{fg.title}» ({fg.exe}); было «{previous.title}».")
@@ -1496,9 +1529,7 @@ class Agent(BaseService):
             hint = self._new_playbook(run, fg)
             if hint:
                 parts.append(hint)  # до снимка: устаревшие снимки скрываются, подсказка остаётся
-        for change in (await self._windows_change(run), await self._toasts_change(run)):
-            if change:
-                parts.append(change)
+        parts.extend(change for change in changes if change)
         # картинка экрана снимается (пул ввода-вывода), пока поток платформы читает элементы окна
         area = await self._screen_area(fg) if run.vision and not force_shot else None
         grab = asyncio.ensure_future(self._grab(area)) if area is not None else None
@@ -1715,13 +1746,22 @@ class Agent(BaseService):
         return shots
 
     async def _observe(
-        self, run: AgentRun, delay: float, result: str, detail: str = "", *, more: float = SETTLE_MORE_S
+        self,
+        run: AgentRun,
+        delay: float,
+        result: str,
+        detail: str = "",
+        *,
+        more: float = SETTLE_MORE_S,
+        retarget: bool = False,
     ) -> Outcome:
-        """Пауза delay после действия, ещё до more секунд — пока окно меняется; потом снимок."""
+        """Пауза delay после действия, ещё до more секунд — пока окно меняется; потом снимок. Окно задачи
+        меняют только действия, которые для того и нужны (retarget: запуск, адрес, команда, focus_window);
+        после нажатия или ввода всплывшее окно другой программы — не окно задачи (ui_snapshot — сменить)."""
         if delay > 0:
             await asyncio.sleep(delay)
             await self._settle(run, more)
-        text, extras = await self._look(run)
+        text, extras = await self._look(run, keep_target=not retarget)
         return Outcome(True, f"{result}\n\n{text}", detail, extras)
 
     async def _settle(self, run: AgentRun, more: float) -> None:
@@ -1829,7 +1869,7 @@ class Agent(BaseService):
         run.target = window
         if window.rect[2] > window.rect[0]:
             await self._point(run, "focus", *_center(window.rect), window.title, window.rect)
-        return await self._observe(run, self.settle_s, f"Активно окно «{window.title}»")
+        return await self._observe(run, self.settle_s, f"Активно окно «{window.title}»", retarget=True)
 
     def _click_risky(self, run: AgentRun, name: str, kind: str = "") -> bool:
         window = self._window(run)
@@ -1845,10 +1885,11 @@ class Agent(BaseService):
         double = bool(args.get("double"))
         element = run.snapshot.find(element_id) if run.snapshot is not None else None
         name = (element.name if element is not None else "") or element_id
-        fg = await self._target(run)
+        fg = await self._target(run, explicit=True)
         self._check_snapshot(run, fg)
         window = self._window(run)
         kind = element.kind if element is not None else ""
+        run.searching = bool(SEARCH_FIELD.search(name))  # щелчок по полю поиска — дальше набирается запрос
         message = self._pending_message(run)
         sending = bool(message) and (SEND_NAME.search(name) or (element is not None and not element.name))
         if sending:
@@ -1874,7 +1915,7 @@ class Agent(BaseService):
         text = str(args.get("text") or "")
         element = run.snapshot.find(element_id) if run.snapshot is not None else None
         name = (element.name if element is not None else "") or element_id
-        fg = await self._target(run)
+        fg = await self._target(run, explicit=True)
         self._check_snapshot(run, fg)
         window = self._window(run)
         where = f" в «{window}»" if window else ""
@@ -1936,8 +1977,9 @@ class Agent(BaseService):
             button = "left"
         double = bool(args.get("double"))
         what = _arg(args, "what")
-        fg = await self._target(run)
+        fg = await self._target(run, explicit=True)
         sx, sy = self._point_of(run, fg, x, y)
+        run.searching = bool(SEARCH_FIELD.search(what))
         run.pointer, run.pointer_window = (sx, sy), fg
         owner_pid, owner_title = await self.ctx.run_platform(self.ui.owner_at, sx, sy)
         if owner_pid and fg.pid and owner_pid != fg.pid:
@@ -1979,7 +2021,7 @@ class Agent(BaseService):
             await self.ctx.run_platform(self.ctx.platform.paste_text, text)
         else:
             await self.ctx.run_platform(self.ctx.platform.type_text, text)
-        self._note_typed(run, text, _arg(args, "field"))
+        self._note_typed(run, text, _arg(args, "field") or self._focused_name(run))
         return await self._observe(
             run, self.settle_s, f"Текст набран в окне «{fg.title}»", one_line(text, 60)
         )
@@ -2020,6 +2062,9 @@ class Agent(BaseService):
         message = self._pending_message(run) if combo in SEND_KEYS else ""
         if message:
             await self._approve_send(run, f"Нажать {combo}")
+        elif combo in DELETE_KEYS and not self._focused_text(run):
+            # Delete не в поле ввода — удаление выделенного (файл в Проводнике, письмо, чат) — с разрешения
+            await self._approve(run, f"Удалить выделенное{where} ({combo})?")
         else:
             risky = combo in RISKY_KEYS or (combo in CLOSE_KEYS and bool(UNSAVED.search(window)))
             # пробел и Enter в быстрых настройках, на переключателе связи, в окне выключения — то же нажатие
@@ -2029,7 +2074,13 @@ class Agent(BaseService):
                 await self._approve(run, f"Нажать {combo}{where}?", detail)
         await self._point(run, "keys", *_center(fg.rect), combo)
         await self.ctx.run_platform(self.ctx.platform.press_keys, combo)
-        return await self._observe(run, self.settle_s, f"Нажато {combo}")
+        if combo in SEARCH_KEYS:
+            run.searching = True
+        elif combo in ("enter", "escape", "tab"):
+            run.searching = False  # поиск выбран или закрыт — дальше набранное снова может быть сообщением
+        # Win+E, Win+R, «Пуск», Alt+Tab — нарочно другое окно: оно и становится окном задачи
+        switch = combo == "win" or combo.startswith("win+") or combo in ("alt+tab", "alt+shift+tab")
+        return await self._observe(run, self.settle_s, f"Нажато {combo}", retarget=switch)
 
     async def _launch(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
         name = _arg(args, "name")
@@ -2043,7 +2094,9 @@ class Agent(BaseService):
             return True
 
         launched = await launch_app(self.ctx, name, ask)
-        return await self._observe(run, self.launch_settle_s, f"Запущено: {launched}", more=LAUNCH_MORE_S)
+        return await self._observe(
+            run, self.launch_settle_s, f"Запущено: {launched}", more=LAUNCH_MORE_S, retarget=True
+        )
 
     async def _open_url(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
         url = _arg(args, "url")
@@ -2061,7 +2114,9 @@ class Agent(BaseService):
         if self._ask(run, carries_data and not known):
             await self._approve(run, f"Открыть {name}?", f"Адрес: {one_line(url, 160)}")
         await self.ctx.run_platform(self.ctx.platform.open_url, url)
-        return await self._observe(run, self.launch_settle_s, f"Открыто: {url}", more=LAUNCH_MORE_S)
+        return await self._observe(
+            run, self.launch_settle_s, f"Открыто: {url}", more=LAUNCH_MORE_S, retarget=True
+        )
 
     async def _run_command(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
         text, command_id = _arg(args, "text"), _arg(args, "id")
@@ -2071,7 +2126,7 @@ class Agent(BaseService):
         if result is None:
             return Outcome(False, "Команда не найдена", "Команда не найдена")
         report = f"{result.title}: {result.message or ('выполнено' if result.ok else 'ошибка')}"
-        outcome = await self._observe(run, self.settle_s, report, result.message)
+        outcome = await self._observe(run, self.settle_s, report, result.message, retarget=True)
         outcome.ok = result.ok
         return outcome
 

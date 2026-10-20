@@ -172,3 +172,47 @@ async def test_power_off_restart_and_sleep_need_permission(
     assert asked[1:] == ["Нажать enter в «Завершение работы Windows»?"]
     platform: Any = ctx.platform
     assert not any(name == "press_keys" for name, _ in platform.calls)
+
+
+async def test_delete_key_outside_a_text_field_needs_permission(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
+) -> None:
+    asked: list[str] = []
+
+    def answer(event: Any) -> None:  # удалить — нет; остальное (после отказа спрашивает обо всём) — да
+        asked.append(event.data["title"])
+        ctx.confirmations.resolve(event.data["id"], not event.data["title"].startswith("Удалить"))
+
+    ctx.bus.on("confirm.request", answer)
+    llm.add(
+        PLAN,
+        calls(("press_keys", {"combo": "delete"})),  # в фокусе нет поля — удалит выделенное письмо
+        calls(("ui_click", {"id": "e1"})),  # «Написать»: фокус — в поле «Кому»
+        calls(("press_keys", {"combo": "delete"})),  # стирает символ — без вопросов
+        calls(("finish", {"status": "partial", "summary": "Ок"})),
+    )
+    await ctx.agent.wait(await ctx.agent.run("Удали письмо"))  # type: ignore[attr-defined]
+    assert asked[0] == "Удалить выделенное в «Входящие — Почта» (delete)?"
+    assert not any(a.startswith("Удалить") for a in asked[1:])  # Delete в поле ввода — не удаление
+    presses = [args for name, args in ctx.platform.calls if name == "press_keys"]  # type: ignore[attr-defined]
+    assert presses == [("delete",)]
+
+
+async def test_short_message_needs_permission_but_search_does_not(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
+) -> None:
+    ui.window = "Telegram"
+    asked = _deny(ctx)
+    llm.add(
+        PLAN,
+        calls(("press_keys", {"combo": "ctrl+k"})),  # поиск чатов: набранное — запрос
+        calls(("type_text", {"text": "Мама"})),
+        calls(("press_keys", {"combo": "enter"})),  # открыть чат — не отправка
+        calls(("type_text", {"text": "ок"})),
+        calls(("press_keys", {"combo": "enter"})),  # «ок» — тоже сообщение (может подтвердить чужое)
+        calls(("finish", {"status": "partial", "summary": "Ок"})),
+    )
+    await ctx.agent.wait(await ctx.agent.run("Ответь Маме «ок»"))  # type: ignore[attr-defined]
+    assert asked == ["Нажать enter в «Telegram»?"]
+    presses = [args for name, args in ctx.platform.calls if name == "press_keys"]  # type: ignore[attr-defined]
+    assert presses == [("ctrl+k",), ("enter",)]

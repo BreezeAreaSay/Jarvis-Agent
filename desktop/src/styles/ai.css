@@ -42,6 +42,8 @@
   gap: 14px;
   height: 100%;
   min-height: 0;
+  container-type: inline-size;
+  container-name: ailayout;
 }
 
 .ai-side,
@@ -80,10 +82,208 @@
   container-name: aimain;
 }
 
+/* большая сфера справа — только в широком окне (в узком хватает сферы в шапке и в приветствии) */
+.ai-rail {
+  display: flex;
+  width: 250px;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px 18px;
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(120% 60% at 50% 32%, rgba(var(--accent-rgb), 0.16), transparent 70%),
+    var(--panel);
+  backdrop-filter: blur(var(--glass-blur)) saturate(135%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(135%);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-1);
+  text-align: center;
+  overflow: hidden;
+}
+
+.ai-rail-orb {
+  width: 100%;
+  aspect-ratio: 1;
+  margin-top: 8px;
+}
+
+.ai-rail-name {
+  margin-top: -6px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 0.32em;
+  padding-left: 0.32em;
+  color: var(--text);
+  text-shadow: 0 0 18px rgba(var(--accent-rgb), 0.55);
+}
+
+.ai-rail-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: var(--r-pill);
+  background: rgba(var(--accent-rgb), 0.1);
+  border: 1px solid rgba(var(--accent-rgb), 0.22);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ai-rail-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.9);
+}
+
+.ai-rail:not(.is-idle) .ai-rail-dot {
+  animation: ai-rail-pulse 1.1s var(--ease) infinite;
+}
+
+@keyframes ai-rail-pulse {
+  50% {
+    transform: scale(1.6);
+    opacity: 0.55;
+  }
+}
+
+.ai-rail-hint {
+  margin: 4px 0 0;
+  max-width: 200px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+@container ailayout (min-width: 1180px) {
+  .ai-hello-orb {
+    display: none;
+  }
+}
+
 /* --- колонка чатов ---------------------------------------------------------------------------------- */
+.ai-side-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px 0;
+  color: var(--text-2);
+}
+
+.ai-side-head > svg {
+  width: 16px;
+  height: 16px;
+  color: var(--accent-text);
+}
+
+.ai-side-title {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.ai-side-count {
+  margin-left: auto;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-pill);
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
 .ai-new {
   height: 36px;
   flex: none;
+}
+
+.ai-side-search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 6px 0 10px;
+  border-radius: 9px;
+  background: var(--field);
+  border: 1px solid var(--line);
+  color: var(--text-3);
+  transition: border-color var(--t-fast) var(--ease);
+}
+
+.ai-side-search:focus-within {
+  border-color: var(--line-accent);
+}
+
+.ai-side-search > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.ai-side-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  background: none;
+  border: 0;
+  outline: none;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.ai-side-search button {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--text-3);
+}
+
+.ai-side-search button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.ai-side-search button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ai-chat-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-chat-group + .ai-chat-group {
+  margin-top: 10px;
+}
+
+.ai-chat-group-title {
+  padding: 4px 10px 3px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-4);
 }
 
 .ai-chat-list {
@@ -129,9 +329,21 @@
 }
 
 .ai-chat-item.active .ai-chat-open {
-  background: rgba(255, 255, 255, 0.08);
+  background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.2), rgba(var(--accent-rgb), 0.07));
   color: var(--text);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.28);
+}
+
+.ai-chat-item.active::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.8);
 }
 
 .ai-chat-open .kind {
@@ -253,12 +465,19 @@
   align-items: center;
   gap: 10px;
   height: 46px;
-  padding: 0 16px;
+  padding: 0 16px 0 6px;
   border-radius: 14px;
 }
 
+.ai-head-orb {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  margin-right: -2px;
+}
+
 .ai-head-title {
-  font-weight: 600;
+  font-weight: 650;
   font-size: 14px;
   min-width: 0;
 }
@@ -383,9 +602,35 @@
   color: var(--err);
 }
 
+/* аватар ответа — маленькая светящаяся сфера с «сеткой» точек (как большая сфера Jarvis, но без анимации) */
+.ai-avatar.orb {
+  position: relative;
+  border-radius: 50%;
+  border: 1px solid rgba(var(--accent-rgb), 0.55);
+  background:
+    radial-gradient(circle at 36% 30%, rgba(255, 255, 255, 0.75), transparent 22%),
+    radial-gradient(circle, rgba(255, 255, 255, 0.55) 0.7px, transparent 1.3px) 0 0 / 5px 5px,
+    radial-gradient(circle at 50% 50%, var(--accent) 0%, rgba(var(--accent-rgb), 0.55) 55%, rgba(var(--accent-rgb), 0.12) 100%);
+  box-shadow:
+    0 0 0 3px rgba(var(--accent-rgb), 0.1),
+    0 0 14px rgba(var(--accent-rgb), 0.55);
+}
+
+.ai-msg.pending .ai-avatar.orb {
+  animation: ai-orb-pulse 1.6s var(--ease) infinite;
+}
+
+@keyframes ai-orb-pulse {
+  50% {
+    box-shadow:
+      0 0 0 5px rgba(var(--accent-rgb), 0.14),
+      0 0 22px rgba(var(--accent-rgb), 0.85);
+  }
+}
+
 .ai-msg-body {
   min-width: 0;
-  max-width: min(680px, 100%);
+  max-width: min(720px, 100%);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -394,9 +639,9 @@
 
 .ai-bubble {
   max-width: 100%;
-  padding: 9px 13px;
-  border-radius: 13px;
-  background: rgba(255, 255, 255, 0.05);
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.035));
   border: 1px solid var(--line);
   font-size: 13.5px;
   line-height: 1.55;
@@ -405,11 +650,11 @@
 
 .ai-user {
   max-width: min(560px, 78%);
-  background: var(--accent);
-  border-color: transparent;
+  background: linear-gradient(135deg, var(--accent-hover), var(--accent) 55%, var(--accent-press));
+  border-color: rgba(255, 255, 255, 0.12);
   color: var(--on-accent);
   border-bottom-right-radius: 5px;
-  box-shadow: 0 4px 16px rgba(var(--accent-rgb), 0.25);
+  box-shadow: 0 6px 20px rgba(var(--accent-rgb), 0.28);
 }
 
 .ai-user-text {
@@ -423,7 +668,15 @@
   margin: 2px 0 6px;
 }
 
+.ai-user-images button {
+  display: block;
+  padding: 0;
+  border-radius: 9px;
+  cursor: zoom-in;
+}
+
 .ai-user-images img {
+  display: block;
   width: 120px;
   height: 90px;
   object-fit: cover;
@@ -719,6 +972,413 @@
   height: 13px;
 }
 
+/* --- картинки: нарисованные Jarvis, ожидание, просмотр ----------------------------------------------- */
+.ai-msg.has-images .ai-msg-body {
+  flex: 1;
+}
+
+.ai-gen-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  width: min(420px, 100%);
+}
+
+.ai-gen-grid.multi {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(560px, 100%);
+}
+
+.ai-gen {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgba(8, 10, 14, 0.4);
+  border: 1px solid var(--line-strong);
+  box-shadow:
+    0 0 0 1px rgba(var(--accent-rgb), 0.08),
+    0 14px 40px rgba(0, 0, 0, 0.35),
+    0 0 40px rgba(var(--accent-rgb), 0.12);
+}
+
+.ai-gen-img {
+  position: relative;
+  display: block;
+  padding: 0;
+  cursor: zoom-in;
+}
+
+.ai-gen-img img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: auto;
+  user-select: none;
+}
+
+.ai-gen-zoom {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: rgba(10, 12, 18, 0.6);
+  backdrop-filter: blur(8px);
+  color: #fff;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+.ai-gen-zoom svg {
+  width: 15px;
+  height: 15px;
+}
+
+.ai-gen-img:hover .ai-gen-zoom,
+.ai-gen-img:focus-visible .ai-gen-zoom {
+  opacity: 1;
+}
+
+.ai-gen figcaption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 12px;
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.ai-gen-prompt {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.ai-gen-prompt svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--accent-text);
+}
+
+.ai-gen-dl {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12.5px;
+  font-weight: 650;
+  box-shadow: 0 4px 14px rgba(var(--accent-rgb), 0.35);
+  transition:
+    background var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+.ai-gen-dl:hover {
+  background: var(--accent-hover);
+}
+
+.ai-gen-dl:active {
+  transform: translateY(1px);
+}
+
+.ai-gen-dl svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ai-gen-removed {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--line-strong);
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.ai-gen-removed svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* холст, пока картинка рисуется: переливы цвета темы, зерно, бегущая полоса и отсчёт */
+.ai-gen-wait {
+  width: min(420px, 100%);
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+  background: rgba(8, 10, 14, 0.5);
+  box-shadow:
+    0 14px 40px rgba(0, 0, 0, 0.35),
+    0 0 46px rgba(var(--accent-rgb), 0.2);
+}
+
+.ai-gen-canvas {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(var(--accent-rgb), 0.18), transparent 60%),
+    linear-gradient(160deg, #0d1018, #141a2a);
+}
+
+.ai-gen-blob {
+  position: absolute;
+  width: 70%;
+  height: 70%;
+  border-radius: 50%;
+  filter: blur(42px);
+  opacity: 0.75;
+  mix-blend-mode: screen;
+}
+
+.ai-gen-blob.a {
+  left: -10%;
+  top: -8%;
+  background: rgba(var(--accent-rgb), 0.85);
+  animation: ai-gen-drift-a 7s ease-in-out infinite alternate;
+}
+
+.ai-gen-blob.b {
+  right: -14%;
+  top: 22%;
+  background: rgba(var(--ai-violet), 0.7);
+  animation: ai-gen-drift-b 8.5s ease-in-out infinite alternate;
+}
+
+.ai-gen-blob.c {
+  left: 18%;
+  bottom: -20%;
+  background: rgba(34, 211, 238, 0.55);
+  animation: ai-gen-drift-c 6s ease-in-out infinite alternate;
+}
+
+@keyframes ai-gen-drift-a {
+  to {
+    transform: translate(28%, 22%) scale(1.15);
+  }
+}
+
+@keyframes ai-gen-drift-b {
+  to {
+    transform: translate(-30%, -18%) scale(0.9);
+  }
+}
+
+@keyframes ai-gen-drift-c {
+  to {
+    transform: translate(10%, -30%) scale(1.2);
+  }
+}
+
+/* «зерно» холста: мелкая сетка точек проявляется, будто картинка собирается из шума */
+.ai-gen-grain {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.5) 0.8px, transparent 1.4px) 0 0 / 9px 9px;
+  opacity: 0.22;
+  animation: ai-gen-grain 2.4s ease-in-out infinite alternate;
+}
+
+@keyframes ai-gen-grain {
+  from {
+    opacity: 0.12;
+    background-size: 11px 11px;
+  }
+  to {
+    opacity: 0.32;
+    background-size: 8px 8px;
+  }
+}
+
+.ai-gen-scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 28%;
+  top: -30%;
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.16) 70%, rgba(255, 255, 255, 0.4) 98%, transparent);
+  animation: ai-gen-scan 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+@keyframes ai-gen-scan {
+  to {
+    top: 102%;
+  }
+}
+
+.ai-gen-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ai-gen-center svg {
+  width: 38px;
+  height: 38px;
+  color: rgba(255, 255, 255, 0.92);
+  filter: drop-shadow(0 0 14px rgba(var(--accent-rgb), 0.9));
+  animation: ai-gen-icon 1.8s ease-in-out infinite;
+}
+
+@keyframes ai-gen-icon {
+  50% {
+    transform: scale(1.12) rotate(-8deg);
+  }
+}
+
+.ai-gen-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 11px 13px 13px;
+  border-top: 1px solid var(--line);
+}
+
+.ai-gen-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ai-gen-title {
+  font-weight: 650;
+  font-size: 13.5px;
+}
+
+.ai-gen-time {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-gen-prompt-line {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.ai-gen-bar {
+  height: 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.ai-gen-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), rgba(var(--ai-violet), 1));
+  box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.7);
+  transition: width 0.25s linear;
+}
+
+.ai-gen-wait.failed {
+  border-color: rgba(248, 113, 113, 0.35);
+  box-shadow: none;
+}
+
+.ai-gen-wait.failed .ai-gen-canvas {
+  aspect-ratio: 3;
+  filter: grayscale(0.8) brightness(0.7);
+}
+
+.ai-gen-wait.failed :is(.ai-gen-blob, .ai-gen-grain, .ai-gen-scan, .ai-gen-center svg) {
+  animation: none;
+}
+
+.ai-gen-wait.failed .ai-gen-title {
+  color: var(--err);
+}
+
+/* просмотр во весь экран */
+.ai-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 36px;
+  background: rgba(6, 8, 12, 0.86);
+  backdrop-filter: blur(10px);
+  animation: fade-in var(--t-med) var(--ease) both;
+}
+
+.ai-viewer img {
+  max-width: 100%;
+  max-height: calc(100% - 64px);
+  object-fit: contain;
+  border-radius: 14px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+
+.ai-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(720px, 100%);
+  padding: 6px 6px 6px 14px;
+  border-radius: 14px;
+  background: rgba(30, 34, 43, 0.92);
+  border: 1px solid var(--line-strong);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.ai-viewer-close {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: var(--text-2);
+}
+
+.ai-viewer-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.ai-viewer-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+:root[data-anim="off"] :is(.ai-gen-blob, .ai-gen-grain, .ai-gen-scan, .ai-gen-center svg) {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.ai-gen-blob, .ai-gen-grain, .ai-gen-scan, .ai-gen-center svg) {
+    animation: none;
+  }
+}
+
 /* --- Markdown ------------------------------------------------------------------------------------------ */
 .ai-md {
   font-size: 13.5px;
@@ -814,29 +1474,83 @@
 }
 
 .ai-md img {
-  max-width: 100%;
-  border-radius: 9px;
-}
-
-.ai-md table {
-  border-collapse: collapse;
-  margin: 0 0 0.65em;
-  font-size: 13px;
   display: block;
+  max-width: min(100%, 420px);
+  margin: 0.3em 0 0.65em;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  cursor: zoom-in;
+}
+
+/* таблицы: рамка со скруглением, шапка с оттенком темы, полосы через строку; узко — прокрутка вбок */
+.ai-md-table {
   max-width: 100%;
+  margin: 0.2em 0 0.8em;
   overflow-x: auto;
-}
-
-.ai-md th,
-.ai-md td {
-  padding: 6px 10px;
+  border-radius: 12px;
   border: 1px solid var(--line-strong);
-  text-align: left;
+  background: rgba(8, 10, 14, 0.28);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  scrollbar-width: thin;
 }
 
-.ai-md th {
-  background: rgba(255, 255, 255, 0.05);
-  font-weight: 650;
+.ai-md-table table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ai-md-table th,
+.ai-md-table td {
+  min-width: 8em;
+  max-width: 26em;
+  padding: 9px 13px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+.ai-md-table td + td,
+.ai-md-table th + th {
+  border-left: 1px solid var(--line);
+}
+
+.ai-md-table thead th {
+  position: sticky;
+  top: 0;
+  background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.24), rgba(var(--accent-rgb), 0.14));
+  color: var(--text);
+  font-weight: 700;
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  border-bottom: 1px solid rgba(var(--accent-rgb), 0.4);
+}
+
+.ai-md-table tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.ai-md-table tbody tr:hover td {
+  background: rgba(var(--accent-rgb), 0.07);
+}
+
+.ai-md-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* первая колонка — подписи строк («Годы правления») */
+.ai-md-table tbody td:first-child {
+  min-width: 9em;
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+/* ответ с таблицей или картинкой занимает всю ширину ленты */
+.ai-answer:has(.ai-md-table) {
+  width: 100%;
 }
 
 .ai-md-code {
@@ -927,9 +1641,11 @@
 }
 
 .ai-hello-orb {
-  width: 150px;
-  height: 150px;
-  margin-bottom: -4px;
+  --orb: clamp(150px, 30vh, 250px);
+  width: var(--orb);
+  height: var(--orb);
+  flex: none;
+  margin: calc(var(--orb) * -0.14) 0 calc(var(--orb) * -0.12);
 }
 
 .ai-hello-title {
@@ -1567,6 +2283,10 @@
 
   .ai-suggest {
     grid-template-columns: 1fr;
+  }
+
+  .ai-suggest-chip:nth-child(n + 5) {
+    display: none;
   }
 }
 

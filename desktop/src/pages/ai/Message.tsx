@@ -1,6 +1,7 @@
-// Сообщения чата: пузырь человека (акцент), ответ ассистента (аватар, Markdown, «Выполнено ✓», источники,
-// «Запомнил: …», ошибка с «Повторить», у удачного дела агента — «Запомнить как сценарий») и ответ, который
-// пишется прямо сейчас.
+// Сообщения чата: пузырь человека (акцент), ответ ассистента (аватар-сфера, Markdown с таблицами,
+// «Выполнено ✓», нарисованные картинки со «Скачать», источники, «Запомнил: …», ошибка с «Повторить», у удачного
+// дела агента — «Запомнить как сценарий») и ответ, который пишется прямо сейчас (пока рисуется картинка —
+// анимация холста).
 import {
   Bot,
   Brain,
@@ -21,6 +22,7 @@ import { api } from "@/api/client";
 import { bridge } from "@/lib/bridge";
 import { navigate } from "@/lib/router";
 import { Button, cx, Dots, notify, notifyError } from "@/ui";
+import { GeneratedImages, ImageGenerating, ImagesRemoved, viewImage } from "./Images";
 import { Markdown } from "./Markdown";
 import { LOOKUP_TOOL } from "./store";
 import type { MetaExtra, PendingReply, ThreadMessage, ToolRow } from "./types";
@@ -28,12 +30,12 @@ import { fmtTime, hostOf } from "./util";
 
 type Action = { title: string; ok: boolean; detail?: string };
 
+/** Инструмент «нарисовать» (jarvis/ai/tools.py generate_image) и заголовок его карточки. */
+export const DRAW_TOOL = "generate_image";
+const DRAW_TITLE = /^Нарисовать/i;
+
 export function AssistantAvatar() {
-  return (
-    <span className="ai-avatar" aria-hidden>
-      <Sparkles />
-    </span>
-  );
+  return <span className="ai-avatar orb" aria-hidden />;
 }
 
 // --- «Выполнено ✓ Свернуть все окна» --------------------------------------------------------------------
@@ -229,7 +231,9 @@ export const UserMessage = memo(function UserMessage({ m }: { m: ThreadMessage }
         {images.length > 0 && (
           <div className="ai-user-images">
             {images.map((src, i) => (
-              <img key={i} src={src} alt={`Изображение ${i + 1}`} />
+              <button key={i} type="button" onClick={() => viewImage(src)} aria-label={`Открыть изображение ${i + 1}`}>
+                <img src={src} alt={`Изображение ${i + 1}`} />
+              </button>
             ))}
           </div>
         )}
@@ -289,15 +293,25 @@ export const AssistantMessage = memo(function AssistantMessage({
 }) {
   const meta = m.meta ?? {};
   const extra = meta as MetaExtra;
-  const actions = meta.actions ?? [];
+  const images = meta.images ?? [];
+  // удачное «Нарисовать» видно по самой картинке — карточка «Выполнено» над ней лишняя
+  const actions = (meta.actions ?? []).filter((a) => !(images.length && a.ok && DRAW_TITLE.test(a.title)));
   const empty =
-    !m.content?.trim() && !actions.length && !meta.sources?.length && !meta.memory?.length && !meta.error;
+    !m.content?.trim() &&
+    !actions.length &&
+    !meta.sources?.length &&
+    !meta.memory?.length &&
+    !meta.error &&
+    !images.length &&
+    !meta.images_removed;
   if (empty && !extra.stopped) return null;
   return (
-    <div className="ai-msg assistant">
+    <div className={cx("ai-msg assistant", images.length > 0 && "has-images")}>
       <AssistantAvatar />
       <div className="ai-msg-body">
         {actions.length > 0 && <ToolCard rows={actions} />}
+        {images.length > 0 && <GeneratedImages images={images} info={meta.generated} />}
+        {!images.length && !!meta.images_removed && <ImagesRemoved count={meta.images_removed} />}
         <AnswerBody text={m.content ?? ""} sources={meta.sources} />
         {(meta.memory ?? []).map((t) => (
           <MemoryChip key={t} text={t} />
@@ -321,15 +335,25 @@ export const AssistantMessage = memo(function AssistantMessage({
 });
 
 export function PendingMessage({ p, agentActive }: { p: PendingReply; agentActive?: boolean }) {
-  const tools = p.tools.filter((t) => !LOOKUP_TOOL.test(t.name));
+  // «Нарисовать» показывается не строкой карточки, а холстом, пока рисуется, и самой картинкой потом
+  const drawing = p.tools.filter((t) => t.name === DRAW_TOOL && t.status !== "ok");
+  const tools = p.tools.filter((t) => !LOOKUP_TOOL.test(t.name) && t.name !== DRAW_TOOL);
   const agentTurn = !!agentActive && p.status?.kind === "tool" && AGENT_STATUS.test(p.status.text);
-  // пока идут команды, их карточка сама говорит «Выполняю…» — строка статуса не нужна
-  const showStatus = agentTurn || (p.status ? !(p.status.kind === "tool" && tools.length > 0) : !p.text && !tools.length);
+  // пока идут команды или рисуется картинка, их карточка сама говорит «Выполняю…» — строка статуса не нужна
+  const busyCard = tools.length > 0 || drawing.length > 0;
+  const showStatus =
+    agentTurn || (p.status ? !(p.status.kind === "tool" && busyCard) : !p.text && !busyCard && !p.images.length);
   return (
-    <div className="ai-msg assistant pending" aria-busy>
+    <div className={cx("ai-msg assistant pending", (drawing.length > 0 || p.images.length > 0) && "has-images")} aria-busy>
       <AssistantAvatar />
       <div className="ai-msg-body">
         {tools.length > 0 && <ToolCard rows={tools} />}
+        {p.images.length > 0 && (
+          <GeneratedImages images={p.images.map((i) => i.src)} info={p.images.map((i) => i.info ?? { prompt: "" })} />
+        )}
+        {drawing.map((t) => (
+          <ImageGenerating key={t.call_id} title={t.title} failed={t.status === "error"} detail={t.detail} />
+        ))}
         {showStatus &&
           (agentTurn ? (
             <StatusLine kind="agent" text="" />

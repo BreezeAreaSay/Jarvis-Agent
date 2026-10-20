@@ -758,6 +758,14 @@ async def _set_reminder(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
     )
 
 
+# --- обработчики: картинки -------------------------------------------------------------------------------
+
+
+async def _generate_image(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
+    """«Нарисуй…» — jarvis.ai.images: ключ OpenAI, образец из приложенного фото, показ в чате, расход."""
+    return await env.ctx.images.tool(env, args)
+
+
 # --- каталог ---------------------------------------------------------------------------------------------
 
 
@@ -1074,6 +1082,39 @@ def builtin_tools() -> list[Tool]:
             lambda a: f"Агент: {one_line(_str(a, 'task'), 60)}",
             status_text="Запускаю агента…",
             action=True,
+        ),
+        Tool(
+            "generate_image",
+            "Нарисовать картинку по описанию (OpenAI gpt-image-1, около 30 секунд, платно — по ключу "
+            "пользователя). Только когда пользователь сам просит нарисовать, сгенерировать или изобразить; "
+            "одна картинка на просьбу. Описание — подробное, на языке пользователя: что изображено, стиль, "
+            "свет, детали. Если он приложил своё фото и просит нарисовать по нему — use_reference: true.",
+            _obj(
+                {
+                    "prompt": _s("Подробное описание картинки"),
+                    "format": {
+                        "type": "string",
+                        "enum": ["square", "landscape", "portrait"],
+                        "description": "Квадрат (по умолчанию), широкая или высокая",
+                    },
+                    "quality": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                        "description": "medium — по умолчанию; high — только по просьбе (дороже и дольше)",
+                    },
+                    "use_reference": {
+                        "type": "boolean",
+                        "description": "Взять картинку, приложенную пользователем к сообщению, как образец",
+                    },
+                },
+                ["prompt"],
+            ),
+            _generate_image,
+            lambda a: f"Нарисовать: {one_line(_str(a, 'prompt'), 60)}",
+            status_text="Рисую картинку…",
+            in_chat_mode=True,
+            action=True,
+            timeout=200.0,
         ),
     ]
 

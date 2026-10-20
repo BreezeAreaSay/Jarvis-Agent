@@ -27,6 +27,7 @@ def build_context(platform_name: str = "auto") -> AppContext:
 
     from jarvis.ai.agent import Agent
     from jarvis.ai.browser.service import Browser
+    from jarvis.ai.images import Images
     from jarvis.ai.service import Ai
     from jarvis.commands.service import Commands
     from jarvis.desks.service import Desks
@@ -40,14 +41,17 @@ def build_context(platform_name: str = "auto") -> AppContext:
     from jarvis.voice.service import Voice
     from jarvis.voice.tts import Tts
     from jarvis.widgets.service import Widgets
+    from jarvis.widgets.sysops import SysOps
 
     ctx.notes = Notes(ctx)
     ctx.commands = Commands(ctx)
     ctx.desks = Desks(ctx)
     ctx.widgets = Widgets(ctx)
+    ctx.sysops = SysOps(ctx)  # «Системные операции»: микшер, температура, фраза «открой системные операции»
     ctx.tts = Tts(ctx)
     ctx.voice = Voice(ctx)
     ctx.ai = Ai(ctx)
+    ctx.images = Images(ctx)  # картинки Jarvis AI: «нарисуй…» в чате (OpenAI gpt-image-1)
     ctx.mcp = Mcp(ctx)
     ctx.browser = Browser(ctx)  # браузер Jarvis для агента (до агента: агент берёт его из ctx)
     ctx.agent = Agent(ctx)
@@ -65,8 +69,10 @@ START_ORDER = (
     "commands",
     "desks",
     "widgets",
+    "sysops",
     "tts",
     "ai",
+    "images",
     "mcp",
     "browser",
     "agent",

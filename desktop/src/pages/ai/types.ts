@@ -1,5 +1,5 @@
 // Типы раздела Jarvis AI (контракт ядра — docs/CONTRACTS.md §4; общие типы — @/api/types).
-import type { Chat, UiMessage } from "@/api/types";
+import type { Chat, GeneratedInfo, UiMessage } from "@/api/types";
 
 export type Mode = Chat["mode"];
 
@@ -29,6 +29,8 @@ export interface PendingReply {
   status: { kind: "thinking" | "searching" | "tool"; text: string } | null;
   tools: ToolRow[];
   memory: string[];
+  /** Картинки, нарисованные в этом ответе (событие chat.image), — видны ещё до конца ответа. */
+  images: { src: string; info?: GeneratedInfo }[];
   startedAt: number;
   /** Когда пришло последнее событие ответа — для сторожа «ядро замолчало». */
   updatedAt: number;

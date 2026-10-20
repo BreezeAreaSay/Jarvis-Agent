@@ -1,7 +1,20 @@
-// Строка ввода: [+] (картинка / новый чат / режим агента), растущее поле, модель, режим, микрофон
+// Строка ввода: [+] (картинка / нарисовать / новый чат / режим агента), растущее поле, модель, режим, микрофон
 // (диктовка через /api/voice/capture с живым текстом voice.partial) и «Отправить» / «■ Стоп». Пока в этом чате
 // работает агент (toAgent), текст уходит ему — поправкой или ответом на его вопрос; без текста — «■ Стоп».
-import { Bot, ImagePlus, MessageSquare, Mic, Plus, SendHorizontal, Settings2, Sparkles, Square, SquarePen, X } from "lucide-react";
+import {
+  Bot,
+  ImagePlus,
+  MessageSquare,
+  Mic,
+  Palette,
+  Plus,
+  SendHorizontal,
+  Settings2,
+  Sparkles,
+  Square,
+  SquarePen,
+  X,
+} from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/api/client";
 import { navigate } from "@/lib/router";
@@ -74,12 +87,18 @@ export const Composer = forwardRef<
     else drafts.delete(keyRef.current);
   }, [text]);
 
-  // поле растёт вместе с текстом (до ~7 строк)
+  // поле растёт вместе с текстом (до ~7 строк); вставили начало фразы из меню — курсор в конец
+  const caretToEnd = useRef(false);
   useLayoutEffect(() => {
     const el = area.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 168)}px`;
+    if (caretToEnd.current) {
+      caretToEnd.current = false;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
   }, [text]);
 
   const live = capturing && partial && partial.at >= captureStart.current ? partial.text : "";
@@ -148,6 +167,22 @@ export const Composer = forwardRef<
           },
         ]
       : []),
+    {
+      key: "draw",
+      label: "Нарисовать картинку",
+      hint: images.length ? "По приложенному фото" : "OpenAI gpt-image-1, ~30 секунд",
+      icon: <Palette />,
+      onSelect: () => {
+        // «сгенерируй …» — чату с инструментом generate_image (а «нарисуй …» в «Всё вместе» берёт агент)
+        const lead = images.length ? "Сгенерируй картинку по моему фото: " : "Сгенерируй картинку: ";
+        if (text.trim()) {
+          area.current?.focus(); // уже что-то написано — не трогаем
+          return;
+        }
+        caretToEnd.current = true;
+        setText(lead);
+      },
+    },
     { key: "new", label: "Новый чат", icon: <SquarePen />, onSelect: newChat },
     {
       key: "agent",

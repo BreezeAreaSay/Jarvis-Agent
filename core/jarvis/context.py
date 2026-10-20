@@ -20,6 +20,7 @@ from jarvis.settings import Secrets, SettingsStore
 
 if TYPE_CHECKING:
     from jarvis.ai.browser.service import Browser
+    from jarvis.ai.images import Images
     from jarvis.confirm import Confirmations
     from jarvis.retention import Retention
     from jarvis.scenarios.service import Scenarios
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
         VoiceService,
         WidgetService,
     )
+    from jarvis.widgets.sysops import SysOps
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -82,6 +84,7 @@ class AppContext:
         self.voice: VoiceService
         self.tts: TtsService
         self.ai: AiService
+        self.images: Images
         self.agent: AgentService
         self.browser: Browser
         self.notes: NotesService
@@ -91,6 +94,7 @@ class AppContext:
         self.scenarios: Scenarios
         self.retention: Retention
         self.widgets: WidgetService
+        self.sysops: SysOps
         self.desks: DeskService
         self.dispatcher: Dispatcher
 

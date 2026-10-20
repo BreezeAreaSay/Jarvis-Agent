@@ -291,6 +291,46 @@ class WindowsPlatform:
                 log.info("громкость сессии не изменена: %r", e)
         return changed > 0
 
+    @_guard("Не удалось прочитать громкость программ")
+    def app_volumes(self) -> list[dict[str, Any]]:
+        """Микшер: программы, у которых есть звук, — {app (имя процесса), title, level, muted, active}.
+        Несколько сессий одной программы (вкладки браузера) — одна строка."""
+        titles = {appmod.app_exe(a): a.name for a in self._apps.peek()}
+        own = self._own.pids()
+        rows: dict[str, dict[str, Any]] = {}
+        for pid, control in self._audio.sessions():
+            if pid:
+                try:
+                    exe = str(psutil.Process(pid).name())
+                except psutil.Error:
+                    continue
+                if not exe:
+                    continue
+                title = (
+                    "Jarvis"
+                    if pid in own
+                    else titles.get(exe.casefold()) or ntpath.splitext(exe)[0].replace("_", " ").title()
+                )
+            else:
+                exe, title = "system", "Системные звуки"
+            try:
+                level, muted, active = self._audio.session_volume(control)
+            except Exception as e:
+                log.debug("громкость сессии %s не прочитана: %r", exe, e)
+                continue
+            key = exe.casefold()
+            row = rows.get(key)
+            if row is None:
+                rows[key] = {"app": exe, "title": title, "level": level, "muted": muted, "active": active}
+            else:
+                row["level"] = max(row["level"], level)
+                row["muted"] = row["muted"] and muted
+                row["active"] = row["active"] or active
+        # звучащие сейчас — сверху, системные звуки — в конце
+        return sorted(
+            rows.values(), key=lambda r: (r["app"] == "system", not r["active"], r["title"].casefold())
+        )
+
     # --- медиа --------------------------------------------------------------------------------------------
 
     @_guard("Не удалось нажать медиаклавишу")

@@ -1,12 +1,31 @@
-// Правая часть: шапка чата («Погода и дела · GPT-5.4 Mini • Всё вместе»), лента сообщений с автопрокруткой,
-// приветствие и подсказки в пустом чате, карточка «Подключите ИИ», агент над полем ввода и само поле.
-import { AppWindow, ArrowDown, Brain, CloudSun, MessageSquareDashed, Newspaper, Plug, Sparkles } from "lucide-react";
+// Правая часть: шапка чата с живой сферой («Погода и дела · GPT-5.4 Mini • Всё вместе»), лента сообщений с
+// автопрокруткой, приветствие и подсказки в пустом чате, карточка «Подключите ИИ», агент над полем ввода и
+// само поле. Справа в широком окне — большая сфера Jarvis: слушает, думает, отвечает.
+import {
+  AppWindow,
+  ArrowDown,
+  Brain,
+  ChevronRight,
+  CloudSun,
+  Cpu,
+  Gauge,
+  MessageSquareDashed,
+  Palette,
+  Plug,
+  Sparkles,
+  Table2,
+} from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Orb } from "@/components/Orb";
+import { JarvisOrb, type OrbState } from "@/components/JarvisOrb";
+import { onEvent } from "@/api/events";
+import { levels } from "@/lib/levels";
 import { navigate } from "@/lib/router";
+import { heat, type Sensors, type SysStats, usePoll } from "@/pages/system/data";
 import { useApp } from "@/store/app";
 import { Button, cx, notifyError } from "@/ui";
+import { useWidgetData } from "@/widgets/common";
 import { AgentPanel } from "./AgentPanel";
+import { ImageViewer } from "./Images";
 import { Composer, type ComposerHandle } from "./Composer";
 import { AssistantMessage, ErrorBubble, PendingMessage, UserMessage } from "./Message";
 import { useAi } from "./store";
@@ -16,9 +35,28 @@ import { fmtTokens, fmtUsd, prettyModel } from "./util";
 const SUGGESTIONS = [
   { text: "Какая погода завтра?", icon: <CloudSun /> },
   { text: "Сверни все окна и включи музыку", icon: <AppWindow /> },
+  { text: "Сравни Петра I и Екатерину II таблицей", icon: <Table2 /> },
+  { text: "Сгенерируй картинку: неоновый город будущего", icon: <Palette /> },
   { text: "Запомни, что я не ем мясо", icon: <Brain /> },
-  { text: "Найди свежие новости про ИИ", icon: <Newspaper /> },
+  { text: "Как загружен компьютер?", icon: <Cpu /> },
 ];
+
+const ORB_TEXT: Record<OrbState, string> = {
+  idle: "На связи",
+  listening: "Слушаю…",
+  thinking: "Думаю…",
+  speaking: "Отвечаю…",
+};
+
+/** Состояние сферы: голос Jarvis (слушает, говорит) важнее; иначе — чат, который сейчас отвечает. */
+function useOrbState(chat: OrbState | undefined): OrbState {
+  const voice = useApp((s) => s.voiceState);
+  const [speaking, setSpeaking] = useState(levels.speaking);
+  useEffect(() => onEvent<{ speaking: boolean }>("tts.state", (e) => setSpeaking(!!e.data.speaking)), []);
+  if (speaking || voice === "speaking") return "speaking";
+  if (voice === "listening") return "listening";
+  return chat ?? (voice === "processing" ? "thinking" : "idle");
+}
 
 function Greeting({ onPick }: { onPick: (text: string) => void }) {
   const profile = useApp((s) => s.settings?.profile);
@@ -26,7 +64,7 @@ function Greeting({ onPick }: { onPick: (text: string) => void }) {
   return (
     <div className="ai-hello fade-in">
       <div className="ai-hello-orb" aria-hidden>
-        <Orb scale={0.4} logo />
+        <JarvisOrb scale={0.3} />
       </div>
       <h2 className="ai-hello-title">Чем могу помочь{who ? `, ${who}` : ""}?</h2>
       <p className="ai-hello-sub">Спросите что угодно, попросите выполнить команду на компьютере или поручите задачу агенту.</p>
@@ -38,6 +76,71 @@ function Greeting({ onPick }: { onPick: (text: string) => void }) {
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Ответ чата: пока пишется текст — «отвечает», до первого слова — «думает». */
+export function chatOrbState(t: Thread | undefined): OrbState | undefined {
+  if (!t?.pending && !t?.sending) return undefined;
+  return t.pending?.text ? "speaking" : "thinking";
+}
+
+/** Большая сфера справа (только в широком окне): состояние словами и подсказка, как позвать голосом. */
+export function OrbRail({ chatKey }: { chatKey: string }) {
+  const thread = useAi((s) => s.threads[chatKey]);
+  const state = useOrbState(chatOrbState(thread));
+  const wake = useApp((s) => s.settings?.profile.assistant_name?.trim() || "Джарвис");
+  const voiceOn = useApp((s) => s.voiceState !== "off" && s.voiceState !== "error");
+  return (
+    <aside className={cx("ai-rail", `is-${state}`)} aria-label="Jarvis">
+      <div className="ai-rail-orb">
+        <JarvisOrb state={state} scale={0.335} />
+      </div>
+      <div className="ai-rail-name">JARVIS</div>
+      <div className="ai-rail-state" role="status">
+        <span className="ai-rail-dot" />
+        {ORB_TEXT[state]}
+      </div>
+      <p className="ai-rail-hint">
+        {voiceOn ? `Скажите «${wake}» — отвечу голосом` : "Пишите — отвечу здесь; голос включается в настройках"}
+      </p>
+      <RailSystem />
+    </aside>
+  );
+}
+
+/** Мини-сводка системы под сферой: процессор, видеокарта, память с температурой — и вход в «Системные
+ *  операции». */
+function RailSystem() {
+  const { data: stats } = useWidgetData<SysStats>("system", {}, { refreshMs: 3000 });
+  const { data: sensors } = usePoll<Sensors>("/api/system/sensors", 5000);
+  if (!stats || stats.error) return null;
+  const gpu = stats.gpu ?? sensors?.gpu_load ?? null;
+  const rows = [
+    { label: "Процессор", value: stats.cpu, temp: sensors?.cpu_temp },
+    ...(gpu !== null ? [{ label: "Видеокарта", value: gpu, temp: sensors?.gpu_temp }] : []),
+    { label: "Память", value: stats.ram, temp: null },
+  ];
+  return (
+    <div className="ai-rail-sys">
+      {rows.map((r) => (
+        <div key={r.label} className="ai-rail-row">
+          <span className="ai-rail-label">{r.label}</span>
+          {r.temp !== null && r.temp !== undefined && (
+            <span className={cx("ai-rail-temp", heat(r.temp))}>{Math.round(r.temp)}°</span>
+          )}
+          <span className="ai-rail-val">{Math.round(r.value)}%</span>
+          <span className="ai-rail-bar">
+            <i style={{ width: `${Math.min(100, r.value)}%` }} />
+          </span>
+        </div>
+      ))}
+      <button type="button" className="ai-rail-link" onClick={() => navigate("system")}>
+        <Gauge />
+        Системные операции
+        <ChevronRight />
+      </button>
     </div>
   );
 }
@@ -225,6 +328,7 @@ export function ChatView({ chatKey }: { chatKey: string }) {
   const empty = t.loaded && !t.messages.length && !t.pending && !t.failure;
 
   const title = chat?.title || (chatKey === DRAFT ? "Новый чат" : t.loading ? "" : "Чат");
+  const orbState = useOrbState(chatOrbState(thread));
   const headMeta = useMemo(() => `${prettyModel(model)} • ${MODE_LABEL[mode]}`, [model, mode]);
 
   const onSend = (text: string, images: string[]) => {
@@ -287,6 +391,9 @@ export function ChatView({ chatKey }: { chatKey: string }) {
   return (
     <section className="ai-main" aria-label="Чат">
       <header className="ai-head">
+        <span className="ai-head-orb" aria-hidden>
+          <JarvisOrb state={orbState} rings={false} scale={0.44} />
+        </span>
         <span className="ai-head-title ellipsis">{title}</span>
         {chat?.kind === "voice" && <span className="chip">Голосом</span>}
         <span className="spacer" />
@@ -313,6 +420,7 @@ export function ChatView({ chatKey }: { chatKey: string }) {
         }}
         onModel={onModel}
       />
+      <ImageViewer />
     </section>
   );
 }

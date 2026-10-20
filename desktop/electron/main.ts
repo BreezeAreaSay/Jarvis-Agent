@@ -615,7 +615,14 @@ client.on("fullscreen.changed", (data) => {
   syncAvatar();
 });
 // «Джарвис, открой настройки» и т. п.: страница из команды Jarvis.ShowWindow → маршрут интерфейса
-const UI_PAGES: Record<string, string> = { settings: "settings", commands: "commands", chat: "ai", ai: "ai", home: "home" };
+const UI_PAGES: Record<string, string> = {
+  settings: "settings",
+  commands: "commands",
+  chat: "ai",
+  ai: "ai",
+  home: "home",
+  system: "system", // «Системные операции» (голосом: «открой системные операции»)
+};
 client.on("ui.show", (data) => showMain(UI_PAGES[String(data?.page ?? "")]));
 client.on("ui.hide", () => mainWin?.hide());
 client.on("desk.open", () => {

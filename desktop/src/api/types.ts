@@ -59,6 +59,10 @@ export interface Settings {
     max_utterance_s: number;
     confirm_by_voice: boolean;
     speak_confirmations: "short" | "off";
+    /** Приветствие, когда человек вернулся к компьютеру: news — только если есть что напомнить. */
+    presence_greeting: "off" | "news" | "always";
+    /** Столько минут без мыши и клавиатуры — «человек отошёл». */
+    presence_away_min: number;
   };
   tts: {
     engine: "piper" | "windows" | "edge" | "openai" | "fish" | "elevenlabs";

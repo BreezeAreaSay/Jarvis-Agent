@@ -28,6 +28,7 @@ _CHOICES = {
     "System.Screenshot": ("", "window"),
     "Jarvis.SilentMode": ("", "on", "off", "toggle"),
     "Jarvis.Microphone": ("", "on", "off", "toggle"),
+    "Info.System": ("", "full"),
 }
 
 

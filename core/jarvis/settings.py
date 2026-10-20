@@ -73,6 +73,10 @@ class VoiceSettings(_Model):
     max_utterance_s: int = Field(15, ge=3, le=60)
     confirm_by_voice: bool = True  # «да/нет» голосом для подтверждений команд
     speak_confirmations: Literal["short", "off"] = "short"  # озвучивать итог команд («Готово, сэр»)
+    # приветствие, когда человек вернулся к компьютеру (jarvis.voice.presence): off — нет, news — только если
+    # есть что сказать (напоминания), always — всегда; молчит над играми, в звонках и в тихом режиме
+    presence_greeting: Literal["off", "news", "always"] = "off"
+    presence_away_min: int = Field(20, ge=5, le=240)  # столько минут без ввода — «человек отошёл»
 
 
 class TtsSettings(_Model):

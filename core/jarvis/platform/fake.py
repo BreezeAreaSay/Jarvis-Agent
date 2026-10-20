@@ -195,6 +195,9 @@ class FakePlatform:
     def monitor_rect(self, hwnd: int) -> tuple[int, int, int, int] | None:
         return (0, 0, 1920, 1080)
 
+    def monitors(self) -> list[tuple[int, int, int, int]]:
+        return [(0, 0, 1920, 1080)]
+
     def screen_pixels(self, rect: tuple[int, int, int, int] | None = None) -> tuple[bytes, int, int]:
         """Экран в 6 раз мельче настоящего (как картинка screenshot): 1920×1080 → 320×180."""
         self._call("screen_pixels", rect)

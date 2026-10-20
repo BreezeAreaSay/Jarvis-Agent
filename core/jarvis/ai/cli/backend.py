@@ -986,9 +986,17 @@ class CliBackend:
 
     # --- агент ----------------------------------------------------------------------------------------------
     async def run_agent(
-        self, agent: "Agent", run: "AgentRun", *, system: str, first: str, specs: list[dict[str, Any]]
+        self,
+        agent: "Agent",
+        run: "AgentRun",
+        *,
+        system: str,
+        first: str,
+        specs: list[dict[str, Any]],
+        images: list[str] | None = None,
     ) -> str:
-        """Работа агента одним запуском программы: инструменты — действия агента; вернёт итог (finish)."""
+        """Работа агента одним запуском программы: инструменты — действия агента; вернёт итог (finish).
+        images — картинки экрана (data URL) к первому сообщению: их получает только программа с картинками."""
         from jarvis.ai.agent import AgentLimit
 
         problem = self.problem() or self._tools_problem()
@@ -1055,6 +1063,7 @@ class CliBackend:
                 prompt=first,
                 system=prompt.agent_system(system),
                 model=model,
+                images=list(images or []) if self.info.images else [],
                 mcp_url=self.ai.mcp_server.url,
                 mcp_headers=self.ai.mcp_server.headers(binding),
                 ephemeral=True,

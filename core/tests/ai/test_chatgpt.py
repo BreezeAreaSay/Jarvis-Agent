@@ -649,6 +649,11 @@ async def test_agent_step_limit_and_screenshot(
     thread = codex.threads[codex.turns[1]["thread"]]
     shot = next(t for t in thread["dynamicTools"] if t["name"] == "screenshot")
     assert backend.SCREENSHOT_HINT.strip() in shot["description"]
+    # картинка экрана — уже с первым сообщением хода; смотреть её (image() из exec) — после каждого действия
+    items = codex.turns[1]["items"]
+    assert [i["type"] for i in items] == ["text", "image"]
+    assert items[1]["url"].startswith("data:image/jpeg;base64,")
+    assert "после каждого действия передай её в image()" in thread["developerInstructions"]
 
 
 async def test_agent_needs_login(ctx: AppContext, codex: Codexes) -> None:

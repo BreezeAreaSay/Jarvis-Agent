@@ -246,7 +246,13 @@ async def test_agent_works_as_one_program_run(
     assert work["tools"][0]["name"] == "ui_click" and "«Написать»: нажато" in work["tools"][0]["text"]
     assert work["tools"][1]["text"].startswith("Проверка перед итогом")
     assert "--no-session-persistence" in work["argv"] and "агент" in work["system"]
-    assert "Задача: Открой новое письмо" in json.loads(work["stdin"])["message"]["content"][0]["text"]
+    content = json.loads(work["stdin"])["message"]["content"]
+    assert "Задача: Открой новое письмо" in content[0]["text"]
+    # Claude Code видит картинки: экран — уже с первым сообщением и после каждого действия
+    assert [c["type"] for c in content] == ["text", "image"] and content[1]["source"][
+        "media_type"
+    ] == "image/jpeg"
+    assert work["tools"][0]["images"] == 1
 
 
 async def test_agent_step_limit_kills_the_program(

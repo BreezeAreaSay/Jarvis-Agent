@@ -89,9 +89,10 @@ async def test_screen_of_the_second_monitor_and_png_fallback(
     ctx.settings.patch({"ai": {"vision": "on"}})
     _telegram(ui)
     platform: Any = ctx.platform
-    # слева 1920×1080, справа 2560×1440 — Telegram на правом: снимается только он
+    # слева 1920×1080, справа 2560×1440 — Telegram на правом: он крупно, левый — следом, мельче
     monkeypatch.setattr(platform, "virtual_screen", lambda: (0, 0, 4480, 1440))
     monkeypatch.setattr(platform, "monitor_rect", lambda hwnd: (1920, 0, 4480, 1440))
+    monkeypatch.setattr(platform, "monitors", lambda: [(0, 0, 1920, 1080), (1920, 0, 4480, 1440)])
     llm.add(
         PLAN,
         calls(("click_point", {"x": 100, "y": 50, "what": "поле поиска"})),
@@ -99,6 +100,17 @@ async def test_screen_of_the_second_monitor_and_png_fallback(
     )
     await _run(ctx, "Найди чат «Мама» в Telegram")
     assert ("screen_pixels", ((1920, 0, 4480, 1440),)) in platform.calls
+    assert ("screen_pixels", ((0, 0, 1920, 1080),)) in platform.calls
+    first = llm.requests[1]["messages"]
+    (picture,) = [m for m in first if m["role"] == "user" and isinstance(m["content"], list)]
+    texts = [p["text"] for p in picture["content"] if p["type"] == "text"]
+    images = [p for p in picture["content"] if p["type"] == "image_url"]
+    assert len(texts) == 2 and len(images) == 2  # оба монитора — одним сообщением
+    assert (
+        texts[0].startswith("Снимок экрана — 426×240")
+        and "Другие мониторы — следующими картинками (1)" in texts[0]
+    )
+    assert texts[1].startswith("Другой монитор (слева от основного) — 320×180 точек, только для обзора")
     # картинка 426×240 (правый монитор) → точка экрана на правом мониторе
     assert ("mouse_click", (2521, 300, "left", False)) in platform.calls
 
@@ -134,6 +146,39 @@ async def test_input_refused_when_another_program_comes_forward(
     assert "активное окно сменилось" in tool["content"] and "Spotify" in tool["content"]
     assert result.actions[-1] == {"title": "Нажать ctrl+a", "ok": False, "detail": "Окно сменилось"}
     assert result.outcome == "failed"
+
+
+async def test_failed_action_shows_the_screen_and_keeps_the_task_window(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
+) -> None:
+    ctx.settings.patch({"ai": {"vision": "on"}})
+    platform: Any = ctx.platform
+
+    async def run_text(text: str, source: str) -> Any:
+        for window in platform.windows:  # пока агент «думал», человек переключился на Spotify
+            window.foreground = window.exe == "Spotify.exe"
+        return None
+
+    ctx.commands.run_text = run_text  # type: ignore[method-assign]
+    llm.add(
+        PLAN,
+        calls(("run_command", {"text": "ничего"})),
+        calls(("press_keys", {"combo": "ctrl+a"})),
+        calls(("press_keys", {"combo": "ctrl+a"})),
+        calls(("finish", {"status": "failed", "summary": "Окно сменилось."})),
+    )
+    await _run(ctx, "Выдели всё")
+    # снимок после ошибки не делает Spotify окном задачи: и второе нажатие туда не ушло
+    assert not any(name == "press_keys" for name, _ in platform.calls)
+    messages = llm.requests[-1]["messages"]
+    refused = [m["content"] for m in messages if m["role"] == "tool"][-2:]
+    for content in refused:
+        assert "активное окно сменилось" in content
+        assert "Впереди теперь окно «Spotify Premium» (Spotify.exe), а работаешь ты с «Jarvis" in content
+    assert "[Снимок окна]" in refused[-1]
+    # и картинка экрана — к ошибке тоже
+    picture = messages[-1]
+    assert picture["role"] == "user" and picture["content"][0]["text"].startswith("Снимок экрана")
 
 
 async def test_jarvis_window_in_front_gives_focus_back(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi) -> None:
@@ -263,6 +308,9 @@ def test_vision_mapping_and_auto_detection() -> None:
     assert (shot.width, shot.height) == (1280, 886) and shot.url.startswith("data:image/jpeg;base64,")
     assert shot.to_screen(640, 443) == (1400, 950)
     assert shot.to_image(1400, 950) == (640, 443)
+    assert vision.side_of((1920, 0, 3840, 1080), (0, 0, 1920, 1080)) == "справа от основного"
+    assert vision.side_of((-2560, 0, 0, 1440), (0, 0, 1920, 1080)) == "слева от основного"
+    assert vision.side_of((0, -1080, 1920, 0), (0, 0, 1920, 1080)) == "над основным"
     assert vision.sees_images("openai", "gpt-5.4-mini", "auto") is True
     assert vision.sees_images("deepseek", "deepseek-v4-flash", "auto") is False
     assert vision.sees_images("ollama", "qwen2.5vl:7b", "auto") is True

@@ -97,6 +97,21 @@ def grab_pixels(rect: Rect | None = None) -> tuple[bytes, int, int, Any]:
         raise PlatformError("Не удалось снять экран") from e
 
 
+def monitors() -> list[Rect]:
+    """Все мониторы (left, top, right, bottom) — в тех же физических точках, что и снимки."""
+    try:
+        import mss
+    except ImportError as e:
+        raise PlatformError("Мониторы не узнать: нет модуля mss") from e
+    try:
+        with mss.MSS() as sct:
+            found = sct.monitors[1:]
+            return [(m["left"], m["top"], m["left"] + m["width"], m["top"] + m["height"]) for m in found]
+    except Exception as e:
+        log.warning("мониторы: %r", e)
+        raise PlatformError("Не удалось узнать мониторы") from e
+
+
 def grab_screen(rect: Rect | None = None) -> bytes:
     """PNG виртуального экрана (все мониторы) или прямоугольника экрана."""
     bgra, width, height, shot = grab_pixels(rect)

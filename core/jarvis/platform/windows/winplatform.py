@@ -185,6 +185,11 @@ class WindowsPlatform:
         """Монитор, на котором окно (или ближайший к нему): left, top, right, bottom — в точках снимка."""
         return self._win().monitor_rect(int(hwnd))
 
+    @_guard("Не удалось узнать мониторы")
+    def monitors(self) -> list[tuple[int, int, int, int]]:
+        """Все мониторы: left, top, right, bottom — в точках снимка."""
+        return screen.monitors()
+
     # --- звук ---------------------------------------------------------------------------------------------
 
     def _volume_keys(self, down: int, up: int) -> None:

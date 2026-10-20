@@ -1,5 +1,6 @@
 // Главный процесс Jarvis: ядро, окна (главное, оверлей поверх всего, аватар), трей, хоткеи, автозапуск.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -229,6 +230,7 @@ function createOverlay() {
     overlayWin?.webContents.send("overlay:bounds", overlayBounds());
     overlayWin?.webContents.send("overlay:main-focus", !!mainWin?.isFocused());
     syncOverlay();
+    syncOverlayCapture();
   });
   overlayWin.on("closed", () => (overlayWin = null));
   trackOverlayPointer();
@@ -261,6 +263,17 @@ function sendMainFocus() {
   if (!overlayWin || overlayWin.isDestroyed()) return;
   const focused = !!mainWin && !mainWin.isDestroyed() && mainWin.isVisible() && mainWin.isFocused();
   overlayWin.webContents.send("overlay:main-focus", focused);
+}
+
+// Пока работает агент, оверлей (его панель, курсор, тосты) не попадает на снимки экрана: агент видит всё, что
+// под ним. Только Windows 10 2004+ (сборка 19041): на старых окно на снимке было бы чёрным — во весь экран.
+const CAPTURE_EXCLUDE = process.platform === "win32" && Number(os.release().split(".")[2] ?? 0) >= 19041;
+const AGENT_BUSY = new Set(["planning", "running", "waiting"]);
+let agentBusy = false;
+
+function syncOverlayCapture() {
+  if (!overlayWin || overlayWin.isDestroyed() || !CAPTURE_EXCLUDE) return;
+  overlayWin.setContentProtection(agentBusy);
 }
 
 function syncOverlay() {
@@ -588,6 +601,8 @@ function applySettings(next: any) {
 
 client.on("hello", (data) => {
   voiceState = String(data?.voice?.state ?? "off");
+  agentBusy = false; // ядро (пере)запустилось — агент не работает; работает — пришлёт agent.state
+  syncOverlayCapture();
   applySettings(data.settings);
   void loadPluginHotkeys();
   if (!updatesStarted) {
@@ -609,6 +624,12 @@ client.on("plugin.summary.state", (data) => {
 client.on("plugin.subtitles.state", (data) => {
   subtitlesOn = !!data?.active;
   updateTrayLook();
+});
+client.on("agent.state", (data) => {
+  const busy = AGENT_BUSY.has(String(data?.status ?? ""));
+  if (busy === agentBusy) return;
+  agentBusy = busy;
+  syncOverlayCapture();
 });
 client.on("fullscreen.changed", (data) => {
   fullscreen = !!data.fullscreen;

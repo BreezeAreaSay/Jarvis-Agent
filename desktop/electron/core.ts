@@ -278,6 +278,8 @@ export class CoreClient {
             "voice.state",
             "plugin.summary.state",
             "plugin.subtitles.state",
+            // пока работает агент, оверлей не попадает на снимки экрана (агент видит, что под ним)
+            "agent.state",
           ],
         }),
       );

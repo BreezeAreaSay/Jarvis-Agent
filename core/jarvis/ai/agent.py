@@ -6,8 +6,9 @@ error): сообщение в чат режима «Агент» (или в ча
 вводит — agent.pointer: оверлей рисует «курсор агента» отдельно от курсора человека.
 
 Как агент видит окно: элементы UI Automation (jarvis.ai.uia) окна впереди — никогда не окна Jarvis; если
-элементов мало (Telegram, игры, нестандартные окна) и модель понимает картинки (ai.vision: auto / on / off) —
-ещё и снимок самого окна с метками элементов и сеткой (jarvis.ai.vision). Действует: по id элемента (шаблонами
+модель понимает картинки (ai.vision: auto / on / off) — ещё и картинка всего экрана после каждого действия
+(и неудачного тоже): монитор окна впереди с метками элементов и сеткой, другие мониторы — мельче
+(jarvis.ai.vision). Экран не снять — картинка самого окна. Действует: по id элемента (шаблонами
 UI Automation, без мыши), по точке снимка (click_point — короткий настоящий клик, курсор человека
 возвращается), клавишами, вводом текста, прокруткой, командами Jarvis, адресами (https:, tg:, ms-settings:,
 spotify:, mailto:) и инструментами подключённых серверов MCP. Перед каждым вводом проверяет, что впереди окно
@@ -80,8 +81,7 @@ ACTION_TIMEOUT = APPROVAL_TIMEOUT + 60.0  # действие вместе с о�
 RUN_DEADLINE_S = 30 * 60.0  # вся работа агента
 FINISHED = ("done", "stopped", "error")
 OUTCOMES = ("done", "partial", "failed")
-POOR_ELEMENTS = 6  # меньше интерактивных элементов — окно плохо видно UI Automation, к снимку нужна картинка
-OPAQUE_EXES = frozenset({"telegram.exe", "ayugram.exe", "kotatogram.exe", "64gram.exe"})
+MAX_OTHER_MONITORS = 3  # другие мониторы на картинках (обзор), кроме монитора окна впереди
 URL_SCHEMES = ("http://", "https://", *APP_SCHEMES)
 MAX_MCP_RESULT = 8000
 TOAST_RECHECK_S = 60.0  # нет доступа к уведомлениям Windows — снова спросить не раньше чем через минуту
@@ -157,8 +157,9 @@ AGENT_PROMPT = """Ты — агент Jarvis: сам выполняешь зад
 - После каждого действия приходит свежий снимок: элементы окна впереди с id (e1, e2…), типом, именем \
 и координатами. После действия старые id устаревают.
 - Если ты понимаешь картинки, к снимку прикладывается картинка всего экрана: окно впереди обведено, его \
-элементы подписаны метками e…, сетка координат через 100 точек. Смотри на неё после каждого действия: что \
-открылось, что всплыло (окна, уведомления, ошибки), что изменилось. Крупно одно окно — screenshot.
+элементы подписаны метками e…, сетка координат через 100 точек; мониторов несколько — остальные следом, \
+мельче. Смотри на неё после каждого действия, и неудачного тоже: что открылось, что всплыло (окна, \
+уведомления, ошибки), что изменилось. Крупно одно окно — screenshot.
 - Нужного элемента нет в снимке (окно плохо видно UI Automation: Telegram, игры, нестандартные окна) — \
 смотри на картинку и жми click_point по координатам картинки.
 - Какие окна появились или закрылись и новые уведомления Windows приходят текстом рядом со снимком.
@@ -219,8 +220,9 @@ CONTINUE_PROMPT = """Продолжение той же задачи: «{task}»
 Учти это и продолжай работу; в конце вызови finish."""
 
 STEP_PARAM = {"type": "integer", "description": "Номер шага плана, который ты сейчас выполняешь"}
-# что снимать агенту (монитор окна впереди или весь экран: left, top, right, bottom) и виртуальный экран
-ScreenArea = tuple[vision.Rect, tuple[int, int, int, int]]
+# что снимать агенту: монитор окна впереди или весь экран (left, top, right, bottom), виртуальный экран
+# (left, top, width, height) и другие мониторы — для обзора
+ScreenArea = tuple[vision.Rect, tuple[int, int, int, int], list[vision.Rect]]
 
 
 class AgentLimit(UserFacingError):
@@ -900,13 +902,21 @@ class Agent(BaseService):
         system = AGENT_PROMPT.format(now=now_text(), address_rule=address_rule)
         first, extras = await self._first_message(run, windows)
         if chatgpt is not None:
-            # у Codex и программ человека первое сообщение — только текст: картинку модель попросит сама
+            # картинка экрана — с первым сообщением хода (программа без картинок обойдётся текстом)
             specs = self._specs(run)
-            summary = str(await chatgpt.run_agent(self, run, system=system, first=first, specs=specs))
+            summary = str(
+                await chatgpt.run_agent(
+                    self, run, system=system, first=first, specs=specs, images=_image_urls(extras)
+                )
+            )
             while run.notes and not run.closing and run.count < limit and time.monotonic() < run.deadline:
                 # модель закончила без finish, а человек тем временем перебил — ещё заход с его репликой
-                again = await self._continuation(run)
-                summary = str(await chatgpt.run_agent(self, run, system=system, first=again, specs=specs))
+                again, extras = await self._continuation(run)
+                summary = str(
+                    await chatgpt.run_agent(
+                        self, run, system=system, first=again, specs=specs, images=_image_urls(extras)
+                    )
+                )
             return summary
         assert llm is not None
         messages: list[dict[str, Any]] = [
@@ -1094,14 +1104,14 @@ class Agent(BaseService):
         log.info("агент: прогон сохранён сценарием «%s»", name)
         return item
 
-    async def _continuation(self, run: AgentRun) -> str:
+    async def _continuation(self, run: AgentRun) -> tuple[str, list[dict[str, Any]]]:
         """Первое сообщение нового захода (Codex, программы человека): задача, что сделано, реплика
-        человека и свежий снимок."""
+        человека и свежий снимок (с картинкой экрана)."""
         notes = self._take_notes(run)
         done = ", ".join(a["title"] for a in run.actions if a.get("ok")) or "ничего"
-        text, _ = await self._look(run)
+        text, extras = await self._look(run)
         head = CONTINUE_PROMPT.format(task=one_line(run.task, 300), done=one_line(done, 600), notes=notes)
-        return f"{head}\n\n{text}"
+        return f"{head}\n\n{text}", extras
 
     def finish_summary(self, run: AgentRun, args: dict[str, Any]) -> str:
         """Итог из finish: текст для чата и оценка (done / partial / failed); зовут и бэкенды Codex и CLI."""
@@ -1158,6 +1168,7 @@ class Agent(BaseService):
         self._set(run, "running", doing)
         work = asyncio.ensure_future(action.run(run, args))
         run.acting.add(work)
+        look = False  # действие на экране сорвалось — модели свежий снимок: что там сейчас
         try:
             outcome = await asyncio.wait_for(work, ACTION_TIMEOUT)
         except asyncio.CancelledError:
@@ -1172,14 +1183,14 @@ class Agent(BaseService):
         except Denied as e:
             outcome = Outcome(False, str(e), "Отклонено")
         except WindowChanged as e:
-            outcome = Outcome(False, f"Ошибка: {e}", "Окно сменилось")
+            outcome, look = Outcome(False, f"Ошибка: {e}", "Окно сменилось"), True
         except (PlatformError, UserFacingError) as e:
-            outcome = Outcome(False, f"Ошибка: {e}", str(e))
+            outcome, look = Outcome(False, f"Ошибка: {e}", str(e)), True
         except TimeoutError:
-            outcome = Outcome(False, "Ошибка: действие не завершилось вовремя", "Не успело")
+            outcome, look = Outcome(False, "Ошибка: действие не завершилось вовремя", "Не успело"), True
         except Exception as e:
             log.exception("действие агента %s упало", call.name)
-            outcome = Outcome(False, f"Ошибка: {e}", str(e))
+            outcome, look = Outcome(False, f"Ошибка: {e}", str(e)), True
         finally:
             run.acting.discard(work)
         status = "ok" if outcome.ok else "error"
@@ -1195,6 +1206,11 @@ class Agent(BaseService):
             if outcome.detail:
                 card["detail"] = outcome.detail
             run.actions.append(card)
+        if look and call.name in self._actions and not run.stopping:
+            # окно задачи прежнее: сменилось окно впереди — вводить в него можно только после ui_snapshot
+            seen = await self._look_safely(run)
+            if seen is not None:
+                outcome = Outcome(False, f"{outcome.content}\n\n{seen[0]}", outcome.detail, seen[1])
         # реплика человека посреди работы (модель узнаёт сразу, с ответом на это действие) и план (составлялся
         # параллельно) — до снимка окна: устаревшие снимки вырезаются (_prune), а они должны остаться
         head: list[str] = []
@@ -1322,11 +1338,6 @@ class Agent(BaseService):
         if snap is not None and snap.pid and fg.pid and snap.pid != fg.pid:
             raise WindowChanged("снимок окна устарел (впереди другое окно) — сделай ui_snapshot")
 
-    def _poor(self, snapshot: UiSnapshot | None, fg: WindowInfo) -> bool:
-        if snapshot is None or fg.exe.casefold() in OPAQUE_EXES:
-            return True
-        return sum(1 for e in snapshot.elements if e.kind != "Text") < POOR_ELEMENTS
-
     async def _shot(self, run: AgentRun, fg: WindowInfo, snapshot: UiSnapshot | None) -> vision.Shot | None:
         rect = fg.rect
         if fg.minimized or rect[2] - rect[0] < 20 or rect[3] - rect[1] < 20:
@@ -1369,16 +1380,26 @@ class Agent(BaseService):
                 parts.append(commands)
         return "\n\n".join(parts)
 
-    async def _look(self, run: AgentRun, *, force_shot: bool = False) -> tuple[str, list[dict[str, Any]]]:
+    async def _look(
+        self, run: AgentRun, *, force_shot: bool = False, keep_target: bool = False
+    ) -> tuple[str, list[dict[str, Any]]]:
         """Снимок окна впереди (не окна Jarvis): текст для модели и, если модель понимает картинки, картинка
-        экрана (или крупно окна — screenshot)."""
+        экрана (или крупно окна — screenshot). keep_target — окно задачи не менять (снимок после сорвавшегося
+        действия или ответа на вопрос): вводить в другое окно впереди можно только после ui_snapshot."""
         fg = await self._foreground()
         parts: list[str] = []
         if fg is not None:
             previous = run.target
             if previous is not None and previous.pid != fg.pid:
-                parts.append(f"Впереди теперь окно «{fg.title}» ({fg.exe}); было «{previous.title}».")
-            run.target = fg
+                if keep_target:
+                    parts.append(
+                        f"Впереди теперь окно «{fg.title}» ({fg.exe}), а работаешь ты с «{previous.title}»: "
+                        "действовать здесь — сначала ui_snapshot, вернуться — focus_window."
+                    )
+                else:
+                    parts.append(f"Впереди теперь окно «{fg.title}» ({fg.exe}); было «{previous.title}».")
+            if not keep_target or previous is None:
+                run.target = fg
             hint = self._new_playbook(run, fg)
             if hint:
                 parts.append(hint)  # до снимка: устаревшие снимки скрываются, подсказка остаётся
@@ -1403,12 +1424,22 @@ class Agent(BaseService):
         extras: list[dict[str, Any]] = []
         if run.vision:
             # весь экран — после каждого действия; крупно окно — по screenshot или когда экран не снять
-            shot = await self._screen(run, fg, snapshot, grab, area) if grab is not None and area else None
-            if shot is None and fg is not None and (force_shot or self._poor(snapshot, fg)):
+            shots = await self._screen(run, fg, snapshot, grab, area) if grab is not None and area else []
+            if not shots and fg is not None:
                 shot = await self._shot(run, fg, snapshot)
-            if shot is not None:
-                extras.append(vision.message(shot))
+                shots = [shot] if shot is not None else []
+            if shots:
+                extras.append(vision.message(shots[0], others=shots[1:]))
         return "\n\n".join(parts), extras
+
+    async def _look_safely(self, run: AgentRun) -> tuple[str, list[dict[str, Any]]] | None:
+        """Снимок вдобавок к ответу действия (оно сорвалось, человек ответил на вопрос); окно задачи —
+        прежнее. Не вышло — None: ответ уходит модели и без снимка."""
+        try:
+            return await self._look(run, keep_target=True)
+        except Exception:
+            log.exception("снимок для агента не получился")
+            return None
 
     async def _windows_change(self, run: AgentRun) -> str:
         """Экран текстом (и для моделей без картинок): какие окна появились и закрылись с прошлого снимка —
@@ -1461,7 +1492,8 @@ class Agent(BaseService):
         return untrusted("Новые уведомления Windows", "\n".join(lines)) if lines else ""
 
     def _area_sync(self, hwnd: int | None) -> ScreenArea:
-        """Что снимать (монитор окна впереди или весь экран) и виртуальный экран — одним вызовом платформы."""
+        """Что снимать (монитор окна впереди или весь экран), виртуальный экран и другие мониторы — одним
+        вызовом платформы."""
         platform = self.ctx.platform
         left, top, width, height = (int(v) for v in platform.virtual_screen())
         virtual = (left, top, width, height)
@@ -1470,7 +1502,21 @@ class Agent(BaseService):
             with contextlib.suppress(PlatformError, AttributeError, TypeError, ValueError):
                 found = platform.monitor_rect(hwnd)
                 monitor = (int(found[0]), int(found[1]), int(found[2]), int(found[3])) if found else None
-        return vision.screen_part(virtual, monitor), virtual
+        part = vision.screen_part(virtual, monitor)
+        others: list[vision.Rect] = []
+        if part != (left, top, left + width, top + height):
+            with contextlib.suppress(PlatformError, AttributeError, TypeError, ValueError):
+                for found in platform.monitors() or []:
+                    rect = (int(found[0]), int(found[1]), int(found[2]), int(found[3]))
+                    inside = (
+                        part[0] <= rect[0]
+                        and part[1] <= rect[1]
+                        and rect[2] <= part[2]
+                        and rect[3] <= part[3]
+                    )
+                    if not inside and rect[2] - rect[0] >= 100 and rect[3] - rect[1] >= 100:
+                        others.append(rect)
+        return part, virtual, others[:MAX_OTHER_MONITORS]
 
     async def _screen_area(self, fg: WindowInfo | None) -> ScreenArea | None:
         try:
@@ -1480,11 +1526,25 @@ class Agent(BaseService):
             return None
 
     async def _grab(self, area: ScreenArea) -> tuple[str, Any]:
-        """Пиксели только нужного монитора (без PNG) — в пуле ввода-вывода; платформа без них — PNG экрана."""
+        """Пиксели монитора окна впереди и других мониторов (без PNG) — в пуле ввода-вывода, параллельно;
+        платформа без них — PNG экрана (только нужный монитор)."""
         platform = self.ctx.platform
         pixels = getattr(platform, "screen_pixels", None)
         if callable(pixels):
-            return "pixels", await self.ctx.run_io(pixels, area[0])
+            main, *others = await asyncio.gather(
+                self.ctx.run_io(pixels, area[0]),
+                *(self.ctx.run_io(pixels, rect) for rect in area[2]),
+                return_exceptions=True,
+            )
+            if isinstance(main, BaseException):
+                raise main
+            # другой монитор не снялся — без него
+            seen = [
+                (r, data)
+                for r, data in zip(area[2], others, strict=True)
+                if not isinstance(data, BaseException)
+            ]
+            return "pixels", (main, seen)
         return "png", await self.ctx.run_platform(platform.screenshot, None)
 
     async def _screen(
@@ -1494,35 +1554,42 @@ class Agent(BaseService):
         snapshot: UiSnapshot | None,
         grab: "asyncio.Future[tuple[str, Any]]",
         area: ScreenArea,
-    ) -> vision.Shot | None:
-        """Снимок экрана (монитора с окном впереди) с обведённым окном и метками его элементов; окна впереди
-        нет (рабочий стол) — весь экран."""
+    ) -> list[vision.Shot]:
+        """Снимок экрана (монитора с окном впереди) с обведённым окном и метками его элементов, следом —
+        другие мониторы мельче; окна впереди нет (рабочий стол) — весь экран. Не вышло — []."""
         try:
             kind, data = await grab
         except (PlatformError, AttributeError, TypeError, ValueError) as e:
             log.info("снимок экрана для агента не получился: %s", e)
-            return None
-        part, virtual = area
+            return []
+        part, virtual, _others = area
         elements = snapshot.elements if snapshot is not None and fg is not None else []
         focus, title = (fg.rect, fg.title) if fg is not None else (None, "")
 
-        def render() -> vision.Shot:
+        def render() -> list[vision.Shot]:
             if kind == "pixels":
-                bgra, width, height = data
-                return vision.render_pixels(
-                    bgra, (int(width), int(height)), part, focus=focus, elements=elements, title=title
-                )
-            return vision.render_screen(
+                (bgra, width, height), others = data
+                shots = [
+                    vision.render_pixels(
+                        bgra, (int(width), int(height)), part, focus=focus, elements=elements, title=title
+                    )
+                ]
+                for rect, (pixels, w, h) in others:
+                    with contextlib.suppress(Exception):
+                        shots.append(vision.render_other(pixels, (int(w), int(h)), rect, part))
+                return shots
+            shot = vision.render_screen(
                 data, virtual, monitor=part, focus=focus, elements=elements, title=title
             )
+            return [shot]
 
         try:
-            shot = await self.ctx.run_io(render)
+            shots = await self.ctx.run_io(render)
         except Exception:
             log.exception("снимок экрана не подготовлен")
-            return None
-        run.shot = shot
-        return shot
+            return []
+        run.shot = shots[0]
+        return shots
 
     async def _observe(self, run: AgentRun, delay: float, result: str, detail: str = "") -> Outcome:
         if delay > 0:
@@ -1877,7 +1944,7 @@ class Agent(BaseService):
             Action(
                 "ui_snapshot",
                 "Снимок окна впереди: интерактивные элементы (кнопки, поля, ссылки, пункты меню…) с id "
-                "и список открытых окон; если ты понимаешь картинки и окно плохо видно — ещё и картинка.",
+                "и список открытых окон; если ты понимаешь картинки — ещё и картинка экрана.",
                 {},
                 [],
                 self._ui_snapshot,
@@ -2062,13 +2129,19 @@ class Agent(BaseService):
             run.question = None
         self._set(run, "running", previous)  # не в finally: «Стоп» посреди ожидания — сразу «Остановлено»
         if not answer:
-            return Outcome(
-                True,
+            content = (
                 "Пользователь не ответил. Реши сам, если это безопасно, или закончи (finish, status=partial) "
-                "и объясни, чего не хватило.",
-                "Без ответа",
+                "и объясни, чего не хватило."
             )
-        return Outcome(True, f"Ответ пользователя: «{one_line(answer, 500)}»", one_line(answer, 60))
+        else:
+            content = f"Ответ пользователя: «{one_line(answer, 500)}»"
+        # пока человек отвечал, экран мог измениться (он что-то открыл или закрыл) — свежий снимок
+        seen = await self._look_safely(run) if not run.stopping else None
+        if seen is not None:
+            content = f"{content}\n\n{seen[0]}"
+        return Outcome(
+            True, content, one_line(answer, 60) if answer else "Без ответа", seen[1] if seen else []
+        )
 
     async def _answer(self, run: AgentRun, question: str) -> str:
         assert run.question is not None
@@ -2120,6 +2193,19 @@ def _window_point(point: tuple[int, int] | None, window: WindowInfo | None) -> s
     x = sx - left if sx - left <= right - sx else min(-1, sx - right)
     y = sy - top if sy - top <= bottom - sy else min(-1, sy - bottom)
     return f"{name} | {x} {y}"
+
+
+def _image_urls(extras: list[dict[str, Any]]) -> list[str]:
+    """data URL картинок из сообщений со снимком (vision.message) — для первого сообщения хода Codex
+    и программ человека."""
+    urls: list[str] = []
+    for message in extras:
+        content = message.get("content")
+        for part in content if isinstance(content, list) else []:
+            url = (part.get("image_url") or {}).get("url") if isinstance(part, dict) else None
+            if isinstance(url, str) and url.startswith("data:image/"):
+                urls.append(url)
+    return urls
 
 
 def _prune(messages: list[dict[str, Any]]) -> None:

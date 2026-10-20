@@ -149,6 +149,10 @@ class AiSettings(_Model):
     vision: Literal["auto", "on", "off"] = "auto"
     agent_confirm: Literal["risky", "always"] = "risky"
     max_agent_steps: int = Field(25, ge=3, le=100)
+    agent_notes: bool = (
+        True  # агент запоминает, что в программе не сработало и как получилось (ai/lessons.py)
+    )
+    agent_journal: bool = True  # шаги агента и снимки экрана — в журнал на этом компьютере (ai/journal.py)
     monthly_budget: float = Field(0.0, ge=0.0)  # лимит расходов в месяц, $; 0 — без лимита
     folder_id: str = ""  # ID каталога Yandex Cloud (для YandexGPT)
     # разрешения инструментов ИИ по имени: allow / ask / deny; auto или нет записи — по риску (ai/policy.py)

@@ -235,6 +235,18 @@ export default function AiSection() {
             onCommit={(v) => patch({ ai: { max_agent_steps: Math.round(v) } })}
           />
         </Setting>
+        <Setting
+          name="Заметки о программах"
+          desc="Что в программе не сработало и как получилось — агент учтёт в следующий раз"
+        >
+          <Toggle checked={ai.agent_notes} onChange={(v) => patch({ ai: { agent_notes: v } })} label="Заметки" />
+        </Setting>
+        <Setting
+          name="Журнал работы"
+          desc="Шаги и снимки экрана — «Как он это делал» у итога. Последние 30 работ, только на этом компьютере"
+        >
+          <Toggle checked={ai.agent_journal} onChange={(v) => patch({ ai: { agent_journal: v } })} label="Журнал" />
+        </Setting>
       </Card>
 
       <UsageCard />

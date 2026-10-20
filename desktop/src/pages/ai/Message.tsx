@@ -1,6 +1,6 @@
 // Сообщения чата: пузырь человека (акцент), ответ ассистента (аватар, Markdown, «Выполнено ✓», источники,
-// «Запомнил: …», ошибка с «Повторить», у удачного дела агента — «Запомнить как сценарий») и ответ, который
-// пишется прямо сейчас.
+// «Запомнил: …», ошибка с «Повторить», у удачного дела агента — «Запомнить как сценарий», у любого — «Как он
+// это делал» и что он запомнил о программе) и ответ, который пишется прямо сейчас.
 import {
   Bot,
   Brain,
@@ -10,6 +10,8 @@ import {
   CircleX,
   Copy,
   Globe,
+  History,
+  Lightbulb,
   RotateCcw,
   Sparkles,
   Square,
@@ -21,6 +23,7 @@ import { api } from "@/api/client";
 import { bridge } from "@/lib/bridge";
 import { navigate } from "@/lib/router";
 import { Button, cx, Dots, notify, notifyError } from "@/ui";
+import { AgentJournal } from "./AgentJournal";
 import { Markdown } from "./Markdown";
 import { LOOKUP_TOOL } from "./store";
 import type { MetaExtra, PendingReply, ThreadMessage, ToolRow } from "./types";
@@ -239,6 +242,33 @@ export const UserMessage = memo(function UserMessage({ m }: { m: ThreadMessage }
   );
 });
 
+// --- «Как он это делал»: журнал работы агента — шаги и экран после каждого --------------------------------
+function JournalButton({ runId }: { runId: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button size="sm" variant="ghost" icon={<History />} onClick={() => setOpen(true)}>
+        Как он это делал
+      </Button>
+      {open && <AgentJournal runId={runId} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+// --- «Запомнил о программе: …» — агент учтёт в следующий раз ----------------------------------------------
+function LessonChip({ app, text }: { app: string; text: string }) {
+  return (
+    <div className="ai-bubble ai-memory ai-lesson" title="Агент учтёт это в следующий раз (Приватность — очистить)">
+      <span className="mem-icon">
+        <Lightbulb />
+      </span>
+      <span>
+        Запомнил о «{app}»: {text}
+      </span>
+    </div>
+  );
+}
+
 // --- «Запомнить как сценарий»: те же шаги в следующий раз — сразу, без ИИ --------------------------------
 function RecipeButton({ m }: { m: ThreadMessage }) {
   const recipe = m.meta?.recipe;
@@ -302,6 +332,7 @@ export const AssistantMessage = memo(function AssistantMessage({
         {(meta.memory ?? []).map((t) => (
           <MemoryChip key={t} text={t} />
         ))}
+        {meta.lesson && <LessonChip app={meta.lesson.app} text={meta.lesson.text} />}
         {meta.error && <ErrorBubble error={meta.error} onRetry={onRetry} />}
         {extra.stopped && !meta.error && (
           <div className="ai-stopped">
@@ -313,6 +344,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             <span className="faint tiny">{fmtTime(m.created)}</span>
             <CopyButton text={m.content} />
             <RecipeButton m={m} />
+            {extra.agent?.journal && <JournalButton runId={extra.agent.run_id} />}
           </div>
         )}
       </div>

@@ -4,8 +4,10 @@
 
 from typing import Any
 
+import httpx
 import pytest
 
+from jarvis.ai import agent as agent_module
 from jarvis.ai import playbooks, policy, vision
 from jarvis.ai.uia import UiElement
 from jarvis.context import AppContext
@@ -120,6 +122,168 @@ async def test_screen_of_the_second_monitor_and_png_fallback(
     llm.add(PLAN, calls(("finish", {"status": "partial", "summary": "Посмотрел."})))
     await _run(ctx, "Посмотри Telegram")
     assert ("screenshot", (None,)) in platform.calls
+
+
+async def test_zoom_shows_a_piece_of_the_screen_and_click_point_uses_it(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
+) -> None:
+    ctx.settings.patch({"ai": {"vision": "on"}})
+    _telegram(ui)
+    llm.add(
+        PLAN,
+        calls(("zoom", {"x": 100, "y": 50, "width": 40, "height": 20})),
+        calls(("click_point", {"x": 60, "y": 30, "what": "ссылка"})),
+        calls(("finish", {"status": "partial", "summary": "Нажал."})),
+    )
+    await _run(ctx, "Открой ссылку в Telegram")
+    platform: Any = ctx.platform
+    # картинка экрана 320×180 ↔ экран 1920×1080: кусок 40×20 картинки — 240×120 точек экрана
+    assert ("screen_pixels", ((600, 300, 840, 420),)) in platform.calls
+    after_zoom = llm.requests[-2]["messages"]
+    pictures = [m for m in after_zoom if m["role"] == "user" and isinstance(m["content"], list)]
+    # лупа и картинка экрана, по которой её навели, — обе в контексте
+    assert [p["content"][0]["text"].split(" ")[0] for p in pictures] == ["Снимок", "Лупа:"]
+    zoom = pictures[-1]["content"][0]["text"]
+    assert zoom.startswith("Лупа: кусок экрана 240×120 точек") and "картинка 120×60" in zoom
+    # точка лупы (60, 30) из 120×60 → середина куска экрана
+    assert ("mouse_click", (720, 360, "left", False)) in platform.calls
+
+
+async def test_what_changed_on_the_screen_is_outlined(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx.settings.patch({"ai": {"vision": "on"}})
+    platform: Any = ctx.platform
+    frames = {"n": 0}
+
+    def screen_pixels(rect: Any = None) -> tuple[bytes, int, int]:
+        # экран 320×180 (1920×1080 в 6 раз мельче): с третьего снимка — светлое окно 80×40 вверху слева
+        frames["n"] += 1
+        width, height = 320, 180
+        pixels = bytearray(bytes([38, 28, 24, 255]) * (width * height))
+        if frames["n"] >= 3:
+            for y in range(20, 60):
+                for x in range(40, 120):
+                    pixels[(y * width + x) * 4 : (y * width + x) * 4 + 3] = b"\xf0\xf0\xf0"
+        return bytes(pixels), width, height
+
+    monkeypatch.setattr(platform, "screen_pixels", screen_pixels)
+    llm.add(
+        PLAN,
+        calls(("press_keys", {"combo": "ctrl+n"})),  # ничего не изменилось
+        calls(("press_keys", {"combo": "ctrl+n"})),  # открылось окно
+        calls(("finish", {"status": "partial", "summary": "Открыл."})),
+    )
+    await _run(ctx, "Новое письмо")
+
+    def caption(body: dict[str, Any]) -> str:
+        pictures = [m for m in body["messages"] if m["role"] == "user" and isinstance(m["content"], list)]
+        return str(pictures[-1]["content"][0]["text"])
+
+    steps = [body for body in llm.requests if "response_format" not in body]
+    assert "с прошлого снимка" not in caption(steps[0])  # первый снимок сравнивать не с чем
+    assert caption(steps[1]).endswith("С прошлого снимка на экране ничего не изменилось.")
+    assert caption(steps[2]).endswith("Зелёным обведено, что изменилось с прошлого снимка (1).")
+
+
+async def test_waits_while_the_window_is_changing(ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
+    agent: Any = ctx.agent
+    platform: Any = ctx.platform
+    monkeypatch.setattr(agent_module, "SETTLE_POLL_S", 0.0)
+    run = agent_module.AgentRun("r1", "Открой почту", "text", "c1", "t1", "m1", False)
+    grabbed: list[Any] = []
+
+    def frames(blocks: list[int]) -> Any:
+        """Кадры окна 128×72: в кадре i светлые полосы blocks[: i + 1] (каждая — 16 точек в ширину)."""
+
+        def screen_pixels(rect: Any = None) -> tuple[bytes, int, int]:
+            grabbed.append(rect)
+            shown = blocks[: len(grabbed)]
+            pixels = bytearray(bytes([30, 30, 30, 255]) * (128 * 72))
+            for block in shown:
+                for y in range(72):
+                    for x in range(block * 16, block * 16 + 16):
+                        pixels[(y * 128 + x) * 4 : (y * 128 + x) * 4 + 3] = b"\xe0\xe0\xe0"
+            return bytes(pixels), 128, 72
+
+        return screen_pixels
+
+    # окно грузится: три кадра подряд что-то новое, потом — тот же кадр: ждём до него (4 снимка окна)
+    monkeypatch.setattr(platform, "screen_pixels", frames([0, 1, 2, 2, 2, 2, 2]))
+    await agent._settle(run, 5.0)
+    assert len(grabbed) == 4 and set(grabbed) == {(300, 80, 1600, 980)}  # снимается окно впереди
+
+    # мигает одно и то же место (видео, крутилка): не загрузка — не ждём
+    grabbed.clear()
+    blink: list[int] = []
+
+    def blinking(rect: Any = None) -> tuple[bytes, int, int]:
+        grabbed.append(rect)
+        blink.append(len(blink) % 2)
+        pixels = bytearray(bytes([30, 30, 30, 255]) * (128 * 72))
+        if blink[-1]:
+            for y in range(72):
+                for x in range(32):
+                    pixels[(y * 128 + x) * 4 : (y * 128 + x) * 4 + 3] = b"\xe0\xe0\xe0"
+        return bytes(pixels), 128, 72
+
+    monkeypatch.setattr(platform, "screen_pixels", blinking)
+    await agent._settle(run, 5.0)
+    assert len(grabbed) == 3
+
+    # меняется без конца — не дольше предела
+    grabbed.clear()
+    monkeypatch.setattr(platform, "screen_pixels", frames(list(range(8)) * 100))
+    await agent._settle(run, 0.0001)
+    assert len(grabbed) <= 2
+
+
+def test_changes_between_screen_signatures() -> None:
+    cols, rows = 8, 6
+    before = bytes([30] * (cols * rows))
+
+    def with_cells(*cells: tuple[int, int]) -> bytes:
+        data = bytearray(before)
+        for r, c in cells:
+            data[r * cols + c] = 200
+        return bytes(data)
+
+    assert vision.changes(before, before, cols) == []
+    assert vision.changes(before, with_cells((0, 0)), cols) == []  # одна клетка — мелочь (часы, курсор)
+    # соседние и через одну клетки — одна область; дальняя — другая
+    found = vision.changes(before, with_cells((1, 1), (1, 2), (2, 4), (5, 6), (5, 7)), cols)
+    assert found == [(1, 1, 5, 3), (6, 5, 8, 6)]
+    everything = with_cells(*[(r, c) for r in range(rows) for c in range(cols)])
+    assert vision.changes(before, everything, cols) is None  # почти весь экран — без рамок
+
+
+async def test_one_refused_picture_does_not_turn_vision_off(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
+) -> None:
+    ctx.settings.patch({"ai": {"vision": "on"}})
+
+    def refused() -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": "Invalid image: could not process image"}})
+
+    llm.add(
+        PLAN,
+        refused(),  # первая картинка не принята — повтор без неё, зрение остаётся
+        calls(("press_keys", {"combo": "ctrl+n"})),
+        refused(),  # снова отказ — модель не понимает картинки: дальше без них
+        calls(("finish", {"status": "partial", "summary": "Открыл."})),
+    )
+    result = await _run(ctx, "Новое письмо")
+    assert result.summary == "Открыл."
+
+    def pictures(body: dict[str, Any]) -> int:
+        return sum(1 for m in body["messages"] if m["role"] == "user" and isinstance(m["content"], list))
+
+    steps = [body for body in llm.requests if "response_format" not in body]
+    assert [pictures(body) for body in steps] == [1, 0, 1, 0]
+    assert any("модель не приняла" in str(m["content"]) for m in steps[1]["messages"])
+    assert any("модель не понимает картинки" in str(m["content"]) for m in steps[3]["messages"])
+    tools = {t["function"]["name"] for t in steps[3]["tools"]}
+    assert "screenshot" not in tools and "click_point" not in tools
 
 
 async def test_input_refused_when_another_program_comes_forward(

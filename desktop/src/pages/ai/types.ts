@@ -42,7 +42,7 @@ export interface ThreadMessage extends UiMessage {
 /** Поля meta, которые ядро пишет сверх контракта: ответ остановлен, итог агента. */
 export interface MetaExtra {
   stopped?: boolean;
-  agent?: { run_id: string; status: string; steps: number; plan: string[] };
+  agent?: { run_id: string; status: string; steps: number; plan: string[]; journal?: boolean };
 }
 
 export interface Failure {

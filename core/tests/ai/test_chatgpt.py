@@ -653,7 +653,9 @@ async def test_agent_step_limit_and_screenshot(
     items = codex.turns[1]["items"]
     assert [i["type"] for i in items] == ["text", "image"]
     assert items[1]["url"].startswith("data:image/jpeg;base64,")
-    assert "после каждого действия передай её в image()" in thread["developerInstructions"]
+    # из exec картинка — строкой «data:image/…» в ответе: в image() — её, а не весь ответ (проверено на codex)
+    assert 'if (l.startsWith("data:image/")) image(l);' in thread["developerInstructions"]
+    assert "передай в image() эту строку, а не весь ответ" in shot["description"]
 
 
 async def test_agent_needs_login(ctx: AppContext, codex: Codexes) -> None:

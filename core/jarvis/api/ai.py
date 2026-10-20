@@ -3,6 +3,7 @@
 (docs/CONTRACTS.md, раздел 4).
 """
 
+import base64
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -10,6 +11,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
+from jarvis.ai import journal
 from jarvis.ai.cli import CliBackend
 from jarvis.ai.service import Ai
 from jarvis.api.deps import Ctx
@@ -232,6 +234,24 @@ async def agent_stop(ctx: Ctx) -> dict[str, Any]:
 class AgentScenarioIn(BaseModel):
     chat_id: str = ""
     message_id: str = ""
+
+
+@router.get("/api/agent/journal/{run_id}")
+async def agent_journal(run_id: str, ctx: Ctx) -> dict[str, Any]:
+    """Журнал прогона агента: шаги, что он делал и чем кончилось; картинки — по имени отдельно."""
+    data = await ctx.run_io(journal.load, run_id)
+    if data is None:
+        raise HTTPException(404, "Журнала этой работы нет: он выключен, удалён или устарел")
+    return data
+
+
+@router.get("/api/agent/journal/{run_id}/{name}")
+async def agent_journal_image(run_id: str, name: str, ctx: Ctx) -> dict[str, Any]:
+    """Картинка экрана из журнала — data URL (запросы к ядру — с токеном в заголовке, <img> так не умеет)."""
+    data = await ctx.run_io(journal.image, run_id, name)
+    if data is None:
+        raise HTTPException(404, "Картинки нет")
+    return {"url": "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")}
 
 
 @router.post("/api/agent/scenario")

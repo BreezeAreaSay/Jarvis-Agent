@@ -103,6 +103,10 @@ export interface Settings {
     vision: "auto" | "on" | "off";
     agent_confirm: "risky" | "always";
     max_agent_steps: number;
+    /** Агент запоминает, что в программе не сработало и как получилось. */
+    agent_notes: boolean;
+    /** Шаги агента и снимки экрана — в журнал на этом компьютере. */
+    agent_journal: boolean;
     monthly_budget: number;
     /** Разрешения инструментов ИИ по имени; нет записи или auto — по риску. */
     tool_policy: Record<string, "auto" | "allow" | "ask" | "deny">;
@@ -376,7 +380,10 @@ export interface UiMessage {
     usage?: Record<string, number>;
     status?: string;
     stopped?: boolean;
-    agent?: { run_id: string; status: string; steps: number; plan: string[] };
+    /** journal — есть журнал работы («Как он это делал», GET /api/agent/journal/{run_id}). */
+    agent?: { run_id: string; status: string; steps: number; plan: string[]; journal?: boolean };
+    /** Что агент запомнил о программе на будущее (finish.lesson). */
+    lesson?: { app: string; text: string };
     /** Удачный прогон агента, который можно запомнить сценарием (POST /api/agent/scenario). */
     recipe?: { request: string; actions: { type: string; value: string }[]; scenario_id?: string };
   };

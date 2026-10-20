@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from jarvis import paths
+from jarvis.ai import lessons
 from jarvis.context import AppContext
 from jarvis.log import RedactFilter
 from jarvis.redact import has_secret, luhn_ok, redact
@@ -210,6 +211,7 @@ async def test_clear_all_data(ctx: AppContext, keeper: Retention, events: EventL
     ctx.db.kv_set("clipboard:items", [{"id": "1", "text": "скопировано"}])
     ctx.db.insert("usage", {"ts": NOW, "provider": "openai", "model": "x", "prompt_tokens": 1})
     ctx.secrets.set("ai_api_key", "sk-test")
+    lessons.add(ctx.db, "telegram.exe", "Поиск чатов — Ctrl+K: кнопка поиска не нажимается")
     models = paths.models_dir() / "piper"
     models.mkdir(parents=True)
     (models / "voice.onnx").write_bytes(b"model")
@@ -224,7 +226,8 @@ async def test_clear_all_data(ctx: AppContext, keeper: Retention, events: EventL
     assert cleared["history"] == 1 and cleared["chats"] == 1 and cleared["voice_chats"] == 1
     assert cleared["memory"] == 1 and cleared["notes"] == 1 and cleared["tasks"] == 1
     assert cleared["clipboard"] == 1 and cleared["usage"] == 1 and cleared["secrets"] == 1
-    assert cleared["screenshots"] == 1 and cleared["voice_cache"] == 1
+    assert cleared["screenshots"] == 1 and cleared["voice_cache"] == 1 and cleared["agent_notes"] == 1
+    assert lessons.for_app(ctx.db, "telegram.exe") == []
     for table in ("history", "chats", "messages", "memory", "notes", "tasks", "usage"):
         assert ctx.db.query(f"SELECT * FROM {table}") == [], table
     assert ctx.db.kv_get("voice_chat:voice") is None and ctx.db.kv_get("clipboard:items") is None
@@ -238,6 +241,7 @@ def test_inventory_counts(ctx: AppContext, keeper: Retention) -> None:
     _history(ctx, NOW, "раз")
     _history(ctx, NOW, "два")
     ctx.notes.memory_add("Живёт в Казани")
+    lessons.add(ctx.db, "telegram.exe", "Поиск чатов — Ctrl+K")
     _old_file(paths.data_dir() / "summaries" / "a.wav", 0, b"1234")
     _old_file(paths.cache_dir() / "tts" / "ok.pcm", 0, b"123456")  # звук «Готово, сэр.»
     data = keeper.inventory()
@@ -245,6 +249,7 @@ def test_inventory_counts(ctx: AppContext, keeper: Retention) -> None:
     assert items["voice_cache"] == {**items["voice_cache"], "count": 1, "bytes": 6, "clearable": True}
     assert items["history"]["count"] == 2 and items["history"]["bytes"] > 0
     assert items["memory"]["count"] == 1
+    assert items["agent_notes"]["count"] == 1 and items["agent_notes"]["bytes"] > 0
     assert items["summaries"] == {**items["summaries"], "count": 1, "bytes": 4}
     assert items["models"]["clearable"] is False and items["secrets"]["clearable"] is True
     assert data["db_bytes"] > 0 and data["dir"] == str(paths.data_dir())

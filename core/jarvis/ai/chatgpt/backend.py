@@ -80,9 +80,12 @@ SUBAGENT_SWEEPS_S = (0.0, 0.5, 2.0)
 # GPT-5.6+ и GPT-6 (режим кода, в том числе модель по умолчанию) его не получают — ни через config треда, ни
 # глобально; у GPT-5.5 он есть. Наш web_search/fetch_page есть у всех моделей, с карточками и «Источниками».
 NATIVE_WEB_SEARCH = False
+# Проверено на codex 0.163.0 (мок-провайдер Responses): в «режиме кода» ответ инструмента Jarvis для exec —
+# одна строка: тексты, затем строками data URL картинок; image(всего ответа) — ошибка «invalid image output»,
+# image(строки «data:image/…») — картинка у модели. Без image() картинки модель не получает вовсе.
 SCREENSHOT_HINT = (
-    " Результат — картинка; если ты вызываешь инструменты из exec, это строка с data URL — "
-    "передай её в image(), чтобы увидеть снимок."
+    " Результат — картинка. Из exec ответ — строка: текст, затем с новой строки data URL (data:image/…): "
+    "передай в image() эту строку, а не весь ответ."
 )
 CHAT_MODE_DENIED = (
     "Ошибка: сейчас режим «Чат» — действия на компьютере выключены. Скажи пользователю, что для этого нужно "
@@ -1404,7 +1407,7 @@ class ChatGpt:
         for spec in specs:
             fn = spec.get("function") or {}
             description = str(fn.get("description", ""))
-            if fn.get("name") == "screenshot":
+            if fn.get("name") in ("screenshot", "zoom"):
                 description += SCREENSHOT_HINT
             tools.append(
                 {

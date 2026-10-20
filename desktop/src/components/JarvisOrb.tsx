@@ -31,6 +31,7 @@ type Rgb = [number, number, number];
 
 const TILT = 0.38; // наклон оси вращения к зрителю, рад
 const CAMERA = 3.2; // расстояние до камеры в радиусах сферы
+const RING_CAMERA = 12; // кольца — почти без перспективы: иначе ближняя дуга выходит за холст
 const MERIDIANS = 9;
 const PARALLELS = [-0.62, -0.32, 0, 0.32, 0.62];
 const RING_STEPS = 72;
@@ -234,8 +235,8 @@ export function JarvisOrb({
         const z2 = y * sinT + z1 * cosT;
         return [x1, y2, z2];
       };
-      const project = (x: number, y: number, z: number, radius: number): [number, number, number] => {
-        const k = CAMERA / (CAMERA - z);
+      const project = (x: number, y: number, z: number, radius: number, camera = CAMERA): [number, number, number] => {
+        const k = camera / (camera - z);
         return [cx + x * radius * k, cy + y * radius * k, k];
       };
 
@@ -331,8 +332,8 @@ export function JarvisOrb({
       // орбитальные кольца с искрой
       if (o.rings && R > 34) {
         const orbits = [
-          { r: 1.24, tiltX: 1.18, tiltZ: 0.32, speed: 0.9, phase: 0 },
-          { r: 1.38, tiltX: 1.32, tiltZ: -0.44, speed: -0.62, phase: 2.1 },
+          { r: 1.2, tiltX: 1.18, tiltZ: 0.32, speed: 0.9, phase: 0 },
+          { r: 1.3, tiltX: 1.32, tiltZ: -0.44, speed: -0.62, phase: 2.1 },
         ];
         for (const orbit of orbits) {
           const cz = Math.cos(orbit.tiltZ);
@@ -352,8 +353,8 @@ export function JarvisOrb({
           for (let i = 1; i <= RING_STEPS; i++) {
             const cur = at((i / RING_STEPS) * Math.PI * 2);
             const path = prev[2] + cur[2] > 0 ? ringFront : ringBack;
-            const pa = project(prev[0], prev[1], prev[2], R);
-            const pb = project(cur[0], cur[1], cur[2], R);
+            const pa = project(prev[0], prev[1], prev[2], R, RING_CAMERA);
+            const pb = project(cur[0], cur[1], cur[2], R, RING_CAMERA);
             path.moveTo(pa[0], pa[1]);
             path.lineTo(pb[0], pb[1]);
             prev = cur;
@@ -368,7 +369,7 @@ export function JarvisOrb({
           for (let j = 0; j < 14; j++) {
             const a = head - j * 0.045 * Math.sign(orbit.speed);
             const p = at(a);
-            const [sx, sy, k] = project(p[0], p[1], p[2], R);
+            const [sx, sy, k] = project(p[0], p[1], p[2], R, RING_CAMERA);
             const fade = 1 - j / 14;
             const size = dotBase * 1.9 * fade * k;
             ctx.globalAlpha = (p[2] > 0 ? 0.95 : 0.35) * fade * (0.6 + 0.4 * energy);

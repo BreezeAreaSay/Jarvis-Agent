@@ -3,7 +3,8 @@
 // Состояния: покой — медленно дышит; слушает — поверхность волнуется от громкости микрофона (voice.level);
 // думает — вращается быстрее, по сфере бежит полоса «сканирования»; говорит — волны от громкости речи
 // (tts.level). Canvas 2D без зависимостей: в покое — 30 кадров в секунду, вне экрана и в свёрнутом окне —
-// ничего; «Анимации» выключены или в системе «уменьшить движение» — неподвижный кадр.
+// ничего; «Анимации» Jarvis выключены — неподвижный кадр. Системное «уменьшить движение» Windows (выключенные
+// эффекты анимации) сферу не останавливает: движение решают только настройки Jarvis.
 // iridescent — вместо цвета темы сфера переливается: точки разных оттенков, весь круг цветов проходит за
 // ~15 с в покое и быстрее, пока Jarvis слушает или говорит (аватар на рабочем столе).
 import { useEffect, useRef } from "react";
@@ -27,7 +28,7 @@ export interface JarvisOrbProps {
   color?: string;
   /** Переливаться всеми цветами вместо цвета темы. */
   iridescent?: boolean;
-  /** false — неподвижный кадр (своя настройка анимации, например у аватара); по умолчанию — как в интерфейсе. */
+  /** Своя настройка анимации (у аватара — «Анимация аватара»); не задана — «Анимации» интерфейса. */
   animated?: boolean;
   onClick?: () => void;
   title?: string;
@@ -100,10 +101,6 @@ function makeSprite(rgb: Rgb): HTMLCanvasElement {
   return c;
 }
 
-function reducedMotion(): boolean {
-  return typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-}
-
 /** Состояние сферы по голосу Jarvis (если его не задали снаружи). */
 function voiceState(): OrbState {
   if (levels.speaking || levels.state === "speaking") return "speaking";
@@ -127,7 +124,7 @@ export function JarvisOrb({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const accent = useApp((s) => s.settings?.interface.accent ?? "#3B82F6");
   const animatedUi = useApp((s) => s.settings?.interface.animations ?? true);
-  const animated = animatedUi && animatedProp !== false;
+  const animated = animatedProp ?? animatedUi;
   const opts = useRef({ accent: color ?? accent, animated, state, scale, reactivity, rings, iridescent });
   opts.current = { accent: color ?? accent, animated, state, scale, reactivity, rings, iridescent };
   const kick = useRef<() => void>(() => undefined);
@@ -161,7 +158,6 @@ export function JarvisOrb({
     let last = performance.now();
     let lastDraw = 0;
     let onScreen = true;
-    let still = reducedMotion();
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -183,7 +179,7 @@ export function JarvisOrb({
     const draw = (now: number) => {
       raf = 0;
       const o = opts.current;
-      const live = o.animated && !still;
+      const live = o.animated;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const mode = o.state ?? voiceState();
@@ -454,15 +450,10 @@ export function JarvisOrb({
       if (!document.hidden) restart();
     };
     document.addEventListener("visibilitychange", onVisible);
-    const motion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-    const onMotion = () => {
-      still = reducedMotion();
-      restart();
-    };
-    motion?.addEventListener?.("change", onMotion);
-    // неподвижная сфера всё равно показывает смену состояния (слушает / думает)
+    // неподвижная сфера всё равно показывает смену состояния (слушает / думает); живая — сторож: цикл кадров
+    // остановился, а сфера на виду (окно показали без события видимости) — запустить снова
     const slow = window.setInterval(() => {
-      if (!opts.current.animated || still) restart();
+      if (!opts.current.animated || (!raf && onScreen && !document.hidden)) restart();
     }, 500);
     raf = requestAnimationFrame(draw);
     return () => {
@@ -471,7 +462,6 @@ export function JarvisOrb({
       ro.disconnect();
       io.disconnect();
       document.removeEventListener("visibilitychange", onVisible);
-      motion?.removeEventListener?.("change", onMotion);
     };
   }, []);
 

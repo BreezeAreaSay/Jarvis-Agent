@@ -1,11 +1,13 @@
-// Строка голоса (вверху по центру): кружок микрофона пульсирует от громкости, «Джарвис» — подсвеченный
-// чип, дальше живой текст фразы (voice.partial → voice.final), справа точки-волна. После выполнения команды
-// строка сворачивается в кружок и исчезает (~1,5 с); без текста в покое — через 4 с. Пока Jarvis отвечает
-// голосом дольше мгновения — «Говорю…» с кнопкой «Стоп» (волна — от его голоса).
-import { Mic, Square, Volume2 } from "lucide-react";
+// Строка голоса (вверху по центру): слева живая сфера Jarvis (слушает — волнуется от громкости, распознаёт —
+// думает, отвечает — пульсирует от его голоса), «Джарвис» — подсвеченный чип, дальше живой текст фразы
+// (voice.partial → voice.final), справа точки-волна. После выполнения команды строка сворачивается в сферу и
+// исчезает (~1,5 с); без текста в покое — через 4 с. Пока Jarvis отвечает голосом дольше мгновения —
+// «Говорю…» с кнопкой «Стоп» (волна — от его голоса).
+import { Check, Square } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/api/client";
 import type { VoiceState } from "@/api/types";
+import { JarvisOrb, type OrbState } from "@/components/JarvisOrb";
 import { levels } from "@/lib/levels";
 import { useApp } from "@/store/app";
 import { cx } from "@/ui";
@@ -43,6 +45,14 @@ export function stripWake(text: string, words: string[]): { text: string; found:
   const after = text.slice(m.index + m[0].length).trim();
   return { text: [before, after].filter(Boolean).join(" "), found: true };
 }
+
+const ORB: Record<Phase, OrbState> = {
+  listening: "listening",
+  processing: "thinking",
+  speaking: "speaking",
+  done: "idle",
+  miss: "idle",
+};
 
 const PLACEHOLDER: Record<Phase, string> = {
   listening: "Слушаю…",
@@ -169,8 +179,7 @@ export function VoicePill({ hidden }: { hidden: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- update читает только ref
   }, [speakingShown]);
 
-  // --- живая часть: кружок микрофона и точки-волна (без перерисовки React) ---------------------------------
-  const micRef = useRef<HTMLSpanElement>(null);
+  // --- живая часть: точки-волна (без перерисовки React; сфера рисует себя сама) ------------------------------
   const dotsRef = useRef<HTMLCanvasElement>(null);
   const level = useRef(0);
   const visible = pill.show && !hidden;
@@ -180,12 +189,6 @@ export function VoicePill({ hidden }: { hidden: boolean }) {
     const target = phase === "listening" ? levels.mic : phase === "speaking" ? levels.tts : 0;
     level.current += (target - level.current) * Math.min(1, dt * (target > level.current ? 16 : 5));
     const l = level.current;
-    const mic = micRef.current;
-    if (mic) {
-      mic.style.transform = `scale(${(1 + l * 0.16).toFixed(3)})`;
-      mic.style.setProperty("--ring", `${(3 + l * 12).toFixed(1)}px`);
-      mic.style.setProperty("--ring-a", (0.14 + l * 0.3).toFixed(3));
-    }
     const canvas = dotsRef.current;
     if (!canvas) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -267,8 +270,13 @@ export function VoicePill({ hidden }: { hidden: boolean }) {
   return (
     <Slot show={visible} exitMs={460}>
       <div className={cx("ov-pill", `is-${pill.phase}`)} role="status" aria-live="polite">
-        <span className="ov-pill-mic" ref={micRef}>
-          {pill.phase === "speaking" ? <Volume2 /> : <Mic />}
+        <span className="ov-pill-orb" aria-hidden>
+          <JarvisOrb state={ORB[pill.phase]} rings={false} scale={0.34} reactivity={1.3} />
+          {pill.phase === "done" && (
+            <span className="ov-pill-ok">
+              <Check />
+            </span>
+          )}
         </span>
         {pill.wake && <span className="ov-wake">{assistant}</span>}
         <div className={cx("ov-pill-body", overflow > 0 && "clipped")} ref={bodyRef}>

@@ -310,6 +310,13 @@ _SCREEN = re.compile(
     r"переписк)",
     re.I,
 )
+# «нарисуй кота» — картинку рисует чат (generate_image); «нарисуй в пейнте…» — дело для агента
+_DRAW = re.compile(r"(?<!\w)(?:нарисуй|изобрази|сгенерируй)(?!\w)", re.I)
+_DRAW_APP = re.compile(
+    r"(?<!\w)(?:в|во|на) (?:пейнт\w*|paint\w*|фотошоп\w*|photoshop|крит\w*|krita|гимп\w*|gimp|фигм\w*|figma|"
+    r"ворд\w*|word|эксел\w*|excel|whiteboard|доск\w*|холст\w*|канв\w*|canva)(?!\w)",
+    re.I,
+)
 # «напиши стих» — текст в ответ; «напиши Маше, что…», «напиши в ворде…» — дело для агента
 _COMPOSE = frozenset({"напиши", "написать", "допиши"})
 _MESSAGE = re.compile(
@@ -389,6 +396,8 @@ def app_task(text: str) -> bool:
     if _SCREEN.search(text):
         return True
     if _QUESTION.search(text) or _INFO.search(text):
+        return False
+    if _DRAW.search(text) and not (_places(text) or _DRAW_APP.search(text)):
         return False
     verbs = _verbs(text)
     if not verbs or _vague(text, verbs):

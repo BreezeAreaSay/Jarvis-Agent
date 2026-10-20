@@ -237,8 +237,8 @@ async def test_chat_draws_picture(ctx: AppContext, llm: ScriptedLlm, events: Eve
     api = OpenAiImages()
     ctx.images.transport = api.transport
     llm.add(calls(("generate_image", {"prompt": "кот в шляпе"})), reply("Готово, сэр — кот в шляпе."))
-    # «нарисуй …» в режиме «Всё вместе» сейчас уходит агенту (apphints.app_task), «сгенерируй …» — чату
-    result = await ctx.ai.ask("Сгенерируй картинку: кот в шляпе")
+    # «нарисуй …» в режиме «Всё вместе» — чату, а не агенту (apphints.app_task)
+    result = await ctx.ai.ask("Нарисуй кота в шляпе")
     assert result.error == ""
     assert [(e["status"], e["name"]) for e in events.of("chat.tool")] == [
         ("running", "generate_image"),

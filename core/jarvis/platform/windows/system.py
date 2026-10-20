@@ -116,6 +116,189 @@ def system_drive() -> str:
     return drive.rstrip("\\/") + "\\"
 
 
+# --- температура -----------------------------------------------------------------------------------------
+# Температуру процессора Windows без драйвера не отдаёт: WMI MSAcpi_ThermalZoneTemperature требует прав
+# администратора и показывает датчик ACPI материнской платы (часто постоянные 27,8 °C или ничего), счётчик
+# «Thermal Zone Information» — то же значение без прав. Честно читается только видеокарта NVIDIA: nvidia-smi
+# ставится вместе с её драйвером и работает без прав администратора. Остальное Jarvis не выдумывает.
+
+GPU_TEMP_EVERY_S = 30.0  # nvidia-smi — отдельный процесс: не чаще раза в 30 с, в фоне
+GPU_TEMP_STALE_S = 120.0  # старше — не показываем
+GPU_TEMP_RETRY_S = 600.0  # nvidia-smi нет или не ответил — снова пробуем через 10 минут
+GPU_TEMP_TIMEOUT_S = 4.0
+NVIDIA_SMI_PLACES = (
+    r"%SystemRoot%\System32\nvidia-smi.exe",
+    r"%ProgramW6432%\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+    r"%ProgramFiles%\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+)
+
+
+def parse_gpu_temps(output: str) -> list[float]:
+    """Вывод «nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits» → градусы каждой карты
+    (строки вроде «[N/A]» и невозможные значения пропускаются)."""
+    temps: list[float] = []
+    for line in (output or "").splitlines():
+        with contextlib.suppress(ValueError):
+            value = float(line.strip().replace(",", "."))
+            if 5.0 <= value <= 130.0:
+                temps.append(value)
+    return temps
+
+
+def find_nvidia_smi() -> str | None:
+    import shutil
+
+    found = shutil.which("nvidia-smi")
+    if found:
+        return found
+    for place in NVIDIA_SMI_PLACES:
+        path = os.path.expandvars(place)
+        if "%" not in path and os.path.isfile(path):
+            return path
+    return None
+
+
+def run_nvidia_smi(exe: str) -> str:
+    done = subprocess.run(
+        [exe, "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=GPU_TEMP_TIMEOUT_S,
+        creationflags=NO_WINDOW,
+        check=False,
+    )
+    if done.returncode != 0:
+        raise OSError(f"nvidia-smi вернул {done.returncode}")
+    return done.stdout.decode("utf-8", errors="replace")
+
+
+class GpuTemp:
+    """Температура видеокарты NVIDIA (самой горячей) из nvidia-smi: замер — в фоновом потоке не чаще раза в
+    GPU_TEMP_EVERY_S, value() не ждёт процесс и отдаёт последний свежий замер или None."""
+
+    def __init__(
+        self,
+        find: Callable[[], str | None] = find_nvidia_smi,
+        run: Callable[[str], str] = run_nvidia_smi,
+        clock: Callable[[], float] = time.monotonic,
+        background: bool = True,
+    ) -> None:
+        self._find = find
+        self._run = run
+        self._clock = clock
+        self._background = background
+        self._lock = threading.Lock()
+        self._value: tuple[float, float] | None = None  # (градусы, когда замерено)
+        self._next_at = 0.0
+        self._busy = False
+
+    def value(self) -> float | None:
+        now = self._clock()
+        with self._lock:
+            due = not self._busy and now >= self._next_at
+            if due:
+                self._busy = True
+                self._next_at = now + GPU_TEMP_EVERY_S
+            value = self._value
+        if due:
+            if self._background:
+                threading.Thread(target=self._measure, name="gpu-temp", daemon=True).start()
+            else:
+                self._measure()
+                with self._lock:
+                    value = self._value
+        if value is None or now - value[1] > GPU_TEMP_STALE_S:
+            return None
+        return value[0]
+
+    def _measure(self) -> None:
+        try:
+            exe = self._find()
+            temps = parse_gpu_temps(self._run(exe)) if exe else []
+        except Exception as e:  # нет драйвера, процесс завис или упал — без температуры
+            log.debug("температура видеокарты: %s", e)
+            temps = []
+        with self._lock:
+            self._busy = False
+            if temps:
+                self._value = (max(temps), self._clock())
+            else:
+                self._next_at = self._clock() + GPU_TEMP_RETRY_S
+
+
+# --- кто пишет микрофон (звонок) -------------------------------------------------------------------------
+# «Конфиденциальность → Микрофон»: Windows для каждой программы помнит LastUsedTimeStart/Stop (FILETIME) в
+# HKCU\…\CapabilityAccessManager\ConsentStore\microphone; Stop = 0 при ненулевом Start — программа пишет
+# микрофон прямо сейчас (Zoom, Teams, Discord, Telegram в звонке). Читается без прав администратора.
+
+MIC_CONSENT_KEY = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
+
+
+def mic_users_from(entries: Iterable[tuple[str, int, int]], own: Iterable[str] = ()) -> list[str]:
+    """(ключ программы, LastUsedTimeStart, LastUsedTimeStop) → названия программ, что пишут микрофон сейчас.
+
+    Ключ — путь exe с «#» вместо «\\» («C:#Program Files#Zoom#bin#Zoom.exe») или имя пакета Магазина
+    («Microsoft.SkypeApp_kzf8qxf38zg5c»). Свои процессы (own — пути exe Jarvis) и всё с «jarvis» в пути —
+    не звонок: Jarvis слушает микрофон всегда."""
+    mine = {o.replace("\\", "#").casefold() for o in own if o}
+    out: list[str] = []
+    for key, start, stop in entries:
+        low = key.casefold()
+        if not start or stop or low in mine or "jarvis" in low:
+            continue
+        name = key.replace("#", "\\")
+        name = ntpath.basename(name) if "\\" in name else name.split("_", 1)[0]
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def _mic_entries() -> list[tuple[str, int, int]]:
+    import winreg  # type: ignore[import-not-found]
+
+    def values(key: Any) -> tuple[int, int]:
+        out = []
+        for name in ("LastUsedTimeStart", "LastUsedTimeStop"):
+            try:
+                out.append(int(winreg.QueryValueEx(key, name)[0] or 0))
+            except OSError:
+                out.append(0)
+        return out[0], out[1]
+
+    def subkeys(key: Any) -> list[str]:
+        names, i = [], 0
+        while True:
+            try:
+                names.append(winreg.EnumKey(key, i))
+            except OSError:
+                return names
+            i += 1
+
+    entries: list[tuple[str, int, int]] = []
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, MIC_CONSENT_KEY) as root:
+        for name in subkeys(root):
+            with winreg.OpenKey(root, name) as sub:
+                if name == "NonPackaged":
+                    for app in subkeys(sub):
+                        with winreg.OpenKey(sub, app) as item:
+                            entries.append((app, *values(item)))
+                else:
+                    entries.append((name, *values(sub)))
+    return entries
+
+
+def microphone_users() -> list[str]:
+    """Программы, которые сейчас пишут микрофон (кроме Jarvis); реестр не читается — пусто."""
+    import sys
+
+    try:
+        entries = _mic_entries()
+    except (OSError, ImportError) as e:  # нет ключа (микрофоном не пользовались) или не Windows
+        log.debug("кто пишет микрофон: %s", e)
+        return []
+    return mic_users_from(entries, (sys.executable,))
+
+
 class Stats:
     """psutil + счётчики PDH для GPU. Запрос PDH открывается один раз и переиспользуется."""
 
@@ -124,6 +307,7 @@ class Stats:
         self._pdh_query: Any = None
         self._pdh_counter: Any = None
         self._pdh_retry_at = 0.0
+        self._gpu_temp = GpuTemp()
         with contextlib.suppress(Exception):
             psutil.cpu_percent(interval=None)  # первый замер — точка отсчёта
 
@@ -156,6 +340,9 @@ class Stats:
         with contextlib.suppress(Exception):
             stats.extra["cpu_count"] = psutil.cpu_count() or 0
         stats.gpu = self._gpu()
+        gpu_temp = self._gpu_temp.value()
+        if gpu_temp is not None:
+            stats.extra["gpu_temp_c"] = round(gpu_temp)
         return stats
 
     def _gpu(self) -> float | None:

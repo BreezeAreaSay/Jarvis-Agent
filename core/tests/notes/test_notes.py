@@ -227,7 +227,8 @@ def test_events_range(notes: Notes) -> None:
 async def test_reminders_fire_with_toast_and_voice(
     ctx: AppContext, notes: Notes, events: EventLog, spoken: list[str]
 ) -> None:
-    ctx.settings.patch({"profile": {"address": "сэр"}})
+    # персона «Обычный» — как всегда; с «Джарвисом» — в его характере (tests/voice/test_character.py)
+    ctx.settings.patch({"profile": {"address": "сэр"}, "ai": {"persona": "plain"}})
     once = notes.reminder_add("Выключить духовку", NOW + 60)
     daily = notes.reminder_add("Выпить таблетку", NOW + 30, "daily")
     assert await notes.tick() == []  # ещё рано
@@ -260,6 +261,7 @@ async def test_reminders_fire_with_toast_and_voice(
 async def test_missed_reminders_and_event_reminders(
     ctx: AppContext, notes: Notes, events: EventLog, spoken: list[str]
 ) -> None:
+    ctx.settings.patch({"ai": {"persona": "plain"}})
     old = notes.reminder_add("Полить цветы", NOW - 3 * 3600, "weekly")
     notes.event_add("Созвон с командой", NOW + 10 * 60, remind_min=15)
     notes.event_add("Давняя встреча", NOW - 3 * 86400, remind_min=5)

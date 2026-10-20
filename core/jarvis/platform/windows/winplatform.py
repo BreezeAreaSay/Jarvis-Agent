@@ -772,6 +772,14 @@ class WindowsPlatform:
     def idle_seconds(self) -> float:
         return system.idle_seconds()
 
+    def microphone_users(self) -> list[str]:
+        """Программы, что сейчас пишут микрофон (звонок); Jarvis не в счёт. Не прочиталось — пусто."""
+        try:
+            return system.microphone_users()
+        except Exception as e:
+            log.debug("кто пишет микрофон: %r", e)
+            return []
+
     def known_folder(self, name: str) -> str | None:
         return system.known_folder(name or "")
 

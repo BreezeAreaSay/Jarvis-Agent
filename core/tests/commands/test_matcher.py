@@ -157,7 +157,9 @@ def test_tolerates_recognition_errors(ctx: AppContext, text: str, command_id: st
         "как дела у тебя сегодня",
         "что ты думаешь о погоде",
         "открой мне секрет",
-        "спасибо",
+        "спасибо за рецепт борща",
+        "привет расскажи анекдот",
+        "как дела на работе у ани",
     ],
 )
 def test_questions_go_to_ai(ctx: AppContext, text: str) -> None:

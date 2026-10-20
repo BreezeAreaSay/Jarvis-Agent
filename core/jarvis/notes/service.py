@@ -9,7 +9,8 @@ assumption — предположение (ИИ должен уточнять, �
 строка не длиннее ~1500 символов: подтверждённое, предположения и временное — отдельно, с датами.
 
 Напоминания проверяет фоновая задача раз в ~5 секунд: сработавшее напоминание — событие reminder.fired, тост
-«Напоминание» и голос «Напоминаю, сэр: …» (если не включён тихий режим). Повтор — каждый день или неделю.
+«Напоминание» и голос «Напоминаю, сэр: …» (с персоной «Джарвис» — в его характере: «Сэр, напоминаю: …»,
+jarvis.voice.character; если не включён тихий режим). Повтор — каждый день или неделю.
 Напоминания, пропущенные, пока Jarvis был выключен (или компьютер спал), срабатывают один раз с пометкой
 missed. События календаря с remind_min напоминают о себе так же.
 """
@@ -701,6 +702,10 @@ class Notes(BaseService):
         if not settings.voice.silent_mode:
             address = settings.profile.address.strip()
             phrase = f"Напоминаю, {address}: {message}" if address else f"Напоминаю: {message}"
+            character = getattr(self.ctx, "character", None)
+            if character is not None:  # персона «Джарвис»: «Сэр, напоминаю: …», «Сэр, время вышло: …»
+                with contextlib.suppress(Exception):
+                    phrase = character.reminder(item, message, missed=missed) or phrase
             try:
                 await asyncio.wait_for(self.ctx.tts.say(phrase), 10.0)
             except Exception:

@@ -36,6 +36,8 @@ if TYPE_CHECKING:
         VoiceService,
         WidgetService,
     )
+    from jarvis.voice.character import Character
+    from jarvis.voice.presence import Presence
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -87,6 +89,8 @@ class AppContext:
         self.plugins: PluginManager
         self.remote: RemoteService
         self.scenarios: Scenarios
+        self.character: Character  # ответы в характере Джарвиса
+        self.presence: Presence  # приветствие по возвращении
         self.retention: Retention
         self.widgets: WidgetService
         self.desks: DeskService

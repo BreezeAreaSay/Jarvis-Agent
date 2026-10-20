@@ -375,15 +375,25 @@ async def test_confirmation_allow_and_deny(cmds: Commands, ctx: AppContext, even
 
 
 async def test_shutdown_with_delay_says_when(cmds: Commands, ctx: AppContext) -> None:
-    task = asyncio.create_task(cmds.run_text("выключи компьютер через 30 минут", "text"))  # type: ignore[arg-type]
+    # выключение с задержкой отменяется («отмени выключение») — человека не переспрашиваем
+    result = await cmds.run_text("выключи компьютер через 30 минут", "voice")
+    assert result is not None and result.ok and not ctx.confirmations.pending()
+    assert calls(ctx, "power") == [("shutdown", 1800)] and result.say == "Выключение через 30 минут"
+    assert result.data["delay"] == 1800
+
+
+async def test_shutdown_by_ai_still_asks(cmds: Commands, ctx: AppContext) -> None:
+    # питание по просьбе ИИ — только с разрешения, и с задержкой тоже
+    task = asyncio.create_task(cmds.run_text("выключи компьютер через 30 минут", "ai"))  # type: ignore[arg-type]
     for _ in range(100):
         await asyncio.sleep(0.01)
         if ctx.confirmations.pending():
             break
-    ctx.confirmations.resolve(ctx.confirmations.pending()[0]["id"], True)
+    pending = ctx.confirmations.pending()
+    assert pending and "Выключение компьютера через 30 минут" in pending[0]["detail"]
+    ctx.confirmations.resolve(pending[0]["id"], False)
     result = await task
-    assert result is not None and result.ok
-    assert calls(ctx, "power") == [("shutdown", 1800)] and result.say == "Выключение через 30 минут"
+    assert result is not None and not result.ok and not calls(ctx, "power")
 
 
 async def test_compound_execution(cmds: Commands, ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -490,3 +500,45 @@ async def test_scenario_open_music_app_and_toggle_hands_over_when_silent(
     assert not result.ok and result.message == "Музыка не заиграла"
     assert result.data["agent_task"].startswith("Включи музыку в «Spotify»")
     assert calls(ctx, "launch")[-1] == ("Spotify.exe", "")  # своя программа сценария, не другая
+
+
+# --- характер Джарвиса: что известно об итоге (jarvis.voice.character) ----------------------------------
+
+
+async def test_close_music(cmds: Commands, ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
+    platform: Any = ctx.platform
+    result = await run(cmds, "закрой музыку")  # играет Spotify — закрываем его
+    assert (
+        result.ok and result.data["closed"] == "Spotify" and calls(ctx, "close_app")[-1] == ("Spotify.exe",)
+    )
+    # музыка в браузере — только пауза: вкладки не закрываем
+    platform.media = MediaInfo(title="Lo-fi", app="Google Chrome", status="playing")
+    before = len(calls(ctx, "close_app"))
+    result = await run(cmds, "закрой музыку")
+    assert result.ok and len(calls(ctx, "close_app")) == before
+    assert calls(ctx, "media_key")[-1] == ("play_pause",) and "браузер не закрываю" in result.message
+    # ничего не играет и плеер не запущен
+    monkeypatch.setattr(platform, "now_playing", lambda: None)
+    platform.windows = []
+    result = await run(cmds, "закрой музыку")
+    assert not result.ok and result.message == "Музыкальная программа не запущена"
+
+
+async def test_system_status_full(cmds: Commands, ctx: AppContext) -> None:
+    result = await run(cmds, "статус систем")
+    data = result.data["system"]
+    assert data["ram"] == 46 and data["disk_free_gb"] == 186.4 and data["gpu_temp"] == 54
+    assert data["battery"] is None  # у настольного — без батареи
+    assert "на системном диске свободно 186 гигабайт" in result.say
+    assert "температура видеокарты 54 градуса" in result.say
+    short = await run(cmds, "загрузка процессора")  # прежняя команда — коротко
+    assert "диске" not in short.say and short.data["system"]["cpu"] >= 0
+
+
+async def test_game_launch_is_marked(cmds: Commands, ctx: AppContext) -> None:
+    result = await run(cmds, "запусти майнкрафт")
+    assert result.data["game"] is True and result.data["app_key"] == "minecraft"
+    steam = await run(cmds, "открой стим")
+    assert "game" not in steam.data and steam.data["app_key"] == "steam"  # лаунчер — не игра
+    cid = user(cmds, ("Launch.App", "steam://rungameid/730"))  # ссылка запуска игры лаунчером
+    assert (await cmds.run_command(cid)).data["game"] is True

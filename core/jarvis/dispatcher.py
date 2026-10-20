@@ -15,6 +15,9 @@ Jarvis отвечает голосом (если не включён тихий 
 
 «Запомни это» («сохрани как сценарий») сразу после удачного дела агента — оно становится сценарием с теми же
 шагами и фразой человека: в следующий раз — сразу, без ИИ.
+
+С персоной «Джарвис» ответ на команду — в его характере (jarvis.voice.character): «Сворачиваю все окна, сэр.»;
+долгая команда (погода из сети, музыка) сразу отвечает «Секунду, сэр.», а итог звучит следом.
 """
 
 import logging
@@ -112,11 +115,11 @@ class MainDispatcher:
             out = out.replace(", .", ".").replace(" ,", ",").replace(",.", ".")
         return out
 
-    async def _say(self, text: str, speak: bool) -> None:
+    async def _say(self, text: str, speak: bool, *, interrupt: bool = True) -> None:
         if not speak or not text or self.ctx.settings.value.voice.silent_mode:
             return
         try:
-            await self.ctx.tts.say(text, interrupt=True)
+            await self.ctx.tts.say(text, interrupt=interrupt)
         except Exception:
             log.exception("озвучка не удалась")
 
@@ -202,8 +205,14 @@ class MainDispatcher:
             title=title,
             command_id=",".join(p.command_id for p in match.parts),
         )
+        character = getattr(self.ctx, "character", None)
+        acked = False  # уже прозвучало «Секунду, сэр» — итог говорим следом, не перебивая
         try:
-            result: ExecResult = await self.ctx.commands.execute(match, source)
+            ack = character.ack_phrases(match) if speak and character is not None else ()
+            if ack:
+                result, acked = await character.with_ack(self.ctx.commands.execute(match, source), ack)
+            else:
+                result = await self.ctx.commands.execute(match, source)
         except Exception as e:
             log.exception("команда упала: %r", raw)
             result = ExecResult(False, title, f"Ошибка: {e}", icon="error")
@@ -233,9 +242,16 @@ class MainDispatcher:
                 icon=result.icon,
             )
         settings = self.ctx.settings.value.voice
-        if result.say:
-            await self._say(result.say, speak)
-        elif result.ok and settings.speak_confirmations == "short":
+        # персона «Джарвис»: ответ в его характере (jarvis.voice.character); None — как обычно
+        confirmations = settings.speak_confirmations == "short"
+        spoken = None
+        if speak and character is not None:
+            spoken = character.spoken(result, confirmations=confirmations)
+        if spoken:
+            await self._say(spoken, speak, interrupt=not acked)
+        elif result.say:
+            await self._say(result.say, speak, interrupt=not acked)
+        elif result.ok and confirmations:
             # программа только запускается — «Открываю», а не «Готово»: что она открылась, мы ещё не видели
             app = str(result.data.get("app") or "")
             if app:
@@ -246,7 +262,7 @@ class MainDispatcher:
             else:
                 await self._say(self._fmt(random.choice(OK_PHRASES)), speak)
         elif not result.ok:
-            await self._say(result.message or "Не получилось.", speak)
+            await self._say(result.message or "Не получилось.", speak, interrupt=not acked)
         self.ctx.bus.publish("dispatch.done", {"text": raw, "kind": "command", "ok": result.ok})
         return {"kind": "command", "result": result.to_json(), "history": item}
 

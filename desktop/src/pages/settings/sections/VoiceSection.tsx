@@ -340,10 +340,22 @@ function WakeCard() {
   );
 }
 
+/** Приветствие по возвращении (ядро: voice.presence_greeting, voice.presence_away_min; в types.ts — при слиянии). */
+type PresenceVoice = { presence_greeting?: "off" | "news" | "always"; presence_away_min?: number };
+
+const GREETING_OPTIONS: { value: NonNullable<PresenceVoice["presence_greeting"]>; label: string }[] = [
+  { value: "off", label: "Выключено" },
+  { value: "news", label: "Если есть напоминания" },
+  { value: "always", label: "Всегда" },
+];
+
 function RepliesCard() {
   const [settings, patch] = useSettingsPatch();
   if (!settings) return null;
   const v = settings.voice;
+  const presence = v as typeof v & PresenceVoice;
+  const greeting = presence.presence_greeting ?? "off";
+  const patchPresence = (p: PresenceVoice) => patch({ voice: p } as unknown as Parameters<typeof patch>[0]);
   return (
     <Card icon={<MessageSquare />} title="Ответы" sub="Звуки и короткие ответы голосом">
       <Setting name="Звуковые сигналы" desc="Короткие звуки «слушаю», «готово», «ошибка»">
@@ -366,6 +378,29 @@ function RepliesCard() {
       <Setting name="Тихий режим" desc="Jarvis выполняет команды молча, без ответов голосом">
         <Toggle checked={v.silent_mode} onChange={(on) => patch({ voice: { silent_mode: on } })} label="Тихий режим" />
       </Setting>
+      <Setting
+        name="Приветствие при возвращении"
+        desc="Вернулись к компьютеру — Jarvis поздоровается и напомнит о делах. Молчит над играми, в звонках и в тихом режиме"
+      >
+        <Select
+          value={greeting}
+          width={230}
+          options={GREETING_OPTIONS}
+          onChange={(x) => patchPresence({ presence_greeting: x })}
+        />
+      </Setting>
+      {greeting !== "off" && (
+        <Setting name="Вас не было" desc="Столько минут без мыши и клавиатуры — значит, вы отходили" wide>
+          <Slider
+            value={presence.presence_away_min ?? 20}
+            min={5}
+            max={240}
+            step={5}
+            format={(x) => `${Math.round(x)} мин`}
+            onCommit={(x) => patchPresence({ presence_away_min: Math.round(x) })}
+          />
+        </Setting>
+      )}
     </Card>
   );
 }

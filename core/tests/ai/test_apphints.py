@@ -1,6 +1,7 @@
 """Подсказки модели о программах: приёмы программ и браузеров, готовые команды паков (по id), свои команды,
 рецепт Telegram через MCP и инструкции серверов; сразу агент для дел в программах; скорость ответа."""
 
+import dataclasses
 from typing import Any
 
 import pytest
@@ -163,6 +164,15 @@ def test_telegram_recipe_uses_real_tool_names(ctx: AppContext) -> None:
         ("создай папку на рабочем столе", True),
         ("зайди на озон и найди наушники", True),
         ("установи vlc", True),
+        # дело в браузере — всегда агенту: он видит страницу и жмёт по ней, чат умеет только открыть ссылку
+        ("найди на ютубе обзор айфона", True),
+        ("включи на ютубе лофи", True),
+        ("открой в браузере погоду", True),
+        ("закрой вкладку", True),
+        ("открой сайт госуслуг", True),
+        ("зайди на ozon.ru", True),
+        ("перейди по первой ссылке", True),
+        ("переведи страницу", True),
         # что на экране, в окне, в почте — видит только агент, даже если это вопрос
         ("что здесь написано", True),
         ("что важного в почте", True),
@@ -181,7 +191,9 @@ def test_telegram_recipe_uses_real_tool_names(ctx: AppContext) -> None:
         # вопросы, сведения, память, заметки, напоминания — чату; неясное — чат переспросит
         ("как в телеграме создать папку?", False),
         ("какая завтра погода", False),
-        ("найди на ютубе обзор айфона", False),  # сайт чат откроет сам
+        ("найди в интернете сколько стоит айфон", False),  # сведения — чату: ответит поиском
+        ("как открыть сайт госуслуг?", False),
+        ("что такое ютуб", False),
         ("расскажи анекдот", False),
         ("напиши стих про осень", False),
         ("напомни через пять минут выключить чайник", False),
@@ -198,6 +210,31 @@ def test_app_task_detection(text: str, agent: bool) -> None:
     assert apphints.app_task(text) is agent
 
 
+@pytest.mark.parametrize(
+    ("text", "agent"),
+    [
+        # впереди браузер: просьба — про открытую страницу
+        ("открой первое видео", True),
+        ("включи видео", True),
+        ("нажми подписаться", True),
+        (
+            "открой калькулятор",
+            True,
+        ),  # готовую команду диспетчер выполнит раньше; не нашлась — агент запустит
+        # лёгкое и тогда — чату: громкость, звук, окна, свет; вопросы и текст в ответ
+        ("сделай громче", False),
+        ("сверни окна", False),
+        ("включи свет на кухне", False),
+        ("какая завтра погода", False),
+        ("напиши стих про осень", False),
+    ],
+)
+def test_app_task_when_browser_is_in_front(text: str, agent: bool) -> None:
+    assert apphints.app_task(text, browser=True) is agent
+    if text in ("открой первое видео", "включи видео", "открой калькулятор"):
+        assert apphints.app_task(text) is False  # без браузера впереди — лёгкая команда
+
+
 async def test_chat_hints_and_system_prompt(ctx: AppContext, llm: ScriptedLlm) -> None:
     _fake_mcp(ctx)
     tools = ToolRegistry(ctx).available("all")
@@ -209,8 +246,8 @@ async def test_chat_hints_and_system_prompt(ctx: AppContext, llm: ScriptedLlm) -
         == ""
     )
 
-    llm.add(reply("Открыл поиск на YouTube."))
-    await ctx.ai.ask("найди на ютубе обзор айфона")  # type: ignore[attr-defined]
+    llm.add(reply("Кнопка «CC» под видео."))
+    await ctx.ai.ask("как на ютубе включить субтитры?")  # type: ignore[attr-defined]
     system = llm.requests[0]["messages"][0]["content"]
     assert APPS_HEADER in system and "youtube.com/results?search_query" in system
     assert "пауза и пуск" not in system  # агенту — приёмы окна, чату — инструменты
@@ -234,6 +271,37 @@ async def test_app_task_goes_straight_to_agent(ctx: AppContext, llm: ScriptedLlm
     before = len(events.of("agent.state"))
     await ctx.ai.ask("напиши Ане в телеграме что буду в семь")  # type: ignore[attr-defined]
     assert len(events.of("agent.state")) == before  # теперь решает чат
+
+
+async def test_browser_in_front_sends_page_tasks_to_agent(
+    ctx: AppContext, llm: ScriptedLlm, events: EventLog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Впереди браузер — «открой первое видео» про открытую страницу: сразу агенту. Впереди другое окно —
+    лёгкая просьба, решает чат."""
+    agent: Any = ctx.agent
+    agent.ui, agent.settle_s, agent.launch_settle_s, agent.pointer_delay_s = FakeUi(), 0.0, 0.0, 0.0
+    platform: Any = ctx.platform
+    assert platform.foreground_window().exe == "chrome.exe"
+    llm.add(
+        reply('{"steps": ["Открыть видео"]}'),
+        calls(("finish", {"status": "done", "summary": "Включил первое видео."})),
+    )
+    result = await ctx.ai.ask("открой первое видео")  # type: ignore[attr-defined]
+    assert result.text == "Включил первое видео."
+    assert events.of("agent.state")[0]["task"] == "открой первое видео"
+
+    for window in platform.windows:
+        window.foreground = window.exe == "explorer.exe"
+    llm.add(reply("Какое видео открыть?"))
+    before = len(events.of("agent.state"))
+    await ctx.ai.ask("открой первое видео")  # type: ignore[attr-defined]
+    assert len(events.of("agent.state")) == before
+    # впереди окно Jarvis, браузер за ним (платформа отдаёт его с foreground=False) — тоже не про страницу
+    chrome = next(w for w in platform.windows if w.exe == "chrome.exe")
+    monkeypatch.setattr(platform, "foreground_window", lambda: dataclasses.replace(chrome, foreground=False))
+    llm.add(reply("Какое видео открыть?"))
+    await ctx.ai.ask("открой первое видео")  # type: ignore[attr-defined]
+    assert len(events.of("agent.state")) == before
 
 
 async def test_agent_from_voice_answers_at_once(

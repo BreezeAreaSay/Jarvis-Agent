@@ -291,7 +291,10 @@ function updateOverlayBounds() {
 }
 
 // --- аватар на рабочем столе -------------------------------------------------------------------------------
+// Окно аватара живёт, пока аватар включён (его страница слушает голос), но видно только пока Jarvis слушает,
+// думает или говорит (avatar:active от страницы): спрятанное прозрачное окно не ловит мышь.
 let dragOffset: { x: number; y: number } | null = null;
+let avatarActive = false;
 
 function avatarRect() {
   const size = Math.round((settings?.avatar?.size ?? 150) + 40);
@@ -325,12 +328,13 @@ function createAvatar() {
 }
 
 function syncAvatar() {
-  const want = !!settings?.avatar?.desktop && !(fullscreen && (settings?.avatar?.hide_fullscreen ?? true));
-  if (want && !avatarWin) {
-    createAvatar();
+  const enabled = !!settings?.avatar?.desktop;
+  if (enabled && !avatarWin) {
+    createAvatar(); // скрытым: покажется, когда Jarvis заговорит или станет слушать
     return;
   }
   if (!avatarWin) return;
+  const want = enabled && avatarActive && !(fullscreen && (settings?.avatar?.hide_fullscreen ?? true));
   if (!want) {
     avatarWin.hide();
     return;
@@ -819,6 +823,11 @@ ipcMain.on("avatar:drag-end", () => {
   dragOffset = null;
   const [x, y] = avatarWin.getPosition();
   patch({ avatar: { position: [x, y] } });
+});
+
+ipcMain.on("avatar:active", (_e, on: unknown) => {
+  avatarActive = on === true;
+  syncAvatar();
 });
 
 ipcMain.on("avatar:menu", () => {

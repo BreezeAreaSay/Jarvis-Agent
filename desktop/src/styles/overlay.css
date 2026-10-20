@@ -168,241 +168,6 @@
   }
 }
 
-/* --- строка голоса ------------------------------------------------------------------------------------ */
-.ov-pill {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 520px;
-  max-width: 100%;
-  height: 62px;
-  padding: 8px 16px 8px 8px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(46, 50, 63, 0.94), rgba(29, 32, 42, 0.94));
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.07) inset, 0 16px 44px rgba(0, 0, 0, 0.45);
-  overflow: hidden;
-  animation: ov-pill-in 720ms var(--ov-spring) both;
-}
-
-@keyframes ov-pill-in {
-  0% {
-    width: 62px;
-    opacity: 0;
-    transform: translateY(-10px) scale(0.7);
-  }
-  22% {
-    opacity: 1;
-    transform: none;
-  }
-  100% {
-    width: 520px;
-    opacity: 1;
-    transform: none;
-  }
-}
-
-.ov-slot.leaving .ov-pill {
-  animation: ov-pill-out 440ms cubic-bezier(0.5, 0, 0.3, 1) both;
-}
-
-@keyframes ov-pill-out {
-  0% {
-    width: 520px;
-  }
-  62% {
-    width: 62px;
-    opacity: 1;
-    transform: none;
-  }
-  100% {
-    width: 62px;
-    opacity: 0;
-    transform: scale(0.55);
-  }
-}
-
-.ov-slot.leaving .ov-pill-body,
-.ov-slot.leaving .ov-pill-dots,
-.ov-slot.leaving .ov-pill-stop {
-  opacity: 0;
-  transition: opacity 140ms;
-}
-
-.ov-pill-mic {
-  --ring: 3px;
-  --ring-a: 0.14;
-  flex: none;
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--on-accent);
-  background: radial-gradient(circle at 34% 28%, var(--accent-hover), var(--accent) 62%, var(--accent-press));
-  box-shadow:
-    0 0 0 var(--ring) rgba(var(--accent-rgb), var(--ring-a)),
-    0 6px 18px rgba(var(--accent-rgb), 0.45);
-  will-change: transform;
-}
-
-.ov-pill-mic svg {
-  width: 21px;
-  height: 21px;
-}
-
-.ov-pill.is-done .ov-pill-mic {
-  background: radial-gradient(circle at 34% 28%, #5ee0b0, var(--ok) 62%, #22a77a);
-  box-shadow: 0 6px 18px rgba(52, 211, 153, 0.4);
-  transition: background 0.3s;
-}
-
-/* сфера Jarvis вместо кружка микрофона: тёмный «иллюминатор», в нём живые частицы */
-.ov-pill-orb {
-  position: relative;
-  flex: none;
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 50% 45%, rgba(var(--accent-rgb), 0.22), rgba(10, 12, 18, 0.9) 70%);
-  box-shadow:
-    inset 0 0 0 1px rgba(var(--accent-rgb), 0.35),
-    0 0 18px rgba(var(--accent-rgb), 0.35);
-}
-
-.ov-pill-orb canvas {
-  border-radius: 50%;
-}
-
-.ov-pill-ok {
-  position: absolute;
-  right: -2px;
-  bottom: -2px;
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--ok);
-  color: #06281c;
-  box-shadow: 0 0 0 2px rgba(29, 32, 42, 0.95);
-  animation: ov-chip-in 360ms var(--ov-pop) both;
-}
-
-.ov-pill-ok svg {
-  width: 12px;
-  height: 12px;
-  stroke-width: 3;
-}
-
-.ov-pill-body {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-}
-
-.ov-pill-body.clipped {
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 30px);
-  mask-image: linear-gradient(90deg, transparent 0, #000 30px);
-}
-
-.ov-pill-line {
-  display: inline-block;
-  white-space: nowrap;
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.005em;
-  transition: transform 220ms var(--ease);
-}
-
-.ov-wake {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  margin-right: -4px;
-  height: 36px;
-  font-size: 20px;
-  letter-spacing: -0.005em;
-  padding: 0 10px;
-  border-radius: 8px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 650;
-  box-shadow: 0 4px 14px rgba(var(--accent-rgb), 0.35);
-  animation: ov-chip-in 460ms var(--ov-pop) both;
-}
-
-@keyframes ov-chip-in {
-  from {
-    opacity: 0;
-    transform: scale(0.7);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-.ov-pill-text {
-  color: var(--text);
-}
-
-.ov-pill-ph {
-  color: var(--text-3);
-  font-weight: 500;
-}
-
-.ov-pill.is-miss .ov-pill-ph {
-  color: #fecaca;
-}
-
-/* «Стоп» на строке голоса: перестать слушать, замолчать, бросить ответ */
-.ov-pill-stop {
-  flex: none;
-  width: 34px;
-  height: 34px;
-  margin-left: -4px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  color: rgba(255, 255, 255, 0.82);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  cursor: pointer;
-  pointer-events: auto;
-  transition:
-    background var(--t-fast) var(--ease),
-    color var(--t-fast) var(--ease),
-    transform var(--t-fast) var(--ease);
-}
-
-.ov-pill-stop:hover {
-  background: #e5484d;
-  border-color: transparent;
-  color: #fff;
-}
-
-.ov-pill-stop:active {
-  transform: scale(0.92);
-}
-
-.ov-pill-stop svg {
-  width: 13px;
-  height: 13px;
-  fill: currentColor;
-}
-
-.ov-pill-dots {
-  flex: none;
-  width: 72px;
-  height: 28px;
-}
-
 /* --- уведомления ------------------------------------------------------------------------------------ */
 .ov-toast {
   display: flex;
@@ -1557,8 +1322,6 @@
 /* --- «Анимации» выключены: без пружин и раздвиганий (полоска отсчёта и индикаторы — остаются) ------------- */
 :root[data-anim="off"] .ov-anim,
 :root[data-anim="off"] .ov-anim-up,
-:root[data-anim="off"] .ov-pill,
-:root[data-anim="off"] .ov-wake,
 :root[data-anim="off"] .ov-ring,
 :root[data-anim="off"] .ov-agent-action,
 :root[data-anim="off"] .ov-agent-steps li,
@@ -1566,8 +1329,7 @@
   animation: none !important;
 }
 
-:root[data-anim="off"] .ov-slot,
-:root[data-anim="off"] .ov-pill-line {
+:root[data-anim="off"] .ov-slot {
   transition: none !important;
 }
 
@@ -1647,14 +1409,6 @@
 .av-mute svg {
   width: 58%;
   height: 58%;
-}
-
-.av-ring {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
 }
 
 /* плеер под сферой аватара: появляется под указателем */

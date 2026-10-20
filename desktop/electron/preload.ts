@@ -18,6 +18,7 @@ const SEND = new Set([
   "avatar:drag",
   "avatar:drag-end",
   "avatar:menu",
+  "avatar:active",
   "main:show",
   "overlay:ignore-mouse",
   "overlay:ready",

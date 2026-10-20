@@ -256,6 +256,10 @@ class WindowsUi:
             elements.append(element)
         return UiSnapshot(window, app, elements, truncated, hwnd=int(hwnd or 0), pid=pid, rect=frame)
 
+    def forget(self) -> None:
+        """Снимок сделан не UI Automation (страница браузера Jarvis): id e… прошлого снимка не действуют."""
+        self._controls, self._elements = {}, {}
+
     def element_at(self, x: int, y: int) -> tuple[str, str]:
         """Имя и тип элемента под точкой (для проверки клика по картинке: не «Отправить» ли это)."""
         try:

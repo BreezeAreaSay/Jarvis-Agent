@@ -26,6 +26,7 @@ def build_context(platform_name: str = "auto") -> AppContext:
     ctx.confirmations = Confirmations(ctx)
 
     from jarvis.ai.agent import Agent
+    from jarvis.ai.browser.service import Browser
     from jarvis.ai.service import Ai
     from jarvis.commands.service import Commands
     from jarvis.desks.service import Desks
@@ -48,6 +49,7 @@ def build_context(platform_name: str = "auto") -> AppContext:
     ctx.voice = Voice(ctx)
     ctx.ai = Ai(ctx)
     ctx.mcp = Mcp(ctx)
+    ctx.browser = Browser(ctx)  # браузер Jarvis для агента (до агента: агент берёт его из ctx)
     ctx.agent = Agent(ctx)
     ctx.plugins = Plugins(ctx)
     ctx.remote = Remote(ctx)
@@ -66,6 +68,7 @@ START_ORDER = (
     "tts",
     "ai",
     "mcp",
+    "browser",
     "agent",
     "plugins",
     "voice",

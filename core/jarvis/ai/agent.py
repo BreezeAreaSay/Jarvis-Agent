@@ -432,7 +432,11 @@ class Agent(BaseService):
         self.toast_source: Any = None
         self._toast_access = ""
         self._toast_checked = -1e9
-        self._actions: dict[str, Action] = {a.name: a for a in self._make_actions()}
+        from jarvis.ai.browser.tools import BrowserTools
+
+        self.browser = BrowserTools(self)  # браузер Jarvis: действия browser_* и снимок страницы
+        actions = [*self._make_actions(), *self.browser.actions()]
+        self._actions: dict[str, Action] = {a.name: a for a in actions}
         self._unsubscribe: Callable[[], None] | None = None
 
     # --- управление ------------------------------------------------------------------------------------
@@ -923,6 +927,8 @@ class Agent(BaseService):
 
     def _specs(self, run: AgentRun) -> list[dict[str, Any]]:
         hidden = set() if run.vision else {"screenshot", "zoom", "click_point"}
+        if not self.browser.enabled:
+            hidden |= self.browser.names
         specs = [a.spec() for a in self._actions.values() if a.name not in hidden]
         specs += [a.spec() for a in run.mcp.values()]
         return specs
@@ -938,7 +944,7 @@ class Agent(BaseService):
         address_rule = (
             f"Обращайся к пользователю «{address}»." if address else "Обращайся к пользователю на «вы»."
         )
-        system = AGENT_PROMPT.format(now=now_text(), address_rule=address_rule)
+        system = AGENT_PROMPT.format(now=now_text(), address_rule=address_rule) + self.browser.prompt()
         first, extras = await self._first_message(run, windows)
         await self._journal(run, "Экран в начале", result=first, images=_image_urls(extras))
         if chatgpt is not None:
@@ -1047,6 +1053,8 @@ class Agent(BaseService):
         (снимок, вопрос), None — сценарием не повторить (MCP, безымянная кнопка, пароль и другие секреты)."""
         if name in ("ui_snapshot", "screenshot", "zoom", "ask_user", "finish"):
             return []
+        if name in self.browser.names:
+            return self.browser.recipe_steps(name, args)
         text = str(args.get("text") or "")
         if text and redact(text) != text:
             return None  # номер карты, пароль: в сценарий (он хранится на диске) не записываем
@@ -1177,7 +1185,8 @@ class Agent(BaseService):
 
     def _remember_lesson(self, run: AgentRun, text: str) -> None:
         """Заметка о программе (finish.lesson) — на будущее: её получит агент, когда программа впереди."""
-        app = run.target.exe if run.target is not None else ""
+        # в браузере Jarvis — о сайте (ozon.ru), а не о chrome.exe
+        app = self.browser.lesson_app(run) or (run.target.exe if run.target is not None else "")
         if not text or not app or not self.ctx.settings.value.ai.agent_notes:
             return
         try:
@@ -1488,7 +1497,15 @@ class Agent(BaseService):
         grab = asyncio.ensure_future(self._grab(area)) if area is not None else None
         snapshot: UiSnapshot | None = None
         try:
-            snapshot = await self.ctx.run_platform(self.ui.snapshot, SNAPSHOT_LIMIT, fg.hwnd if fg else None)
+            # впереди браузер Jarvis — страница по CDP (jarvis.ai.browser), иначе — UI Automation
+            page = await self.browser.look(run, fg)
+            if page is not None and page.hint:
+                parts.append(page.hint)  # до снимка: заметки о сайте не вырезаются со старыми снимками
+            snapshot = (
+                page.snapshot
+                if page is not None
+                else await self.ctx.run_platform(self.ui.snapshot, SNAPSHOT_LIMIT, fg.hwnd if fg else None)
+            )
         except PlatformError as e:
             parts.append(f"{SNAPSHOT_HEADER}\n(Элементы окна недоступны: {e}.)")
         except BaseException:
@@ -1497,7 +1514,8 @@ class Agent(BaseService):
             raise
         else:
             run.snapshot = snapshot
-            parts.append(f"{SNAPSHOT_HEADER}\n{untrusted('Снимок окна', format_snapshot(snapshot))}")
+            body = page.text if page is not None else untrusted("Снимок окна", format_snapshot(snapshot))
+            parts.append(f"{SNAPSHOT_HEADER}\n{body}")
         extras: list[dict[str, Any]] = []
         if run.vision:
             # весь экран — после каждого действия; крупно окно — по screenshot или когда экран не снять

@@ -318,6 +318,12 @@ class Commands(BaseService):
                 value = action.value
             if action.type == "Launch.Shell":
                 return f"Команда консоли: «{one_line(value, 140)}»"
+            if action.type in ("System.Shutdown", "System.Restart"):  # питание — только с разрешения
+                from jarvis.commands import numbers
+
+                what = "Выключение" if action.type == "System.Shutdown" else "Перезагрузка"
+                delay = numbers.parse_duration(value or "0") or 0.0
+                return f"{what} компьютера" + (f" через {numbers.duration_text(delay)}" if delay >= 1 else "")
             if action.type == "Launch.File":
                 return f"Открыть файл: «{one_line(value, 140)}»"
             if action.type == "Keys.Press" and normalize_combo(value) in RISKY_KEYS:

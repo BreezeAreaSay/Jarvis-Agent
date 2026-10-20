@@ -176,4 +176,12 @@ def test_briefing_action_in_catalog(client: TestClient) -> None:
     items = client.get("/api/commands/actions").json()["items"]
     briefing = next(a for a in items if a["type"] == "Jarvis.Briefing")
     assert briefing["title"] == "Сводка дня" and briefing["category"] == "Джарвис"
-    assert [o["value"] for o in briefing["params"][0]["options"]] == ["", "short", "tasks", "missed"]
+    assert [o["value"] for o in briefing["params"][0]["options"]] == [
+        "",
+        "short",
+        "tasks",
+        "today",
+        "missed",
+        "welcome",
+        "hello",
+    ]

@@ -273,6 +273,17 @@ def _media() -> list[Builtin]:
             icon="media",
         ),
         cmd(
+            "media.close",
+            "Закрыть музыку",
+            v(
+                "(закрой|выключи совсем) (музыку|плеер|музыкальный плеер|музыкальное приложение)",
+                "закрой программу с музыкой",
+            ),
+            [("Media.Close", "")],
+            category=c,
+            icon="media",
+        ),
+        cmd(
             "media.now",
             "Что играет",
             v(
@@ -797,7 +808,8 @@ def _system() -> list[Builtin]:
             [("System.Shutdown", f"{N}m")],
             category=c,
             icon="power",
-            confirm=True,
+            # выключение с задержкой — без «Да или нет?»: его отменяет «отмени выключение», а Windows сама
+            # предупреждает; по просьбе ИИ — всё равно с подтверждением (Commands._ai_risk)
         ),
         cmd(
             "system.shutdown_in_hours",
@@ -809,7 +821,6 @@ def _system() -> list[Builtin]:
             [("System.Shutdown", f"{N}h")],
             category=c,
             icon="power",
-            confirm=True,
         ),
         cmd(
             "system.shutdown_hour",
@@ -821,7 +832,6 @@ def _system() -> list[Builtin]:
             [("System.Shutdown", "1h")],
             category=c,
             icon="power",
-            confirm=True,
         ),
         cmd(
             "system.restart",

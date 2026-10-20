@@ -783,6 +783,10 @@ fields?: [поля элемента списка] (kind list), secret?: имя, 
 | `focus` | `start {minutes?}`, `pause`, `resume`, `toggle`, `stop`, `break`, `skip_break`, `allow {key}`, `stats`, `state` | `state {phase: idle\|focus\|break\|paused, paused_from, reason: user\|idle, left_s, total_s, ends_at, cycle, next, waiting, today_min, today_sessions, streak, …}`, `alert {kind: focus_done\|break_done\|back\|distraction, title, text, …}` |
 | `file_search` | `search {text?, kinds?, date?, folder?, sort?, content?, limit?}`, `open {path\|index}`, `reveal {path\|index}`, `copy_path {path\|index}`, `toggle`, `box {open}`, `reindex` | `results {query, items, total, ttl}`, `box {open, query?}`, `opened {path, index, reveal?}` |
 
+«Озвучка уведомлений» (`notify_voice`) не читает служебный шум никогда, даже без фильтров программ: «Ножницы» и
+другие программы снимков экрана, «Снимок экрана скопирован / сохранён» (`notify_voice.noise`); агенту такие
+уведомления тоже не показываются.
+
 «Фокус» (`focus`): `plugin.focus.state` приходит при каждом изменении и раз в минуту, пока идёт таймер, — секунды
 интерфейс отсчитывает сам от `left_s` (`ends_at` — unix-время конца, только пока таймер идёт); `waiting` — перерыв
 кончился, ждём следующий фокус серии (`next: focus`). `alert`: `focus_done {minutes, break_min, long}` — начался

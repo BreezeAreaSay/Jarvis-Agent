@@ -3,8 +3,9 @@
 Источник — UserNotificationListener (WinRT): плагин просит доступ к уведомлениям и раз в ~2 с читает список
 всплывающих уведомлений; новые (по id) озвучиваются ctx.tts.say(f"{программа}: {заголовок}. {текст}").
 Молчит в тихом режиме, во время игр и видео во весь экран (настройка) и фильтрует программы
-(config.apps_allow — только эти, config.apps_block — кроме этих). Без доступа статус объясняет, где его
-включить. Не в Windows — статус unsupported.
+(config.apps_allow — только эти, config.apps_block — кроме этих). Служебный шум не читает никогда (noise):
+«Ножницы» и другие снимки экрана показывают уведомление после каждого снимка («Снимок экрана скопирован в
+буфер обмена»). Без доступа статус объясняет, где его включить. Не в Windows — статус unsupported.
 """
 
 import asyncio
@@ -35,6 +36,21 @@ ACCESS_HINT = (
 )
 UNSUPPORTED_HINT = "Озвучка уведомлений работает только в Windows 10 и 11"
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+# служебный шум: программы снимков экрана и их «снимок скопирован / сохранён» — после каждого снимка
+NOISE_APPS = re.compile(
+    r"ножниц|snipping|набросок на фрагменте|фрагмент и набросок|snip\s*&\s*sketch|screen\s*sketch|screenclip",
+    re.IGNORECASE,
+)
+NOISE_TEXT = re.compile(
+    r"(?:снимок экрана|скриншот|фрагмент)\w*\s+(?:скопирован|сохран)|"
+    r"(?:screenshot|snip|screen capture)\w*\s+(?:copied|saved)",
+    re.IGNORECASE,
+)
+
+
+def noise(toast: "Toast") -> bool:
+    """Служебное уведомление, которое никому не нужно слышать: «Ножницы: снимок экрана скопирован…»."""
+    return bool(NOISE_APPS.search(toast.app) or NOISE_TEXT.search(f"{toast.title} {toast.body}"))
 
 
 @dataclass
@@ -277,7 +293,7 @@ class NotifyVoice(Plugin):
     # --- что и как читать ---------------------------------------------------------------------------
     def _allowed(self, toast: Toast) -> bool:
         app = toast.app.casefold()
-        if "jarvis" in app:
+        if "jarvis" in app or noise(toast):
             return False
         config = self.config
         allow = _apps(str(config.get("apps_allow") or ""))

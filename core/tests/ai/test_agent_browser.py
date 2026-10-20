@@ -13,7 +13,7 @@ import pytest
 from jarvis.ai import catalog, journal, lessons
 from jarvis.context import AppContext
 from jarvis.platform.base import WindowInfo
-from tests.ai.cdp_fake import FakeChrome, shop, use_fake
+from tests.ai.cdp_fake import FakeChrome, button, chooser, field_, go, heading, shop, use_fake
 from tests.ai.fakes import FakeUi, ScriptedLlm, calls, completion, reply
 
 PLAN = reply('{"steps": ["Открыть сайт", "Найти", "Готово"]}')
@@ -465,3 +465,163 @@ def ui_running(running_ctx: AppContext) -> FakeUi:
     agent.launch_settle_s = 0.0
     agent.pointer_delay_s = 0.0
     return fake
+
+
+# --- после проверки кода: дыры, которые нашла проверка ----------------------------------------------------
+
+
+def _messenger_and_mail() -> Any:
+    """vk.com — мессенджер без «мессенджерского» заголовка окна; две вкладки «Почта» и «Почта — входящие»;
+    страница с кнопкой «Добавить фото» (открывает выбор файла, хотя это не поле type=file)."""
+    base = shop()
+
+    def sites(url: str) -> Any:
+        if "vk.com" in url:
+            if "sent=1" in url:
+                return ("Мессенджер", [heading("Отправлено")])
+            return (
+                "Мессенджер",
+                [heading("Иван"), field_("Напишите сообщение", enter=go("https://vk.com/im?sent=1"))],
+            )
+        if url.endswith("/a"):
+            return ("Почта", [heading("A")])
+        if url.endswith("/b"):
+            return ("Почта — входящие", [heading("B")])
+        if url.endswith("/photo"):
+            return ("Профиль", [heading("Фото"), button("Добавить фото", click=chooser())])
+        return base(url)
+
+    return sites
+
+
+async def test_messenger_site_enter_asks_with_the_text(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi) -> None:
+    fake = FakeChrome(_messenger_and_mail())
+    use_fake(ctx, fake)
+    asked = _answer(ctx, allow=False)
+    llm.add(
+        PLAN,
+        calls(("browser_open", {"url": "https://vk.com/im"})),
+        act(
+            "browser_type",
+            lambda t: {"id": _id(t, "Напишите сообщение"), "text": "Привет, как дела?", "submit": True},
+        ),
+        calls(("finish", {"status": "partial", "summary": "Не отправил."})),
+    )
+    await _run(ctx, "Напиши Ивану в ВК")
+    # сайт-мессенджер узнаётся по адресу, хотя заголовок окна не «мессенджерский»: Enter — только с разрешения
+    assert asked and asked[0][1] == "Будет отправлено: «Привет, как дела?»"
+    assert not any("sent=1" in t.url for t in fake.tabs)
+    await ctx.browser.disconnect()
+    await fake.stop()
+
+
+async def test_password_typed_by_id_in_other_case_is_not_journaled(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, chrome: Any
+) -> None:
+    _answer(ctx)
+    llm.add(
+        PLAN,
+        calls(("browser_open", {"url": SHOP})),
+        act("browser_type", lambda t: {"id": _id(t, "Пароль").upper(), "text": "hunter2-secret"}),
+        calls(("finish", {"status": "partial", "summary": "Ввёл."})),
+    )
+    result = await _run(ctx, "Войди на shop.test")
+    data = journal.load(result.run_id)
+    assert data is not None
+    typed = [s["args"] for s in data["steps"] if s.get("name") == "browser_type"]
+    assert typed and typed[0]["text"] == "••••"
+
+
+async def test_download_is_allowed_only_for_the_approved_click(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, chrome: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis.ai.browser import tools as browser_tools
+
+    monkeypatch.setattr(browser_tools, "DOWNLOAD_GRACE_S", 0.0)
+    _answer(ctx)
+    seen: list[str] = []
+
+    def finish(text: str) -> dict[str, Any]:
+        seen.append(chrome.download_behavior)
+        return {"status": "done", "summary": "Скачал."}
+
+    llm.add(
+        PLAN,
+        calls(("browser_open", {"url": SHOP})),
+        act("browser_click", lambda t: {"id": _id(t, "Скачать прайс")}),
+        calls(("browser_wait", {"seconds": 0.5})),
+        act("finish", finish),
+        calls(("finish", {"status": "done", "summary": "Скачал."})),
+    )
+    await _run(ctx, "Скачай прайс")
+    assert chrome.downloads and chrome.downloads[0]["state"] == "completed"  # разрешённое — скачалось
+    assert seen[0] == "deny"  # после нажатия — снова запрет, и во время browser_wait тоже
+
+
+async def test_visible_tab_wins_over_the_agents_shorter_title(ctx: AppContext, ui: FakeUi) -> None:
+    fake = FakeChrome(_messenger_and_mail())
+    use_fake(ctx, fake)
+    browser = ctx.browser
+    await browser.connect()
+    await fake.navigate(fake.tabs[0], "https://mail.test/a")
+    other = await browser.open_tab("about:blank")
+    await fake.navigate(fake.tab(other), "https://mail.test/b")
+    window = WindowInfo(
+        102, "Почта — входящие - Google Chrome", "chrome.exe", 5200, (0, 0, 1000, 800), foreground=True
+    )
+    chosen = await browser.tab_of(window, preferred=fake.tabs[0].target)  # вкладка агента — «Почта»
+    assert chosen is not None and chosen["title"] == "Почта — входящие"
+    await browser.disconnect()
+    await fake.stop()
+
+
+@pytest.mark.parametrize("allow", [False, True])
+async def test_button_that_opens_file_chooser_asks_first(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, allow: bool
+) -> None:
+    fake = FakeChrome(_messenger_and_mail())
+    use_fake(ctx, fake)
+    asked = _answer(ctx, allow=allow)
+    llm.add(
+        PLAN,
+        calls(("browser_open", {"url": "https://shop.test/photo"})),
+        act("browser_click", lambda t: {"id": _id(t, "Добавить фото")}),
+        calls(("finish", {"status": "partial", "summary": "Готово."})),
+    )
+    await _run(ctx, "Поставь фото в профиль")
+    # окно выбора файла у сайта перехвачено: Jarvis спрашивает, и только разрешённое нажатие его открывает
+    assert [a[0] for a in asked] == ["Выбрать файл для загрузки на shop.test?"]
+    assert fake.file_choosers == (["Добавить фото"] if allow else [])
+    await ctx.browser.release()  # агент закончил: человек в браузере Jarvis выбирает файлы как обычно
+    assert fake.tabs and not any(t.intercept_files for t in fake.tabs)
+    assert fake.download_behavior == "default"
+    await ctx.browser.disconnect()
+    await fake.stop()
+
+
+async def test_login_button_without_form_asks(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi) -> None:
+    base = shop()
+
+    def sites(url: str) -> Any:
+        if url.endswith(
+            "/login"
+        ):  # поле пароля и «Войти» — без <form> (браузер мог подставить сохранённый пароль)
+            return (
+                "Вход",
+                [field_("Логин"), field_("Пароль", kind="password"), button("Войти", click=go(SHOP))],
+            )
+        return base(url)
+
+    fake = FakeChrome(sites)
+    use_fake(ctx, fake)
+    asked = _answer(ctx, allow=False)
+    llm.add(
+        PLAN,
+        calls(("browser_open", {"url": "https://shop.test/login"})),
+        act("browser_click", lambda t: {"id": _id(t, "Войти")}),
+        calls(("finish", {"status": "partial", "summary": "Не вошёл."})),
+    )
+    await _run(ctx, "Зайди на shop.test")
+    assert [a[0] for a in asked] == ["Войти на shop.test («Войти»)?"] and "Войти" not in fake.clicked
+    await ctx.browser.disconnect()
+    await fake.stop()

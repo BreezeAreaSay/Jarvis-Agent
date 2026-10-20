@@ -149,9 +149,7 @@ class AiSettings(_Model):
     vision: Literal["auto", "on", "off"] = "auto"
     agent_confirm: Literal["risky", "always"] = "risky"
     max_agent_steps: int = Field(25, ge=3, le=100)
-    agent_notes: bool = (
-        True  # агент запоминает, что в программе не сработало и как получилось (ai/lessons.py)
-    )
+    agent_notes: bool = True  # агент запоминает, что не сработало в программе (ai/lessons.py)
     agent_journal: bool = True  # шаги агента и снимки экрана — в журнал на этом компьютере (ai/journal.py)
     # браузер Jarvis: свой профиль Chrome или Edge, агент работает со страницами по CDP (ai/browser)
     browser: bool = False

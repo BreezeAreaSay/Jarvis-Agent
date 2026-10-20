@@ -379,7 +379,18 @@ export interface UiMessage {
     agent?: { run_id: string; status: string; steps: number; plan: string[] };
     /** Удачный прогон агента, который можно запомнить сценарием (POST /api/agent/scenario). */
     recipe?: { request: string; actions: { type: string; value: string }[]; scenario_id?: string };
+    /** У ответа с нарисованными картинками (images) — что просили нарисовать, по картинке на запись. */
+    generated?: GeneratedInfo[];
+    /** Картинки удалены по сроку хранения или в «Приватности» — сколько их было. */
+    images_removed?: number;
   };
+}
+
+/** Нарисованная картинка (jarvis/ai/images.py): описание, размер, модель. */
+export interface GeneratedInfo {
+  prompt: string;
+  size?: string;
+  model?: string;
 }
 
 /** Группа в выборе провайдера: по подписке (без ключа), по ключу API, на этом ПК, свой сервер. */

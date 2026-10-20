@@ -1,10 +1,12 @@
 // Ответ ассистента в Markdown: marked → DOMPurify. Блоки кода — с подписью языка и кнопкой «Копировать»,
-// ссылки открываются во внешнем браузере (bridge.openExternal).
+// таблицы — в рамке с прокруткой вбок (узкое окно), картинки открываются во весь экран, ссылки — во внешнем
+// браузере (bridge.openExternal).
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
 import { memo, useMemo } from "react";
 import { bridge } from "@/lib/bridge";
 import { cx, notify } from "@/ui";
+import { viewImage } from "./Images";
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -31,7 +33,10 @@ const PURIFY = {
 };
 
 export function renderMarkdown(text: string): string {
-  const html = marked.parse(text) as string;
+  // таблица — в обёртке: широкая прокручивается вбок внутри ответа, а не раздвигает ленту
+  const html = (marked.parse(text) as string)
+    .replace(/<table>/g, '<div class="ai-md-table"><table>')
+    .replace(/<\/table>/g, "</table></div>");
   return DOMPurify.sanitize(html, PURIFY) as unknown as string;
 }
 
@@ -51,6 +56,10 @@ function onClick(e: React.MouseEvent<HTMLDivElement>) {
         }, 1600);
       })
       .catch(() => notify("Не удалось скопировать", "error"));
+    return;
+  }
+  if (target instanceof HTMLImageElement && target.src) {
+    viewImage(target.src, target.alt);
     return;
   }
   const link = target.closest<HTMLAnchorElement>("a[href]");

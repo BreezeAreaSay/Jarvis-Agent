@@ -1,13 +1,48 @@
-// Левая колонка: «+ Новый чат», чаты (закреплённые сверху, голосовые — с микрофоном), меню чата
-// (переименовать, закрепить, удалить) по «⋯» и правому клику, внизу — «Настройки Jarvis AI».
-import { Ellipsis, Mic, MessagesSquare, Pencil, Pin, PinOff, Plus, RotateCcw, SlidersHorizontal, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+// Левая колонка «История»: «+ Новый чат», поиск по названиям, чаты по дням («Закреплённые», «Сегодня»,
+// «Вчера», «На этой неделе», «Раньше»; голосовые — с микрофоном), меню чата (переименовать, закрепить,
+// удалить) по «⋯» и правому клику, внизу — «Настройки Jarvis AI».
+import {
+  Ellipsis,
+  History,
+  Mic,
+  MessagesSquare,
+  Pencil,
+  Pin,
+  PinOff,
+  Plus,
+  RotateCcw,
+  Search,
+  SlidersHorizontal,
+  Trash2,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Chat } from "@/api/types";
 import { navigate } from "@/lib/router";
 import { Button, cx, Dots, Modal } from "@/ui";
 import { Menu } from "./Menu";
 import { useAi } from "./store";
-import { fmtShort } from "./util";
+import { addDays, fmtShort, startOfDay } from "./util";
+
+/** Чаты по группам: закреплённые сверху, остальные — по дню последнего сообщения. */
+function groupChats(chats: Chat[]): { title: string; items: Chat[] }[] {
+  const today = startOfDay(new Date()).getTime() / 1000;
+  const yesterday = addDays(new Date(), -1);
+  const y = startOfDay(yesterday).getTime() / 1000;
+  const week = startOfDay(addDays(new Date(), -6)).getTime() / 1000;
+  const groups: { title: string; items: Chat[] }[] = [
+    { title: "Закреплённые", items: [] },
+    { title: "Сегодня", items: [] },
+    { title: "Вчера", items: [] },
+    { title: "На этой неделе", items: [] },
+    { title: "Раньше", items: [] },
+  ];
+  for (const c of chats) {
+    const g = c.pinned ? 0 : c.updated >= today ? 1 : c.updated >= y ? 2 : c.updated >= week ? 3 : 4;
+    groups[g].items.push(c);
+  }
+  return groups.filter((g) => g.items.length);
+}
 
 function ChatItem({
   chat,
@@ -121,6 +156,7 @@ export function ChatList({ activeId }: { activeId: string | null }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Chat | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [query, setQuery] = useState("");
 
   const doDelete = async () => {
     if (!confirmDelete) return;
@@ -131,11 +167,39 @@ export function ChatList({ activeId }: { activeId: string | null }) {
     setConfirmDelete(null);
   };
 
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? chats.filter((c) => (c.title || "").toLowerCase().includes(q)) : chats;
+  }, [chats, query]);
+  const groups = useMemo(() => groupChats(shown), [shown]);
+
   return (
-    <aside className="ai-side" aria-label="Чаты">
+    <aside className="ai-side" aria-label="История">
+      <div className="ai-side-head">
+        <History />
+        <span className="ai-side-title">История</span>
+        {chats.length > 0 && <span className="ai-side-count">{chats.length}</span>}
+      </div>
       <Button variant="primary" block icon={<Plus />} onClick={newChat} className="ai-new">
         Новый чат
       </Button>
+      {chats.length > 6 && (
+        <label className="ai-side-search">
+          <Search />
+          <input
+            value={query}
+            placeholder="Найти чат"
+            aria-label="Найти чат"
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Escape" && setQuery("")}
+          />
+          {query && (
+            <button type="button" aria-label="Очистить поиск" onClick={() => setQuery("")}>
+              <X />
+            </button>
+          )}
+        </label>
+      )}
       <nav className="ai-chat-list">
         {!loaded &&
           [70, 55, 82, 64].map((w, i) => (
@@ -155,16 +219,24 @@ export function ChatList({ activeId }: { activeId: string | null }) {
             Здесь появятся ваши разговоры с Jarvis
           </div>
         )}
-        {chats.map((c) => (
-          <ChatItem
-            key={c.id}
-            chat={c}
-            active={c.id === activeId}
-            busy={!!threads[c.id]?.pending}
-            renaming={renaming === c.id}
-            onRenamed={() => setRenaming(null)}
-            onMenu={(chat, at) => setMenu({ chat, ...at })}
-          />
+        {loaded && !error && chats.length > 0 && shown.length === 0 && (
+          <div className="ai-side-note">Ничего не нашлось</div>
+        )}
+        {groups.map((g) => (
+          <div key={g.title} className="ai-chat-group" role="group" aria-label={g.title}>
+            <div className="ai-chat-group-title">{g.title}</div>
+            {g.items.map((c) => (
+              <ChatItem
+                key={c.id}
+                chat={c}
+                active={c.id === activeId}
+                busy={!!threads[c.id]?.pending}
+                renaming={renaming === c.id}
+                onRenamed={() => setRenaming(null)}
+                onMenu={(chat, at) => setMenu({ chat, ...at })}
+              />
+            ))}
+          </div>
         ))}
       </nav>
       <Button block icon={<SlidersHorizontal />} onClick={() => navigate("settings", "ai")} className="ai-settings-btn">

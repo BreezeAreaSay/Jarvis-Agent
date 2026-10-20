@@ -12,3 +12,6 @@ desktop/release/
 /dist/
 *.log
 .DS_Store
+
+# прогоны проверочных задач агента (core/evals)
+core/.evals/

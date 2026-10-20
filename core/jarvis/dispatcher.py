@@ -80,6 +80,13 @@ _SAVE_RUN = re.compile(
     r"|сделай\s+(?:из\s+этого\s+)?сценарий)(?:,?\s+пожалуйста)?$"
 )
 MAX_RULES = 30  # записей памяти с правилами, которые сверяем с командой
+# «включи на ютубе лофи», «поставь видео с котами»: готовая команда только откроет поиск, а включить ролик
+# (щёлкнуть по нему, мимо рекламы) — дело агента на странице
+_PLAY = re.compile(
+    r"^\W*(?:включи|включить|поставь|поставить|запусти|запустить|воспроизведи|вруби|сыграй|проиграй)(?!\w)",
+    re.I,
+)
+_VIDEO_SEARCH = {"builtin.search.youtube": "YouTube", "builtin.search.rutube": "RuTube"}
 # чем стала фраза, пока работает агент (Agent.interject), — для истории
 AGENT_REPLY = {
     "answer": "Ответ агенту",
@@ -216,6 +223,9 @@ class MainDispatcher:
             if rule:  # человек научил, как это делать, — агенту с его правилом
                 task = f"{raw}. Пользователь просил делать это так: {rule}"
                 return await self._run_ai(raw, source, speak, agent_task=task)
+            video = _video_task(raw, match) if self._agent_ready() else ""
+            if video:  # «включи на ютубе …»: поиск откроет и агент, а ролик включит только он
+                return await self._run_ai(raw, source, speak, agent_task=video)
             return await self._run_command(raw, source, match, speak)
 
         # ИИ
@@ -453,3 +463,14 @@ class MainDispatcher:
 def _one_line(text: str, limit: int) -> str:
     line = " ".join(text.split())
     return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def _video_task(raw: str, match: Any) -> str:
+    """«Включи на ютубе лофи» — задача агенту: найти и включить ролик; "" — это не просьба включить видео."""
+    parts = list(getattr(match, "parts", None) or [])
+    if len(parts) != 1 or parts[0].command_id not in _VIDEO_SEARCH or not _PLAY.match(raw):
+        return ""
+    site = _VIDEO_SEARCH[parts[0].command_id]
+    query = str((parts[0].slots or {}).get("query") or "").strip()
+    what = f"по запросу «{query}»" if query else "по этой просьбе"
+    return f"{raw}. Найди на {site} видео {what} и включи его (не рекламу); проверь, что оно играет."

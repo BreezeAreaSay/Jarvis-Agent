@@ -18,7 +18,7 @@ import contextlib
 import itertools
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
@@ -71,7 +71,9 @@ class Browser(BaseService):
         self.navigated: dict[str, float] = {}  # сессия → когда сменился документ
         self.notes: list[str] = []  # о скачиваниях — агенту со следующим снимком
         self.downloads_allowed = True
-        self._guarding = False  # агент работает в браузере: скачивания — только с разрешения
+        self._guarding = False  # агент работает в браузере: скачивания и выбор файла — только с разрешения
+        self.choosers: dict[str, int] = {}  # сессия → сколько раз сайт открывал выбор файла (перехвачено)
+        self._files_open: set[str] = set()  # сессии, где выбор файла сейчас разрешён (одно нажатие)
         self._stuck = False  # порт отладки есть, но браузер не ответил вовремя (занят) — не запускать второй
         self._unsubscribe: list[Callable[[], None]] = []
 
@@ -141,9 +143,8 @@ class Browser(BaseService):
     async def _agent_state(self, event: Any) -> None:
         data = getattr(event, "data", None) or {}
         if data.get("status") in FINISHED and self._guarding:
-            self._guarding = False
             with contextlib.suppress(Exception):
-                await self.allow_downloads(True)
+                await self.release()
 
     # --- подключение ---------------------------------------------------------------------------------
     async def connect(self, launch: bool = True) -> CdpClient | None:
@@ -261,6 +262,8 @@ class Browser(BaseService):
         self.dialogs.clear()
         self.loading.clear()
         self.navigated.clear()
+        self.choosers.clear()
+        self._files_open.clear()
 
     def _closed(self) -> None:
         if self.client is not None and self.client.closed:
@@ -323,6 +326,8 @@ class Browser(BaseService):
                 self.loading.pop(session, None)
             else:
                 self.navigated[session] = time.monotonic()
+        elif method == "Page.fileChooserOpened":
+            self.choosers[session] = self.choosers.get(session, 0) + 1
         elif method == "Browser.downloadWillBegin":
             name = one_line(str(params.get("suggestedFilename") or "файл"), 80)
             if self.downloads_allowed:
@@ -340,12 +345,26 @@ class Browser(BaseService):
         """Скачивания: deny — браузер их не начинает (агент работает), default — как обычно."""
         if allow == self.downloads_allowed or not self.connected:
             return
+        started = not allow and not self._guarding
         if not allow:
             self._guarding = True
         await self._client().send(
             "Browser.setDownloadBehavior", {"behavior": "default" if allow else "deny", "eventsEnabled": True}
         )
         self.downloads_allowed = allow
+        if started:  # агент начал работать в браузере: и выбор файла — только с разрешения
+            for session in list(self._targets):
+                await self._intercept_files(session, True)
+
+    async def release(self) -> None:
+        """Агент закончил: скачивания и выбор файла — снова как обычно (человек работает в браузере сам)."""
+        guarding, self._guarding = self._guarding, False
+        if not self.connected:
+            return
+        await self.allow_downloads(True)
+        if guarding:
+            for session in list(self._targets):
+                await self._intercept_files(session, False)
 
     # --- вкладки -----------------------------------------------------------------------------------------
     async def tabs(self) -> list[dict[str, Any]]:
@@ -378,7 +397,28 @@ class Browser(BaseService):
         self._sessions[target], self._targets[session] = session, target
         with contextlib.suppress(CdpError, TimeoutError):
             await client.send("Page.enable", session=session, timeout=3.0)
+        if self._guarding:  # агент работает: окно выбора файла сайт сам не откроет
+            await self._intercept_files(session, True)
         return session
+
+    async def _intercept_files(self, session: str, on: bool) -> None:
+        """Окно выбора файла: on — перехватывать (сайт его не откроет, а Jarvis узнает: fileChooserOpened)."""
+        with contextlib.suppress(CdpError, TimeoutError, UserFacingError):
+            await self._client().send(
+                "Page.setInterceptFileChooserDialog", {"enabled": on}, session=session, timeout=3.0
+            )
+
+    @contextlib.asynccontextmanager
+    async def files_allowed(self, session: str) -> AsyncIterator[None]:
+        """Выбор файла разрешили — на одно нажатие окно выбора файла открывается, потом снова перехват."""
+        self._files_open.add(session)
+        await self._intercept_files(session, False)
+        try:
+            yield
+        finally:
+            self._files_open.discard(session)
+            if self._guarding:
+                await self._intercept_files(session, True)
 
     def target_of(self, session: str) -> str:
         return self._targets.get(session, "")
@@ -434,6 +474,9 @@ class Browser(BaseService):
         matching = [
             t for t in tabs if str(t.get("title") or "") and title.startswith(str(t["title"]).casefold())
         ]
+        if matching:  # «Почта — входящие» на экране: вкладка «Почта» агента — не она
+            longest = max(len(str(t["title"])) for t in matching)
+            matching = [t for t in matching if len(str(t["title"])) == longest]
         chosen = next((t for t in matching if t["targetId"] == preferred), None)
         if chosen is None and len(matching) == 1:
             chosen = matching[0]

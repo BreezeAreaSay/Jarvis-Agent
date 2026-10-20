@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 10.0
 MAX_MESSAGE = 256 * 2**20  # дерево доступности большой страницы — десятки мегабайт
+BIG_MESSAGE = 2**20  # сообщение больше — разбирается в потоке, не в цикле событий
 
 Handler = Callable[[str, dict[str, Any], str], None]
 
@@ -110,7 +111,12 @@ class CdpClient:
         try:
             async for raw in self._ws:
                 try:
-                    message = json.loads(raw)
+                    # ответ на снимок страницы — до десятков мегабайт: разбирать не в цикле событий
+                    message = (
+                        await asyncio.to_thread(json.loads, raw)
+                        if len(raw) > BIG_MESSAGE
+                        else json.loads(raw)
+                    )
                 except ValueError:
                     continue
                 if not isinstance(message, dict):

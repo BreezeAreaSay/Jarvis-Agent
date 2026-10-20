@@ -91,6 +91,8 @@ DOWNLOAD_EXT = re.compile(
     r"\.(exe|msi|msix|appx|bat|cmd|ps1|scr|zip|rar|7z|tar|gz|tgz|iso|dmg|apk|torrent|jar|vbs|docm|xlsm)$",
     re.I,
 )
+# вход без <form>: на странице есть поле пароля, кнопка «Войти» — тоже вход (только с разрешения)
+LOGIN_NAME = re.compile(r"\b(войти|вход|авторизоваться|log ?in|sign ?in)\b", re.I)
 CAPTCHA_URL = re.compile(
     r"recaptcha|hcaptcha|turnstile|challenges\.cloudflare\.com|captcha|smartcaptcha", re.I
 )
@@ -329,6 +331,7 @@ class _Dom:
     def __init__(self, snapshot: dict[str, Any], scroll: tuple[float, float]) -> None:
         self.nodes: dict[int, _Node] = {}
         self.login_forms: set[int] = set()
+        self.loose_password = False  # поле пароля не в форме
         strings = snapshot.get("strings") or []
 
         def text(index: Any) -> str:
@@ -398,6 +401,8 @@ class _Dom:
                 form = self.form_of(backend)
                 if form:
                     self.login_forms.add(form)
+                else:
+                    self.loose_password = True
 
     def get(self, backend: Any) -> _Node | None:
         return self.nodes.get(backend) if isinstance(backend, int) else None
@@ -615,6 +620,8 @@ class _Builder:
                     dom.tag == "INPUT" and kind_attr in ("submit", "image")
                 )
                 element.login = submit or element.is_field
+            elif self.dom.loose_password and role in ("button", "link") and LOGIN_NAME.search(name):
+                element.login = True
         if (
             element.is_field
             and (element.password or bool(PASSWORD_NAME.search(name)))
@@ -790,7 +797,10 @@ async def capture(
         frames(),
     )
     all_frames = {"": list(tree.get("nodes") or []), **children}
-    return build(target, session, url, title, all_frames, owners, snapshot, metrics, state, ids)
+    # тяжёлая страница — десятки тысяч узлов, секунда разбора: не держать цикл событий (голос, интерфейс)
+    return await asyncio.to_thread(
+        build, target, session, url, title, all_frames, owners, snapshot, metrics, state, ids
+    )
 
 
 # --- снимок для модели ---------------------------------------------------------------------------------

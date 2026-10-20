@@ -71,6 +71,7 @@ PAGE_LABEL = "Страница в браузере Jarvis"
 LOOK_TIMEOUT_S = 20.0
 LOAD_TIMEOUT_S = 10.0  # открыть адрес: ждать загрузку
 CLICK_SETTLE_S = 5.0  # после нажатия — если пошла загрузка, подождать её
+DOWNLOAD_GRACE_S = 1.5  # разрешённое скачивание: ещё столько ждём его начала, потом — снова запрет
 FRESH_S = 2.0  # browser_read: снимок страницы свежий — читать его, не снимать заново
 MESSENGER_HOSTS = re.compile(
     r"(^|\.)(web\.telegram\.org|web\.whatsapp\.com|vk\.com|discord\.com|slack\.com|teams\.microsoft\.com|"
@@ -221,6 +222,8 @@ class BrowserTools:
         if fg is None or browser is None or not self.enabled or not browser.owns(fg):
             return None
         self._start(run)
+        with contextlib.suppress(Exception):  # click_point по ссылке скачивания — тоже не без разрешения
+            await browser.allow_downloads(False)
         try:
             page, tabs = await asyncio.wait_for(self._capture(fg), self.look_timeout_s)
         except asyncio.CancelledError:
@@ -363,6 +366,16 @@ class BrowserTools:
             return True
         return bool(self.agent._messenger(run))
 
+    def _message(self, run: AgentRun, page: pages.Page | None) -> str:
+        """Набранное на сайте-мессенджере и не отправленное (сайт узнаётся и по адресу, не только по окну)."""
+        return str(self.agent._pending_message(run, messenger=True)) if self._messenger(run, page) else ""
+
+    def secret(self, args: dict[str, Any]) -> bool:
+        """Действие с полем пароля, кода или карты — его текст в журнал не пишется (Agent._act)."""
+        page, element_id = self.page, _arg(args, "id")
+        element = page.find(element_id) if page is not None and element_id else None
+        return element is not None and (element.password or element.card)
+
     async def _done(self, run: AgentRun, result: str, detail: str = "") -> Outcome:
         outcome: Outcome = await self.agent._observe(run, self.agent.settle_s, result, detail, more=1.0)
         return outcome
@@ -425,10 +438,10 @@ class BrowserTools:
         session = await self._session(browser, page)
         name = element.name or element.kind
         site = self._site(page)
-        message = self.agent._pending_message(run) if self._messenger(run, page) else ""
-        allow_download = False
+        message = self._message(run, page)
+        allow_download = allow_file = False
         if message and (SEND_NAME.search(name) or not element.name):
-            await self.agent._approve_send(run, f"Нажать «{name}» на {site}")
+            await self.agent._approve_send(run, f"Нажать «{name}» на {site}", messenger=True)
         else:
             risky = (
                 element.download
@@ -451,15 +464,33 @@ class BrowserTools:
                     detail = " · ".join(d for d in (self.agent._send_detail(run), detail) if d)
                 await self.agent._approve(run, title, detail)
                 allow_download = bool(element.download or RISKY_NAME.search(name))
+                allow_file = element.file
         if allow_download:
-            await browser.allow_downloads(True)  # разрешили — скачивание пойдёт (до следующего действия)
-        result = await self._press_element(
-            run, browser, page, session, element, double=bool(args.get("double"))
-        )
-        if SEND_NAME.search(name):
-            run.unsent = []
-        if result != "dialog":
-            await self._settle(run, browser, session, CLICK_SETTLE_S)
+            await browser.allow_downloads(True)  # разрешили — скачивание пойдёт, но только от этого нажатия
+        double = bool(args.get("double"))
+        choosers = browser.choosers.get(session, 0)
+        try:
+            async with browser.files_allowed(session) if allow_file else contextlib.nullcontext():
+                result = await self._press_element(run, browser, page, session, element, double=double)
+            if SEND_NAME.search(name):
+                run.unsent = []
+            if result != "dialog":
+                await self._settle(run, browser, session, CLICK_SETTLE_S)
+            if browser.choosers.get(session, 0) > choosers and not allow_file and not run.stopping:
+                # кнопка («Добавить фото») открывает выбор файла — загрузка файла на сайт только с разрешения
+                await self.agent._approve(
+                    run,
+                    f"Выбрать файл для загрузки на {site}?",
+                    f"Кнопка «{one_line(name, 60)}» открывает выбор файла · {self._where(page)}",
+                )
+                async with browser.files_allowed(session):  # разрешили — нажать снова: окно откроется
+                    result = await self._press_element(run, browser, page, session, element, double=double)
+            if allow_download and not run.stopping:
+                await asyncio.sleep(DOWNLOAD_GRACE_S)  # скачивание начинается чуть позже нажатия и загрузки
+        finally:
+            if allow_download:
+                with contextlib.suppress(Exception):
+                    await browser.allow_downloads(False)
         return await self._done(run, f"«{one_line(name, 80)}»: {_said(result)}")
 
     async def _type(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
@@ -505,9 +536,8 @@ class BrowserTools:
         if not element.password and not select:
             self.agent._note_typed(run, text, "поиск" if element.role == "searchbox" else name)
         if submit:
-            message = self.agent._pending_message(run) if self._messenger(run, page) else ""
-            if message:
-                await self.agent._approve_send(run, f"Нажать Enter на {site}")
+            if self._message(run, page):
+                await self.agent._approve_send(run, f"Нажать Enter на {site}", messenger=True)
             elif element.login and not approved_login:
                 await self.agent._approve(
                     run, f"Войти на {site} (Enter в поле «{one_line(name, 40)}»)?", where
@@ -599,22 +629,40 @@ class BrowserTools:
         if tab_index is not None:
             return await self._switch(run, browser, tab_index)
         focused = page.find(page.focused) if page is not None and page.focused else None
-        message = (
-            self.agent._pending_message(run) if combo in SEND_KEYS and self._messenger(run, page) else ""
-        )
+        message = self._message(run, page) if combo in SEND_KEYS else ""
+        # Enter или пробел на кнопке в фокусе — как её нажатие: «Оплатить», «Удалить», скачать — с разрешения
+        pressing = combo in ("enter", "space") and focused is not None and not focused.is_field
+        allow_file = False
         if message:
-            await self.agent._approve_send(run, f"Нажать {combo} на {site}")
+            await self.agent._approve_send(run, f"Нажать {combo} на {site}", messenger=True)
         elif combo == "enter" and focused is not None and focused.login:
             await self.agent._approve(run, f"Войти на {site} (Enter)?", self._where(page))
+        elif (
+            pressing
+            and focused is not None
+            and (focused.download or focused.file or RISKY_NAME.search(focused.name or ""))
+        ):
+            what = "Скачать файл" if focused.download else "Выбрать файл для загрузки" if focused.file else ""
+            title = f"{what} на {site}?" if what else f"Нажать «{one_line(focused.name, 60)}» на {site}?"
+            await self.agent._approve(run, title, self._where(page))
+            allow_file = focused.file
         elif combo in PASTE_KEYS:  # в буфере у человека может быть пароль — на сайт только с разрешения
             await self.agent._approve(run, f"Вставить из буфера обмена на {site}?", self._where(page))
         elif self.agent._ask(run, combo in RISKY_KEYS):
             await self.agent._approve(run, f"Нажать {combo} на {site}?", self._where(page))
-        if await self._key(browser, session, combo) == "dialog":
-            return await self._done(run, f"Нажато {combo} — сайт показал окно")
+        choosers = browser.choosers.get(session, 0)
+        async with browser.files_allowed(session) if allow_file else contextlib.nullcontext():
+            if await self._key(browser, session, combo) == "dialog":
+                return await self._done(run, f"Нажато {combo} — сайт показал окно")
         if combo in SEND_KEYS and message:
             run.unsent = []
         await self._settle(run, browser, session, CLICK_SETTLE_S)
+        if browser.choosers.get(session, 0) > choosers and not allow_file:
+            return await self._done(
+                run,
+                f"Нажато {combo}: сайт хотел открыть выбор файла — Jarvis не дал. Загрузить файл — нажми "
+                "кнопку browser_click: Jarvis спросит пользователя",
+            )
         return await self._done(run, f"Нажато {combo}")
 
     async def _wait(self, run: AgentRun, args: dict[str, Any]) -> Outcome:

@@ -81,6 +81,15 @@ def form(*children: N, **kw: Any) -> N:
     return N("form", "", "FORM", {}, children=list(children), **kw)
 
 
+def chooser() -> Callable[["FakeChrome", "FakePage", N], Any]:
+    """Кнопка, которая открывает выбор файла («Добавить фото» — не поле type=file)."""
+
+    async def run(chrome: "FakeChrome", tab: "FakePage", node: N) -> None:
+        await chrome.open_chooser(tab, node)
+
+    return run
+
+
 def go(url: str) -> Callable[["FakeChrome", "FakePage", N], Any]:
     async def run(chrome: "FakeChrome", tab: "FakePage", node: N) -> None:
         await chrome.navigate(tab, url.format(value=node.value))
@@ -113,6 +122,7 @@ class FakePage:
     blocked: list[tuple[Any, dict[str, Any]]] = field(default_factory=list)  # (ws, сообщение) — ждут окна
     held: list[tuple[Any, int]] = field(default_factory=list)  # ответы, отложенные до закрытия окна
     loads: int = 0  # сколько раз загружалась
+    intercept_files: bool = False  # Page.setInterceptFileChooserDialog
 
     def nodes(self) -> list[N]:
         return self.root.walk()
@@ -141,6 +151,7 @@ class FakeChrome:
         self.commands: list[tuple[str, dict[str, Any]]] = []
         self.download_behavior = "default"
         self.downloads: list[dict[str, Any]] = []
+        self.file_choosers: list[str] = []  # окна выбора файла, которые открылись у человека (не перехвачены)
         self.clicked: list[str] = []
         self.port = 0
         self._server: Any = None
@@ -307,8 +318,22 @@ class FakeChrome:
                 return found[-1]  # самый глубокий
         return None
 
+    async def open_chooser(self, tab: FakePage, node: N) -> None:
+        """Сайт открывает выбор файла: перехвачен — событие Jarvis, нет — окно открылось."""
+        if tab.intercept_files:
+            await self.emit(
+                "Page.fileChooserOpened",
+                {"frameId": tab.target, "mode": "selectSingle", "backendNodeId": node.backend},
+                self._session_of(tab.target),
+            )
+        else:
+            self.file_choosers.append(node.name)
+
     async def click(self, tab: FakePage, node: N) -> Any:
         self.clicked.append(node.name)
+        if node.tag == "INPUT" and node.attrs.get("type") == "file":
+            await self.open_chooser(tab, node)
+            return None
         if node.focusable:
             tab.focused = node.backend
         if node.role == "checkbox":
@@ -406,6 +431,9 @@ class FakeChrome:
             if tab.dialog is None:
                 raise CdpFail("No dialog is showing")
             await self.close_dialog(tab, bool(p.get("accept")))
+            return {}
+        if method == "Page.setInterceptFileChooserDialog":
+            tab.intercept_files = bool(p.get("enabled"))
             return {}
         if method == "Page.getFrameTree":
             return {"frameTree": {"frame": {"id": tab.target, "url": tab.url}, "childFrames": []}}

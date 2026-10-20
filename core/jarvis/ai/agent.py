@@ -1229,6 +1229,12 @@ class Agent(BaseService):
         # заголовок карточки и элемент для сценария — по снимку до действия: после клика id — уже другое
         card_title = action.card(run, args) if action.card is not None else ""
         element = run.snapshot.find(_arg(args, "id")) if run.snapshot is not None and "id" in args else None
+        # поле пароля или карты — в журнал без текста (у страницы браузера — по её снимку, до действия)
+        secret = (
+            self.browser.secret(args)
+            if call.name in self.browser.names
+            else bool(element and element.password)
+        )
         run.count += 1
         index = run.count
         self.ctx.bus.publish(
@@ -1284,7 +1290,7 @@ class Agent(BaseService):
             run,
             card_title or doing,
             name=call.name,
-            args=journal.safe_args(args, secret=element is not None and element.password),
+            args=journal.safe_args(args, secret=secret),
             ok=outcome.ok,
             result=outcome.content,
             images=_image_urls(outcome.extras),
@@ -1351,9 +1357,10 @@ class Agent(BaseService):
             run.target.title if run.target else "", run.target.exe if run.target else ""
         )
 
-    def _pending_message(self, run: AgentRun) -> str:
-        """Набранное в мессенджере и ещё не отправленное — похоже на сообщение, а не на поисковый запрос."""
-        if not self._messenger(run) or not run.unsent:
+    def _pending_message(self, run: AgentRun, messenger: bool | None = None) -> str:
+        """Набранное в мессенджере и ещё не отправленное — похоже на сообщение, а не на поисковый запрос.
+        messenger — уже известно, что это мессенджер (сайт в браузере Jarvis), а не по окну."""
+        if not (self._messenger(run) if messenger is None else messenger) or not run.unsent:
             return ""
         if run.target is not None and run.unsent_hwnd and run.target.hwnd != run.unsent_hwnd:
             return ""
@@ -1376,9 +1383,9 @@ class Agent(BaseService):
     def _settings_window(self, run: AgentRun) -> bool:
         return self._app(run).casefold() in SETTINGS_EXES or bool(SETTINGS_WINDOW.search(self._window(run)))
 
-    async def _approve_send(self, run: AgentRun, what: str) -> None:
+    async def _approve_send(self, run: AgentRun, what: str, messenger: bool | None = None) -> None:
         """Отправка набранного в мессенджере: спросить с текстом и окном; разрешили — набранное «ушло»."""
-        message = self._pending_message(run)
+        message = self._pending_message(run, messenger)
         where = f" в «{self._window(run)}»" if self._window(run) else ""
         await self._approve(run, f"{what}{where}?", f"Будет отправлено: «{one_line(message, 160)}»")
         run.unsent = []

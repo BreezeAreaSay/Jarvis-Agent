@@ -19,15 +19,18 @@ import base64
 import io
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from jarvis.ai.uia import UiElement
 
 log = logging.getLogger(__name__)
 
-MAX_SIDE = 1280  # больше по стороне не отдаём: дорого и не нужно
+MAX_SIDE = 1568  # больше по стороне не отдаём: модели всё равно уменьшат (Claude — до 1568)
 OTHER_SIDE = 960  # другие мониторы — только обзор: мельче
+DETAIL_SIDE = 1568  # окно впереди крупно: до стольких точек по стороне — родное разрешение обычного окна
+CHANGE_SIDE = 1024  # что изменилось — крупно
+SHARPER = 1.25  # крупный план нужен, только если он хотя бы на четверть чётче снимка экрана
 ZOOM_SIDE = 1024  # лупа: мелкий кусок экрана увеличиваем до этой стороны…
 ZOOM_MAX = 3.0  # …но не больше чем втрое
 ZOOM_CAPTION = "Лупа"  # подпись картинки лупы начинается так (_prune агента её узнаёт)
@@ -36,7 +39,7 @@ SIG_DIFF = 16  # клетка изменилась, если её средняя
 SIG_MOST = 0.5  # изменилось больше половины клеток — «почти весь экран», без рамок
 MAX_CHANGES = 6  # рамок изменений на картинке
 GRID = 100  # шаг сетки в точках картинки
-JPEG_QUALITY = 78
+JPEG_QUALITY = 85  # мельче — буквы и галочки «прочитано» на снимке плывут
 
 Rect = tuple[int, int, int, int]
 
@@ -53,6 +56,9 @@ class Shot:
     title: str = ""  # заголовок окна (у снимка экрана — окна впереди)
     where: str = ""  # другой монитор, только обзор: где он («справа от основного»)
     zoom: float = 0.0  # лупа: во сколько раз крупнее экрана
+    detail: str = ""  # крупный план к снимку экрана: window — окно впереди, change — что изменилось
+    sharper: float = 0.0  # во сколько раз крупный план чётче снимка экрана
+    boxes: list[tuple[int, int, int, int]] = field(default_factory=list)  # что изменилось (точки картинки)
     sig: bytes = b""  # уменьшенная серая копия (клетки SIG_COLS в ширину) — сравнить со следующей картинкой
     changes: int = -1  # сколько областей изменилось с прошлой картинки; -1 — не сравнивали, -2 — почти всё
 
@@ -81,6 +87,19 @@ class Shot:
         return 0 <= x < self.width and 0 <= y < self.height
 
     def caption(self) -> str:
+        if self.detail == "window":
+            return (
+                f"Окно «{self.title}» крупно — {self.width}×{self.height} точек, в {self.sharper:.1f} раза "
+                "чётче снимка экрана: читай текст, галочки и значки по нему. Метки e… — те же элементы, "
+                f'сетка — через каждые {GRID} точек. Нажать по этой картинке — click_point с on="window" '
+                "(её координаты)."
+            )
+        if self.detail == "change":
+            return (
+                f"Что изменилось после действия — крупно, {self.width}×{self.height} точек, в "
+                f"{self.sharper:.1f} раза чётче снимка экрана (новое сообщение, окно, ошибка). Только "
+                "посмотреть: нажимать — по снимку экрана."
+            )
         if self.zoom:
             left, top, right, bottom = self.rect
             return (
@@ -256,6 +275,59 @@ def render_zoom(
     return shot
 
 
+def render_details(
+    bgra: bytes,
+    size: tuple[int, int],
+    area: Rect,
+    main: Shot,
+    *,
+    window: Rect | None = None,
+    elements: list[UiElement] | None = None,
+    title: str = "",
+) -> list[Shot]:
+    """Крупный план к снимку экрана (тем же пикселям area): окно впереди в родном разрешении — если на снимке
+    экрана оно заметно мельче; иначе (окно во весь большой монитор) — самое крупное изменение после действия.
+    Ничего не даёт чётче — []."""
+    from PIL import Image
+
+    width, height = size
+    area_w, area_h = max(1, area[2] - area[0]), max(1, area[3] - area[1])
+    kx, ky = width / area_w, height / area_h  # точек снимка на точку экрана (на Windows — 1)
+    main_scale = main.width / area_w  # точек картинки экрана на точку экрана
+    image = Image.frombuffer("RGB", size, bgra, "raw", "BGRX", 0, 1)
+
+    def crop(rect: Rect, side: int, **draw: Any) -> Shot | None:
+        left, top = max(area[0], rect[0]), max(area[1], rect[1])
+        right, bottom = min(area[2], rect[2]), min(area[3], rect[3])
+        if right - left < 120 or bottom - top < 80:
+            return None
+        box = (round((left - area[0]) * kx), round((top - area[1]) * ky))
+        box += (round((right - area[0]) * kx), round((bottom - area[1]) * ky))
+        piece = image.crop(box)
+        scale = min(1.0, side / max(piece.width, piece.height)) * piece.width / (right - left)
+        if scale < main_scale * SHARPER:
+            return None
+        shot = _draw(piece, (left, top, right, bottom), max_side=side, **draw)
+        shot.sharper = scale / max(main_scale, 1e-6)
+        return shot
+
+    if window is not None:
+        shot = crop(window, DETAIL_SIDE, elements=elements, title=title)
+        if shot is not None:
+            shot.detail = "window"
+            return [shot]
+    if main.boxes and main.changes > 0:
+        left, top, right, bottom = max(main.boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+        sx0, sy0 = main.to_screen(left, top)
+        sx1, sy1 = main.to_screen(right, bottom)
+        pad = 40
+        shot = crop((sx0 - pad, sy0 - pad, sx1 + pad, sy1 + pad), CHANGE_SIDE, grid=False)
+        if shot is not None:
+            shot.detail = "change"
+            return [shot]
+    return []
+
+
 def side_of(area: Rect, main: Rect) -> str:
     """Где монитор area от главного main — словами."""
     dx = (area[0] + area[2]) - (main[0] + main[2])
@@ -293,6 +365,7 @@ def _draw(
         cell_w, cell_h = width / SIG_COLS, height / max(1, len(shot.sig) // SIG_COLS)
         for c0, r0, c1, r1 in boxes:
             box = [round(c0 * cell_w), round(r0 * cell_h), round(c1 * cell_w) - 1, round(r1 * cell_h) - 1]
+            shot.boxes.append((box[0], box[1], box[2] + 1, box[3] + 1))
             draw.rectangle(box, outline=(0, 220, 90, 235), width=2)
     if focus is not None:  # окно впереди на снимке экрана
         left, top = shot.to_image(focus[0], focus[1])
@@ -383,10 +456,15 @@ def changes(previous: bytes, current: bytes, cols: int) -> list[tuple[int, int, 
 
 def message(shot: Shot, note: str = "", others: list[Shot] | None = None) -> dict[str, Any]:
     """Сообщение модели со снимком (role user: картинки в ответах инструментов понимают не все провайдеры);
-    others — другие мониторы, следом за главной картинкой (одним сообщением: старые снимки скрываются
-    вместе)."""
-    if others:
-        note = f"Другие мониторы — следующими картинками ({len(others)}). {note}".strip()
+    others — крупный план окна или изменения и другие мониторы, следом за главной картинкой (одним
+    сообщением: старые снимки скрываются вместе)."""
+    details = [o for o in others or [] if o.detail]
+    monitors = [o for o in others or [] if o.where]
+    if monitors:
+        note = f"Другие мониторы — следующими картинками ({len(monitors)}). {note}".strip()
+    if details:
+        what = "окно впереди" if details[0].detail == "window" else "что изменилось"
+        note = f"Следом — {what} крупно. {note}".strip()
     content: list[dict[str, Any]] = []
     for i, part in enumerate([shot, *(others or [])]):
         text = part.caption() + (f" {note}" if note and i == 0 else "")

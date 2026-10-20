@@ -6,9 +6,10 @@
 набранное «вслепую» уходит туда, Enter отправляет отзыв.
 """
 
+from typing import Any
 from urllib.parse import urlparse
 
-from evals.sim.world import App, Widget, Window, World
+from evals.sim.world import App, Widget, Window, World, norm
 
 
 class Cloud(App):
@@ -200,11 +201,39 @@ class Browser(App):
         self.world.record("effect", f"Браузер: открыт {url}", window=window, action="visit", url=url)
         return True
 
+    def go(self, window: Window) -> None:
+        """Enter в адресной строке: адрес — открыть, слова — поиск."""
+        text = window.values.get("address", "").strip()
+        if not text:
+            return
+        if "://" not in text and ":" not in text.split("/")[0]:
+            text = (
+                f"https://{text}"
+                if "." in text and " " not in text
+                else f"https://www.bing.com/search?q={text}"
+            )
+        self.world.open_url(text)
+
+    def key(self, window: Window, combo: str) -> bool:
+        if combo in ("ctrl+l", "alt+d", "f6"):
+            window.focus, window.selected_all = "address", True
+            return True
+        if combo == "enter" and window.focus == "address":
+            self.go(window)
+            return True
+        return False
+
     def view(self, window: Window) -> list[Widget]:
         width = window.size[0]
         host = urlparse(window.values.get("address", "")).hostname or ""
         return [
-            Widget("address", "Edit", "Адресная строка", (120, 40, width - 120, 72)),
+            Widget(
+                "address",
+                "Edit",
+                "Адресная строка",
+                (120, 40, width - 120, 72),
+                on_enter=lambda: self.go(window),
+            ),
             Widget(
                 "page",
                 "Text",
@@ -214,6 +243,86 @@ class Browser(App):
                 style="header",
             ),
         ]
+
+
+class Start(App):
+    """«Пуск» с поиском (win, win+s): набрал — лучшие совпадения среди программ и файлов, Enter — первое."""
+
+    name = "Поиск Windows"
+    exe = "SearchHost.exe"
+    title = "Поиск"
+    rect = (560, 290, 1360, 1028)
+    background = (243, 243, 243)
+    start = True
+
+    def __init__(self, world: World) -> None:
+        super().__init__(world)
+
+    def info(self) -> Any:
+        return None  # в списке программ «Пуска» его самого нет
+
+    def launch(self) -> None:
+        for window in self.windows():
+            self.world.close(window, force=True)
+        self.world.open(self, self.title, self.rect, kind="popup", data={"start": True}, focus="query")
+
+    def results(self, window: Window) -> list[tuple[str, str]]:
+        """(что это: app | file, название или путь)."""
+        query = norm(window.values.get("query", ""))
+        if not query:
+            return []
+        apps = [("app", a.name) for a in self.world.apps if a.info() is not None and query in norm(a.name)]
+        files = [("file", p) for p in sorted(self.world.files) if query in norm(p.rsplit("\\", 1)[-1])]
+        return (apps + files)[:8]
+
+    def pick(self, window: Window, kind: str, value: str) -> None:
+        self.world.close(window, force=True)
+        if kind == "app":
+            self.world.launch(value)
+        else:
+            self.world.open_path(value)
+
+    def key(self, window: Window, combo: str) -> bool:
+        if combo == "enter":
+            found = self.results(window)
+            if found:
+                self.pick(window, *found[0])
+            return True
+        return False
+
+    def view(self, window: Window) -> list[Widget]:
+        width = window.size[0]
+        items = [
+            Widget(
+                "query",
+                "Edit",
+                "Поиск",
+                (24, 48, width - 24, 88),
+                placeholder="Введите здесь текст для поиска",
+                icon="search",
+            ),
+        ]
+        found = self.results(window)
+        if found:
+            items.append(
+                Widget("best", "Text", "Лучшее соответствие", (24, 108, 400, 128), size=13, style="muted")
+            )
+        for i, (kind, value) in enumerate(found):
+            top = 136 + i * 56
+            name = value if kind == "app" else value.rsplit("\\", 1)[-1]
+            items.append(
+                Widget(
+                    f"result:{value}",
+                    "ListItem",
+                    name,
+                    (16, top, width - 16, top + 50),
+                    value="Приложение" if kind == "app" else value.rsplit("\\", 1)[0],
+                    icon="gear" if kind == "app" else "file",
+                    style="selected" if i == 0 else "",
+                    on_click=lambda k=kind, v=value: self.pick(window, k, v),
+                )
+            )
+        return items
 
 
 class Generic(App):

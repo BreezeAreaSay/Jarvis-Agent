@@ -8,6 +8,7 @@
 
 import argparse
 import asyncio
+import contextlib
 import os
 import re
 import sys
@@ -81,7 +82,18 @@ def parse(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _utf8_output() -> None:
+    """Кириллица и значки в консоли Windows: вывод в файл — UTF-8, в консоль — без падения на незнакомом
+    знаке."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            with contextlib.suppress(Exception):
+                reconfigure(errors="replace") if stream.isatty() else reconfigure(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_output()
     args = parse(sys.argv[1:] if argv is None else argv)
     if args.list:
         for task in TASKS:

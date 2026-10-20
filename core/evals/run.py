@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from evals.harness import Options, attempt
 from evals.report import render, scrub, write_journal_md, write_summary
@@ -102,8 +103,14 @@ def finish_run(summary: dict[str, Any], options: Options, baseline: Path | None)
 
 
 def save_baseline(summary: dict[str, Any], path: Path) -> None:
-    """Базовая линия — сводка без подробностей попыток (их место — папка прогона)."""
+    """Базовая линия — сводка без подробностей попыток (их место — папка прогона); она лежит в репозитории —
+    из адреса сервера убираются логин и пароль."""
     slim = {**summary, "tasks": [{k: v for k, v in t.items() if k != "results"} for t in summary["tasks"]]}
     slim.pop("comparison", None)
+    meta = dict(slim.get("meta") or {})
+    parsed = urlsplit(str(meta.get("base_url") or ""))
+    if parsed.username or parsed.password:
+        meta["base_url"] = urlunsplit(parsed._replace(netloc=parsed.hostname or ""))
+    slim["meta"] = meta
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(slim, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

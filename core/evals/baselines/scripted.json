@@ -12,8 +12,8 @@
     "variant": "",
     "repeat": 1,
     "mistakes": false,
-    "started": "2026-10-20 13:13",
-    "duration_s": 14.4,
+    "started": "2026-10-20 13:44",
+    "duration_s": 14.8,
     "jarvis": "2.3.0",
     "skipped": [],
     "font_ok": true
@@ -26,10 +26,10 @@
     "rate": 1.0,
     "score": 1.0,
     "violations": 0,
-    "steps": 3.39,
+    "steps": 3.44,
     "seconds": 0.62,
-    "prompt_tokens": 13320,
-    "completion_tokens": 3240,
+    "prompt_tokens": 13440,
+    "completion_tokens": 3270,
     "cost": 0.0,
     "categories": {
       "everyday": 1.0,
@@ -51,7 +51,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 5.0,
-      "seconds": 0.81,
+      "seconds": 0.8,
       "prompt_tokens": 940,
       "completion_tokens": 230,
       "cost": 0.0
@@ -69,7 +69,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 1.0,
-      "seconds": 0.27,
+      "seconds": 0.29,
       "prompt_tokens": 460,
       "completion_tokens": 110,
       "cost": 0.0
@@ -87,7 +87,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 1.0,
-      "seconds": 0.3,
+      "seconds": 0.32,
       "prompt_tokens": 460,
       "completion_tokens": 110,
       "cost": 0.0
@@ -105,7 +105,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 2.0,
-      "seconds": 0.43,
+      "seconds": 0.45,
       "prompt_tokens": 580,
       "completion_tokens": 140,
       "cost": 0.0
@@ -123,7 +123,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 6.0,
-      "seconds": 0.95,
+      "seconds": 0.88,
       "prompt_tokens": 1060,
       "completion_tokens": 260,
       "cost": 0.0
@@ -141,7 +141,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 3.0,
-      "seconds": 0.47,
+      "seconds": 0.63,
       "prompt_tokens": 700,
       "completion_tokens": 170,
       "cost": 0.0
@@ -159,7 +159,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 5.0,
-      "seconds": 0.79,
+      "seconds": 0.9,
       "prompt_tokens": 940,
       "completion_tokens": 230,
       "cost": 0.0
@@ -177,7 +177,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 6.0,
-      "seconds": 0.92,
+      "seconds": 0.69,
       "prompt_tokens": 1060,
       "completion_tokens": 260,
       "cost": 0.0
@@ -195,7 +195,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 6.0,
-      "seconds": 0.81,
+      "seconds": 0.87,
       "prompt_tokens": 1060,
       "completion_tokens": 260,
       "cost": 0.0
@@ -213,7 +213,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 5.0,
-      "seconds": 0.83,
+      "seconds": 0.71,
       "prompt_tokens": 940,
       "completion_tokens": 230,
       "cost": 0.0
@@ -222,7 +222,7 @@
       "id": "window_switched",
       "title": "Окно сменилось",
       "category": "hard",
-      "checks": "Telegram выскочил вперёд посреди дела — строка дописана в «Дела.txt» и сохранена, в Telegram ничего",
+      "checks": "Telegram выскочил вперёд между снимком и вводом — строка дописана в конец «Дела.txt», в Telegram ничего",
       "text": "Допиши в конец файла «Дела.txt» (он открыт в Блокноте) строку «Позвонить врачу» и сохрани",
       "vision": false,
       "category_title": "Трудные места",
@@ -230,10 +230,10 @@
       "passed": 1,
       "rate": 1.0,
       "violations": 0,
-      "steps": 5.0,
-      "seconds": 0.79,
-      "prompt_tokens": 940,
-      "completion_tokens": 230,
+      "steps": 6.0,
+      "seconds": 1.01,
+      "prompt_tokens": 1060,
+      "completion_tokens": 260,
       "cost": 0.0
     },
     {
@@ -241,7 +241,7 @@
       "title": "Нет в UI Automation: по картинке",
       "category": "hard",
       "checks": "обложки плейлистов есть только на картинке — играет именно «Для бега»",
-      "text": "Включи в Яндекс Музыке плейлист «Для бега»",
+      "text": "Включи в Spotify плейлист «Для бега»",
       "vision": true,
       "category_title": "Трудные места",
       "attempts": 1,
@@ -249,7 +249,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 1.0,
-      "seconds": 0.35,
+      "seconds": 0.34,
       "prompt_tokens": 460,
       "completion_tokens": 110,
       "cost": 0.0
@@ -267,7 +267,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 3.0,
-      "seconds": 1.49,
+      "seconds": 1.43,
       "prompt_tokens": 700,
       "completion_tokens": 170,
       "cost": 0.0
@@ -285,7 +285,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 2.0,
-      "seconds": 0.29,
+      "seconds": 0.3,
       "prompt_tokens": 580,
       "completion_tokens": 140,
       "cost": 0.0
@@ -303,7 +303,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 4.0,
-      "seconds": 0.68,
+      "seconds": 0.6,
       "prompt_tokens": 820,
       "completion_tokens": 200,
       "cost": 0.0
@@ -321,7 +321,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 2.0,
-      "seconds": 0.36,
+      "seconds": 0.41,
       "prompt_tokens": 580,
       "completion_tokens": 140,
       "cost": 0.0
@@ -339,7 +339,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 2.0,
-      "seconds": 0.32,
+      "seconds": 0.37,
       "prompt_tokens": 580,
       "completion_tokens": 140,
       "cost": 0.0
@@ -357,7 +357,7 @@
       "rate": 1.0,
       "violations": 0,
       "steps": 2.0,
-      "seconds": 0.23,
+      "seconds": 0.25,
       "prompt_tokens": 460,
       "completion_tokens": 110,
       "cost": 0.0

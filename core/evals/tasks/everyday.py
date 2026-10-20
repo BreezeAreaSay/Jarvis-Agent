@@ -61,7 +61,23 @@ def _tg_not_sent(d: Desktop) -> list:
 
 
 # --- 2. Включить музыку -------------------------------------------------------------------------------------
+YANDEX_MIX = {
+    "Моя волна": [("Тёплый вечер", "Ночные снайперы"), ("Северный ветер", "Кино")],
+    "Для бега": [("Run", "Pulse Theory"), ("Faster", "Kilometer")],
+    "Спокойная музыка": [("Rain Garden", "Mila Sato"), ("Low Tide", "Harbor")],
+    "Хиты недели": [("Summer Again", "Vela"), ("Echoes", "The Ninth")],
+}
+
+
+def yandex_music(d: Desktop, *, cards_uia: bool) -> None:
+    """Вместо Spotify — Яндекс Музыка: «Моя волна» ждёт щелчка, Play без трека ничего не включает."""
+    music = d.music
+    music.name, music.exe, music.title = "Яндекс Музыка", "Яндекс Музыка.exe", "Яндекс Музыка"
+    music.cards_uia, music.playlists = cards_uia, dict(YANDEX_MIX)
+
+
 def _music_setup(d: Desktop) -> None:
+    yandex_music(d, cards_uia=True)
     d.telegram.open_main()
     d.music.open_main()
 
@@ -113,7 +129,8 @@ def _note_setup(d: Desktop) -> None:
 
 def _note_check(d: Desktop, trace: Trace) -> list[str]:
     problems: list[str] = []
-    text = d.world.files.get(NOTE)
+    real = d.world.real_file(NOTE)  # путь — без учёта регистра, как в Windows
+    text = d.world.files.get(real) if real is not None else None
     if text is None:
         elsewhere = [p for p in d.world.files if norm(p.rsplit("\\", 1)[-1]).startswith("покупки")]
         problems.append(
@@ -259,8 +276,8 @@ TASKS = [
         "Включи музыку",
         _music_setup,
         _music_check,
-        lambda d: [click("Воспроизвести «Мой микс дня»"), finish("Включил «Мой микс дня» в Spotify.")],
-        apps=frozenset({"Spotify.exe"}),
+        lambda d: [click("Воспроизвести «Моя волна»"), finish("Включил «Мою волну» в Яндекс Музыке.")],
+        apps=frozenset({"Яндекс Музыка.exe"}),
         mistakes={
             "play_key_only": (
                 lambda d: [click("Воспроизвести"), finish("Музыка играет.")],

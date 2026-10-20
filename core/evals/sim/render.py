@@ -193,7 +193,7 @@ class Renderer:
 # --- элементы -------------------------------------------------------------------------------------------
 def _widget(draw: Any, window: Window, w: Widget, dark: bool) -> None:
     left, top, right, bottom = w.rect
-    if right - left < 2 or bottom - top < 2:
+    if right - left < 2 or bottom - top < 2 or w.style == "chrome":  # кнопки заголовка рисует рамка окна
         return
     ink = (235, 235, 240) if dark else INK
     muted = (160, 160, 168) if dark else MUTED

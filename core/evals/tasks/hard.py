@@ -152,16 +152,22 @@ def _switch_setup(d: Desktop) -> None:
     background(d)
     tg = d.telegram.open_main()
     d.telegram.open(tg, "Работа")
-    d.notepad.open_main(path=TODO)
-    fired: list[bool] = []
+    d.notepad.open_main(path=TODO)  # курсор — в начале файла, как у настоящего Блокнота
+    state = {"step": 0, "done": False}
 
-    def jump(event: Event) -> None:
-        # первый ввод в Блокнот — и вперёд выскакивает Telegram (пришло сообщение), фокус в его поле
-        if not fired and event.kind in ("click", "type", "key") and event.exe == "notepad.exe":
-            fired.append(True)
-            d.world.after(0.0, lambda: d.world.front(tg))
+    def noted(event: Event) -> None:
+        if not state["step"] and event.kind in ("click", "type", "key") and event.exe == "notepad.exe":
+            state["step"] = max(1, event.step)
 
-    d.world.on("record", jump)
+    def jump(step: int) -> None:
+        # агент уже что-то сделал в Блокноте и берётся за следующее действие — а впереди выскочил Telegram
+        # (пришло сообщение, фокус в его поле): окно сменилось между снимком и вводом
+        if state["step"] and not state["done"] and step > state["step"]:
+            state["done"] = True
+            d.world.front(tg)
+
+    d.world.on("record", noted)
+    d.world.on("step", jump)
 
 
 def _switch_check(d: Desktop, trace: Trace) -> list[str]:
@@ -182,6 +188,7 @@ def _switch_check(d: Desktop, trace: Trace) -> list[str]:
 def _switch_solution(d: Desktop) -> list:
     return [
         click("Текстовый редактор"),
+        keys("ctrl+end"),  # агент не нажмёт: впереди уже Telegram (WindowChanged)
         call("focus_window", title="Дела — Блокнот"),
         keys("ctrl+end"),
         type_text("\nПозвонить врачу"),
@@ -194,20 +201,33 @@ def _switch_solution(d: Desktop) -> list:
 
 
 def _switch_blind(d: Desktop) -> list:
-    return [click("Текстовый редактор"), type_text("Позвонить врачу"), keys("ctrl+s"), finish()]
+    """Агент не дал набрать в Telegram, а модель «поработала здесь»: ui_snapshot — и набрала туда."""
+    return [
+        click("Текстовый редактор"),
+        type_text("Позвонить врачу"),
+        call("ui_snapshot"),
+        type_text("Позвонить врачу"),
+        keys("ctrl+s"),
+        finish(),
+    ]
+
+
+def _switch_at_start(d: Desktop) -> list:
+    """Набрал сразу: курсор у открытого файла — в начале, строка ушла не в конец."""
+    return [
+        type_text("Позвонить врачу\n"),
+        keys("ctrl+s"),
+        call("focus_window", title="Дела — Блокнот"),
+        keys("ctrl+s"),
+        finish(),
+    ]
 
 
 # --- 12. Нет в UI Automation: плейлист по картинке ----------------------------------------------------------
 def _playlist_setup(d: Desktop) -> None:
-    music = d.music
-    music.name, music.exe, music.title, music.cards_uia = (
-        "Яндекс Музыка",
-        "Яндекс Музыка.exe",
-        "Яндекс Музыка",
-        False,
-    )
+    d.music.cards_uia = False  # Spotify без специальных возможностей: обложки UI Automation не видит
     d.telegram.open_main()
-    music.open_main()
+    d.music.open_main()
 
 
 def _playlist_check(d: Desktop, trace: Trace) -> list[str]:
@@ -326,13 +346,17 @@ TASKS = [
         "window_switched",
         "Окно сменилось",
         "hard",
-        "Telegram выскочил вперёд посреди дела — строка дописана в «Дела.txt» и сохранена, в Telegram ничего",
+        "Telegram выскочил вперёд между снимком и вводом — строка дописана в конец «Дела.txt», в Telegram "
+        "ничего",
         "Допиши в конец файла «Дела.txt» (он открыт в Блокноте) строку «Позвонить врачу» и сохрани",
         _switch_setup,
         _switch_check,
         _switch_solution,
         apps=frozenset({"notepad.exe"}),
-        mistakes={"typed_into_telegram": (_switch_blind, "чужое окно")},
+        mistakes={
+            "typed_into_telegram": (_switch_blind, "чужое окно"),
+            "typed_at_start": (_switch_at_start, "не дописано"),
+        },
         plan=["Перейти в конец «Дела.txt»", "Дописать строку", "Сохранить"],
     ),
     Task(
@@ -340,14 +364,14 @@ TASKS = [
         "Нет в UI Automation: по картинке",
         "hard",
         "обложки плейлистов есть только на картинке — играет именно «Для бега»",
-        "Включи в Яндекс Музыке плейлист «Для бега»",
+        "Включи в Spotify плейлист «Для бега»",
         _playlist_setup,
         _playlist_check,
         lambda d: [
             point("Для бега", what="обложка плейлиста «Для бега»"),
             finish("Включил плейлист «Для бега»."),
         ],
-        apps=frozenset({"Яндекс Музыка.exe"}),
+        apps=frozenset({"Spotify.exe"}),
         mistakes={"play_button": (lambda d: [click("Воспроизвести"), finish()], "не играет")},
         vision=True,
         plan=["Найти плейлист «Для бега»", "Включить"],

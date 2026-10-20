@@ -1,5 +1,5 @@
 // Каркас главного окна: фон, боковая навигация, кнопки окна, страница по маршруту.
-import { CircleUser, House, MicOff, Minus, Puzzle, Settings, Sparkles, SquareTerminal, X } from "lucide-react";
+import { CircleUser, Gauge, House, MicOff, Minus, Puzzle, Settings, Sparkles, SquareTerminal, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { api } from "@/api/client";
 import { onEvent } from "@/api/events";
@@ -19,6 +19,7 @@ const ExtensionsPage = lazy(() => import("@/pages/extensions/ExtensionsPage"));
 const AiPage = lazy(() => import("@/pages/ai/AiPage"));
 const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
 const ProfilePage = lazy(() => import("@/pages/profile/ProfilePage"));
+const SystemPage = lazy(() => import("@/pages/system/SystemPage"));
 const Onboarding = lazy(() => import("@/pages/onboarding/Onboarding"));
 
 const NAV: { id: string; label: string; icon: ReactNode }[] = [
@@ -26,6 +27,7 @@ const NAV: { id: string; label: string; icon: ReactNode }[] = [
   { id: "commands", label: "Команды", icon: <SquareTerminal /> },
   { id: "extensions", label: "Расширения", icon: <Puzzle /> },
   { id: "ai", label: "Jarvis AI", icon: <Sparkles /> },
+  { id: "system", label: "Системные операции", icon: <Gauge /> },
   { id: "settings", label: "Настройки", icon: <Settings /> },
 ];
 
@@ -173,6 +175,7 @@ const PAGE_NAMES: Record<string, string> = {
   commands: "Команды",
   extensions: "Расширения",
   ai: "Jarvis AI",
+  system: "Системные операции",
   settings: "Настройки",
   profile: "Профиль",
 };
@@ -198,6 +201,9 @@ export function Shell() {
       break;
     case "profile":
       content = <ProfilePage />;
+      break;
+    case "system":
+      content = <SystemPage />;
       break;
     default:
       content = <HomePage route={route.slice(1)} />;

@@ -36,6 +36,7 @@ if TYPE_CHECKING:
         VoiceService,
         WidgetService,
     )
+    from jarvis.widgets.sysops import SysOps
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -89,6 +90,7 @@ class AppContext:
         self.scenarios: Scenarios
         self.retention: Retention
         self.widgets: WidgetService
+        self.sysops: SysOps
         self.desks: DeskService
         self.dispatcher: Dispatcher
 

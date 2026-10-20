@@ -1,0 +1,821 @@
+/* «Системные операции»: сетка карточек (нагрузка, погода, плеер, микшер, программы, инструменты).
+   Только токены темы; узкое окно — одна колонка (контейнерные запросы по ширине страницы). */
+
+.sys-page .page-body {
+  container-type: inline-size;
+  container-name: syspage;
+}
+
+.sys-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 14px;
+  padding-bottom: 6px;
+}
+
+.sys-load {
+  grid-column: span 8;
+  grid-row: span 2;
+}
+
+.sys-weather,
+.sys-media {
+  grid-column: span 4;
+}
+
+.sys-mixer {
+  grid-column: span 7;
+}
+
+.sys-top {
+  grid-column: span 5;
+}
+
+.sys-tools {
+  grid-column: span 12;
+}
+
+@container syspage (max-width: 1040px) {
+  .sys-load,
+  .sys-mixer,
+  .sys-top,
+  .sys-tools {
+    grid-column: span 12;
+  }
+
+  .sys-load {
+    grid-row: auto;
+  }
+
+  .sys-weather,
+  .sys-media {
+    grid-column: span 6;
+  }
+}
+
+@container syspage (max-width: 640px) {
+  .sys-weather,
+  .sys-media {
+    grid-column: span 12;
+  }
+}
+
+/* --- статус в шапке ------------------------------------------------------------------------------------ */
+.sys-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--r-pill);
+  background: var(--ok-soft);
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  color: var(--ok);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.sys-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px currentColor;
+  animation: sys-pulse 2s var(--ease) infinite;
+}
+
+.sys-status.hot {
+  background: var(--err-soft);
+  border-color: rgba(248, 113, 113, 0.3);
+  color: var(--err);
+}
+
+@keyframes sys-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* --- карточка ------------------------------------------------------------------------------------------ */
+.sys-card {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 18px;
+  border-radius: var(--r-xl);
+  background:
+    radial-gradient(120% 90% at 0% 0%, rgba(var(--accent-rgb), 0.08), transparent 55%),
+    var(--panel);
+  backdrop-filter: blur(var(--glass-blur)) saturate(135%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(135%);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-1);
+  animation: fade-in var(--t-slow) var(--ease) both;
+}
+
+.sys-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+}
+
+.sys-card-head h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 14.5px;
+  font-weight: 750;
+  letter-spacing: 0.01em;
+}
+
+.sys-card-icon {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: rgba(var(--accent-rgb), 0.14);
+  border: 1px solid rgba(var(--accent-rgb), 0.26);
+  color: var(--accent-text);
+}
+
+.sys-card-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.sys-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.sys-live::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.9);
+  animation: sys-pulse 1.4s var(--ease) infinite;
+}
+
+.sys-note {
+  padding: 18px 2px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.sys-bar {
+  display: block;
+  height: 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.sys-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.55);
+  transition: width var(--t-slow) var(--ease);
+}
+
+.sys-bar i.hot {
+  background: linear-gradient(90deg, var(--warn), var(--err));
+}
+
+/* --- кольца нагрузки ----------------------------------------------------------------------------------- */
+.sys-gauges {
+  display: flex;
+  justify-content: space-around;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sys-gauge {
+  --gauge-a: var(--accent-hover);
+  --gauge-b: var(--accent);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sys-gauge.warm {
+  --gauge-a: #fcd34d;
+  --gauge-b: var(--warn);
+}
+
+.sys-gauge.hot {
+  --gauge-a: #fca5a5;
+  --gauge-b: var(--err);
+}
+
+.sys-gauge svg {
+  display: block;
+  filter: drop-shadow(0 0 10px rgba(var(--accent-rgb), 0.35));
+}
+
+.sys-gauge-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.07);
+  stroke-width: 9;
+}
+
+.sys-gauge-value {
+  fill: none;
+  stroke-width: 9;
+  stroke-linecap: round;
+  transition: stroke-dasharray var(--t-slow) var(--ease);
+}
+
+.sys-gauge-center {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  pointer-events: none;
+}
+
+.sys-gauge-num {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.sys-gauge-pct {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-3);
+}
+
+.sys-gauge-label {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sys-gauge-sub {
+  max-width: 100%;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.sys-temp {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  height: 22px;
+  padding: 0 9px 0 7px;
+  border-radius: var(--r-pill);
+  font-size: 11.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-2);
+}
+
+.sys-temp svg {
+  width: 12px;
+  height: 12px;
+}
+
+.sys-temp.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.sys-temp.warm {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.sys-temp.hot {
+  background: var(--err-soft);
+  color: var(--err);
+}
+
+/* --- график -------------------------------------------------------------------------------------------- */
+.sys-history-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 8px;
+  border-radius: 14px;
+  background: rgba(8, 10, 14, 0.3);
+  border: 1px solid var(--line);
+}
+
+.sys-history-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.sys-history-legend .cpu::before,
+.sys-history-legend .gpu::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  margin-right: 6px;
+  vertical-align: middle;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.sys-history-legend .gpu::before {
+  background: rgba(167, 139, 250, 0.85);
+}
+
+.sys-history {
+  display: block;
+  width: 100%;
+  height: 74px;
+}
+
+.sys-history.empty {
+  height: 74px;
+}
+
+.sys-history .grid {
+  stroke: rgba(255, 255, 255, 0.05);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.sys-history .cpu,
+.sys-history .gpu {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.sys-history .cpu {
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 4px rgba(var(--accent-rgb), 0.7));
+}
+
+.sys-history .gpu {
+  stroke: rgba(167, 139, 250, 0.85);
+  stroke-dasharray: 4 3;
+}
+
+/* --- диск, сеть, время работы ------------------------------------------------------------------------- */
+.sys-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@container syspage (max-width: 640px) {
+  .sys-facts {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sys-fact {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 13px;
+  background: var(--row);
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+
+.sys-fact > svg {
+  width: 17px;
+  height: 17px;
+  margin-top: 1px;
+  flex: none;
+  color: var(--accent-text);
+}
+
+.sys-fact .grow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sys-fact-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.sys-fact-row b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.sys-fact-sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.sys-fact-big {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.sys-net {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 13.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sys-net span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.sys-net svg {
+  width: 13px;
+  height: 13px;
+  color: var(--accent-text);
+}
+
+.sys-net small {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+/* --- погода ------------------------------------------------------------------------------------------- */
+.sys-weather {
+  background:
+    radial-gradient(90% 80% at 100% 0%, rgba(251, 191, 36, 0.12), transparent 60%),
+    radial-gradient(120% 90% at 0% 0%, rgba(var(--accent-rgb), 0.08), transparent 55%),
+    var(--panel);
+}
+
+.sys-weather-now {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.sys-weather-now > svg {
+  flex: none;
+  filter: drop-shadow(0 0 14px rgba(251, 191, 36, 0.35));
+}
+
+.sys-weather-temp {
+  font-family: var(--font-display);
+  font-size: 40px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.sys-weather-sub {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.sys-weather-feels {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.sys-forecast {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: auto;
+}
+
+.sys-forecast-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 2px;
+  border-radius: 11px;
+  background: var(--row);
+  font-size: 11.5px;
+  text-transform: capitalize;
+}
+
+.sys-forecast-day b {
+  font-weight: 700;
+}
+
+/* --- плеер -------------------------------------------------------------------------------------------- */
+.sys-media-body {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  min-width: 0;
+}
+
+.sys-media-art {
+  position: relative;
+  width: 92px;
+  height: 92px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  overflow: hidden;
+  color: #fff;
+  background: linear-gradient(135deg, #d946ef, #8b5cf6 55%, #6366f1);
+  box-shadow: 0 10px 26px rgba(139, 92, 246, 0.35);
+}
+
+.sys-media-art.playing {
+  box-shadow:
+    0 10px 26px rgba(139, 92, 246, 0.35),
+    0 0 0 3px rgba(var(--accent-rgb), 0.25);
+}
+
+.sys-media-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.sys-media-art svg {
+  width: 34px;
+  height: 34px;
+}
+
+.sys-media-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.sys-media-title {
+  font-weight: 750;
+  font-size: 15.5px;
+}
+
+.sys-media-artist {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.sys-media-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.sys-media-progress .sys-bar {
+  flex: 1;
+  height: 4px;
+}
+
+.sys-media-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* --- микшер ------------------------------------------------------------------------------------------- */
+.sys-mixer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sys-mix-row {
+  display: grid;
+  grid-template-columns: 30px minmax(110px, 0.9fr) minmax(120px, 1.6fr) 32px;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 8px;
+  border-radius: 12px;
+  transition: background var(--t-fast) var(--ease);
+}
+
+.sys-mix-row:hover {
+  background: var(--row-hover);
+}
+
+.sys-mix-row.master {
+  margin-bottom: 4px;
+  padding: 10px 8px;
+  background: rgba(var(--accent-rgb), 0.08);
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
+}
+
+.sys-mix-icon.master {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 4px 14px rgba(var(--accent-rgb), 0.4);
+}
+
+.sys-mix-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sys-mix-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sys-mix-name small {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.sys-mix-row.active .sys-mix-name small {
+  color: var(--ok);
+}
+
+.sys-mix-slider {
+  min-width: 0;
+}
+
+.sys-mute {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: var(--text-3);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.sys-mute:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.sys-mute.on {
+  color: var(--err);
+  background: var(--err-soft);
+}
+
+.sys-mute svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* --- программы ---------------------------------------------------------------------------------------- */
+.sys-top-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sys-top-row {
+  display: grid;
+  grid-template-columns: 28px minmax(70px, 1fr) minmax(50px, 1fr) 46px 58px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 11px;
+  font-size: 13px;
+}
+
+.sys-top-row:hover {
+  background: var(--row-hover);
+}
+
+.sys-top-name {
+  font-weight: 600;
+}
+
+.sys-top-bar {
+  height: 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.sys-top-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.6), var(--accent));
+}
+
+.sys-top-cpu,
+.sys-top-ram {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.sys-top-ram {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+/* --- инструменты -------------------------------------------------------------------------------------- */
+.sys-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 10px;
+}
+
+.sys-tool {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 14px;
+  border-radius: 15px;
+  background: var(--row);
+  border: 1px solid var(--line);
+  text-align: left;
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+.sys-tool:hover {
+  background: rgba(var(--accent-rgb), 0.1);
+  border-color: rgba(var(--accent-rgb), 0.38);
+  transform: translateY(-1px);
+}
+
+.sys-tool:active {
+  transform: translateY(1px);
+}
+
+.sys-tool-icon {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.3), rgba(var(--accent-rgb), 0.12));
+  color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.3);
+}
+
+.sys-tool-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.sys-tool-title {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+:root[data-anim="off"] :is(.sys-status-dot, .sys-live::before) {
+  animation: none;
+}

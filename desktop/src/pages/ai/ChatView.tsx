@@ -1,14 +1,29 @@
 // Правая часть: шапка чата с живой сферой («Погода и дела · GPT-5.4 Mini • Всё вместе»), лента сообщений с
 // автопрокруткой, приветствие и подсказки в пустом чате, карточка «Подключите ИИ», агент над полем ввода и
 // само поле. Справа в широком окне — большая сфера Jarvis: слушает, думает, отвечает.
-import { AppWindow, ArrowDown, Brain, CloudSun, Cpu, MessageSquareDashed, Palette, Plug, Sparkles, Table2 } from "lucide-react";
+import {
+  AppWindow,
+  ArrowDown,
+  Brain,
+  ChevronRight,
+  CloudSun,
+  Cpu,
+  Gauge,
+  MessageSquareDashed,
+  Palette,
+  Plug,
+  Sparkles,
+  Table2,
+} from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { JarvisOrb, type OrbState } from "@/components/JarvisOrb";
 import { onEvent } from "@/api/events";
 import { levels } from "@/lib/levels";
 import { navigate } from "@/lib/router";
+import { heat, type Sensors, type SysStats, usePoll } from "@/pages/system/data";
 import { useApp } from "@/store/app";
 import { Button, cx, notifyError } from "@/ui";
+import { useWidgetData } from "@/widgets/common";
 import { AgentPanel } from "./AgentPanel";
 import { ImageViewer } from "./Images";
 import { Composer, type ComposerHandle } from "./Composer";
@@ -90,7 +105,43 @@ export function OrbRail({ chatKey }: { chatKey: string }) {
       <p className="ai-rail-hint">
         {voiceOn ? `Скажите «${wake}» — отвечу голосом` : "Пишите — отвечу здесь; голос включается в настройках"}
       </p>
+      <RailSystem />
     </aside>
+  );
+}
+
+/** Мини-сводка системы под сферой: процессор, видеокарта, память с температурой — и вход в «Системные
+ *  операции». */
+function RailSystem() {
+  const { data: stats } = useWidgetData<SysStats>("system", {}, { refreshMs: 3000 });
+  const { data: sensors } = usePoll<Sensors>("/api/system/sensors", 5000);
+  if (!stats || stats.error) return null;
+  const gpu = stats.gpu ?? sensors?.gpu_load ?? null;
+  const rows = [
+    { label: "Процессор", value: stats.cpu, temp: sensors?.cpu_temp },
+    ...(gpu !== null ? [{ label: "Видеокарта", value: gpu, temp: sensors?.gpu_temp }] : []),
+    { label: "Память", value: stats.ram, temp: null },
+  ];
+  return (
+    <div className="ai-rail-sys">
+      {rows.map((r) => (
+        <div key={r.label} className="ai-rail-row">
+          <span className="ai-rail-label">{r.label}</span>
+          {r.temp !== null && r.temp !== undefined && (
+            <span className={cx("ai-rail-temp", heat(r.temp))}>{Math.round(r.temp)}°</span>
+          )}
+          <span className="ai-rail-val">{Math.round(r.value)}%</span>
+          <span className="ai-rail-bar">
+            <i style={{ width: `${Math.min(100, r.value)}%` }} />
+          </span>
+        </div>
+      ))}
+      <button type="button" className="ai-rail-link" onClick={() => navigate("system")}>
+        <Gauge />
+        Системные операции
+        <ChevronRight />
+      </button>
+    </div>
   );
 }
 

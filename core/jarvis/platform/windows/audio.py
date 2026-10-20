@@ -22,6 +22,7 @@ E_RENDER = 0  # EDataFlow.eRender
 ROLE_MULTIMEDIA = 1  # ERole.eMultimedia
 DEVICE_STATE_ACTIVE = 0x1
 CLSCTX_ALL = 0x7  # comtypes.CLSCTX_ALL, как в pycaw
+SESSION_ACTIVE = 1  # AudioSessionState.AudioSessionStateActive: программа звучит сейчас
 
 
 class NoAudioDevice(Exception):
@@ -178,6 +179,17 @@ class Audio:
             except Exception as e:
                 log.debug("сессии устройства %d не прочитаны: %r", i, e)
         return out
+
+    def session_volume(self, control2: Any) -> tuple[int, bool, bool]:
+        """Громкость сессии микшера: (уровень 0..100, без звука, звучит сейчас)."""
+        from pycaw.api.audioclient import ISimpleAudioVolume  # type: ignore[import-not-found]
+
+        volume = control2.QueryInterface(ISimpleAudioVolume)
+        try:
+            active = int(control2.GetState()) == SESSION_ACTIVE
+        except Exception:
+            active = False
+        return scalar_to_level(volume.GetMasterVolume()), bool(volume.GetMute()), active
 
     def set_session_level(self, control2: Any, level: int) -> None:
         from pycaw.api.audioclient import ISimpleAudioVolume  # type: ignore[import-not-found]

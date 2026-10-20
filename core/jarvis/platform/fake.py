@@ -92,6 +92,14 @@ class FakePlatform:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self.volume = 40
         self.muted = False
+        # микшер: программы со звуком (правдоподобные — для интерфейса без Windows)
+        self.mixer: list[dict[str, Any]] = [
+            {"app": "Spotify.exe", "title": "Spotify", "level": 72, "muted": False, "active": True},
+            {"app": "chrome.exe", "title": "Google Chrome", "level": 58, "muted": False, "active": True},
+            {"app": "Discord.exe", "title": "Discord", "level": 85, "muted": False, "active": False},
+            {"app": "steam.exe", "title": "Steam", "level": 40, "muted": True, "active": False},
+            {"app": "system", "title": "Системные звуки", "level": 50, "muted": False, "active": False},
+        ]
         self.brightness = 70
         self.clipboard = ""
         self.clipboard_secret = False  # копия из менеджера паролей: clipboard_get_item отдаст её без текста
@@ -142,7 +150,14 @@ class FakePlatform:
 
     def app_volume_set(self, app: str, level: int) -> bool:
         self._call("app_volume_set", app, level)
+        for row in self.mixer:
+            if row["app"].casefold() == app.casefold() or row["title"].casefold() == app.casefold():
+                row["level"] = max(0, min(100, int(level)))
+                row["muted"] = False
         return True
+
+    def app_volumes(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.mixer]
 
     # --- медиа ------------------------------------------------------------------------------------
     def media_key(self, key: MediaKey) -> None:

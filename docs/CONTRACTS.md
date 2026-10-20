@@ -534,6 +534,19 @@ Claude Code — только официальным установщиком (`i
 timer, stopwatch, focus, rates, crypto, stocks, news, system, apps, quick, recent, volume, smarthome, pet, ai, worldclock,
 countdown, network, battery, sticky, plugins, desk_links`.
 
+«Системные операции» (`jarvis/widgets/sysops.py`, `jarvis/api/sysops.py`; страница интерфейса `#/system`): нагрузку,
+погоду и «Сейчас играет» панель берёт у виджетов `system`, `weather`, `media`, остальное — здесь.
+
+| Маршрут | Тело | Ответ |
+|---|---|---|
+| `GET /api/system/sensors` | — | `{cpu_temp, gpu_temp, gpu_name, gpu_load, top: [{name, cpu, ram_mb}], updated}` — температура в °C (нет датчика — `null`): видеокарта NVIDIA — `nvidia-smi`, процессор — счётчики WMI «Thermal Zone» (без прав администратора); не нашлось — повтор через 10 минут; `top` — 5 самых загруженных программ (одноимённые процессы — одной строкой, `cpu` — % всех ядер) |
+| `GET /api/system/mixer` | — | `{master: {volume, muted}, items: [{app, title, level, muted, active}]}` — программы со звуком (`platform.app_volumes()`): `app` — имя процесса или `system` (системные звуки), `active` — звучит сейчас; несколько сессий одной программы — одна строка |
+| `POST /api/system/mixer` | `{app, level 0..100}` | то же, что `GET` — громкость одной программы (`platform.app_volume_set`); программа без звука — 400 |
+
+Голосом: «открой системные операции», «покажи панель системы», «мониторинг системы» — динамическая команда
+`sysops:open` (категория `system`) → `ui.show {page: "system"}`; «микшер» остаётся встроенной командой (микшер
+Windows).
+
 `Plugin = {id, name, description, icon, color: [от, до], enabled, config, schema, status: {running, error?, hint?,
 active?, …}, actions: [{id, title}], examples: [фраза]}`. Плагины: `smart_home, dictation, subtitles, summary, reader,
 autolock, second_pc, notify_voice, pet, focus, clipboard, file_search`. `status.hint` — подсказка человеку (что

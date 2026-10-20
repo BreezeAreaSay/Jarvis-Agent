@@ -27,7 +27,7 @@ from datetime import datetime
 from typing import Any
 
 from jarvis import text as textops
-from jarvis.ai import apphints, policy
+from jarvis.ai import apphints, policy, screen, vision
 from jarvis.ai.chatgpt import ChatGpt
 from jarvis.ai.chats import MODES, ChatStore, ui_message
 from jarvis.ai.cli import CliProviders
@@ -83,6 +83,7 @@ class Turn:
     model: str
     kind: str
     agent_task: str = ""
+    note: str = ""  # пометка для модели к словам человека (снимок экрана приложен…) — в чат не пишется
     shown: str = ""  # текст, уже отправленный в интерфейс
     pending: str = ""  # текст, ещё не отправленный событием chat.delta
     flushed_at: float = 0.0
@@ -94,6 +95,11 @@ class Turn:
     usage: Usage = field(default_factory=Usage)
     status: tuple[str, str] = ("", "")
     finished: bool = False
+
+    @property
+    def prompt(self) -> str:
+        """Слова человека для модели — с пометкой (note), если она есть."""
+        return f"{self.text}\n\n{self.note}".strip() if self.note else self.text
 
 
 # --- история для модели --------------------------------------------------------------------------------
@@ -119,13 +125,19 @@ def group_turns(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return groups
 
 
-def _group_messages(group: list[dict[str, Any]], *, keep_tools: bool) -> list[dict[str, Any]]:
+def _group_messages(
+    group: list[dict[str, Any]], *, keep_tools: bool, pictures: bool = False
+) -> list[dict[str, Any]]:
+    """Обмен → сообщения для модели. pictures — картинки сообщения человека остаются картинками
+    (уточняющий вопрос к только что приложенному снимку: «а какого она года?»)."""
     out: list[dict[str, Any]] = []
     for row in group:
         role, meta = row["role"], row["meta"]
         if role == "user":
-            content = row["content"]
-            if meta.get("images"):
+            content: Any = row["content"]
+            if meta.get("images") and pictures:
+                content = user_content(content, list(meta["images"]), True)
+            elif meta.get("images"):
                 content = f"{content}\n\n[к сообщению были приложены изображения]".strip()
             out.append({"role": "user", "content": content})
         elif role == "assistant" and row["tool_calls"]:
@@ -344,13 +356,68 @@ class Ai(BaseService):
         images: list[str] | None = None,
         agent_task: str = "",
     ) -> AskResult:
+        images, note = await self._screen_question(text, images, chat_id, source, mode, agent_task)
         try:
             turn = self._begin(
                 text, chat_id=chat_id, source=source, mode=mode, images=images, agent_task=agent_task
             )
         except UserFacingError as e:
             return AskResult(chat_id or "", "", error=str(e))
+        turn.note = note
         return await self._spawn(turn)
+
+    async def _screen_question(
+        self,
+        text: str,
+        images: list[str] | None,
+        chat_id: str | None,
+        source: Source,
+        mode: str | None,
+        agent_task: str = "",
+    ) -> tuple[list[str] | None, str]:
+        """«Что на экране?», «что это за модель?» — снимок экрана к вопросу: модель с картинками ответит за
+        один ход, а не агент за много шагов. Модель картинок не видит, чат в режиме «Агент» или снять не
+        вышло — как было (агенту)."""
+        if images or agent_task or AGENT_PHRASE.match(text or "") or not screen.is_question(text):
+            return images, ""
+        if self._mode_of(chat_id, source, mode) == "agent":
+            return images, ""
+        if not self.ctx.settings.value.ai.enabled or not self._sees_images():
+            return images, ""
+        try:
+            pictures, note = await screen.capture(self.ctx)
+        except Exception:
+            log.exception("снимок экрана к вопросу не сделан")
+            return images, ""
+        return (pictures, note) if pictures else (images, "")
+
+    def _mode_of(self, chat_id: str | None, source: Source, mode: str | None) -> str:
+        """Режим, в котором пойдёт ход (как в _begin, но без создания чата)."""
+        if mode in MODES:
+            return str(mode)
+        chat = self.chats.get(chat_id)
+        if chat is not None and chat["kind"] != "voice":
+            return str(chat["mode"])
+        return self.ctx.settings.value.ai.mode
+
+    def _sees_images(self) -> bool:
+        """Понимает ли картинки модель, которая ответит в чате (ключ API, Codex или программа человека)."""
+        ai = self.ctx.settings.value.ai
+        backend = self.account_backend()
+        if backend is None:
+            try:
+                return bool(self.llm.config(None).vision)
+            except Exception:
+                return False
+        info = getattr(backend, "info", None)
+        if info is not None and not getattr(info, "images", True):
+            return False  # программа без картинок (Qwen Code…): снимок до модели не дойдёт
+        model = ai.model
+        resolve = getattr(backend, "resolve_model", None)
+        if callable(resolve):
+            with contextlib.suppress(Exception):
+                model = str(resolve() or model)
+        return vision.sees_images(ai.provider, model, ai.vision)
 
     async def post_message(
         self,
@@ -377,7 +444,9 @@ class Ai(BaseService):
             row = self.chats.add_message(chat_id, "user", text.strip())
             self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
             return {"chat_id": chat_id, "message_id": row["id"], "reply_id": run.reply_id}
+        images, note = await self._screen_question(text, images, chat_id, source, mode)
         turn = self._begin(text, chat_id=chat_id, source=source, mode=mode, images=images)
+        turn.note = note
         self.ctx.spawn(self._spawn(turn), f"chat-{turn.chat_id}")
         return {"chat_id": turn.chat_id, "message_id": turn.user_id, "reply_id": turn.reply_id}
 
@@ -582,8 +651,8 @@ class Ai(BaseService):
             apps=apps,
         )
         vision = self.llm.config(turn.model or None).vision
-        current = {"role": "user", "content": user_content(turn.text, turn.images, vision)}
-        history = sanitize_history([*self._history(turn), current])
+        current = {"role": "user", "content": user_content(turn.prompt, turn.images, vision)}
+        history = sanitize_history([*self._history(turn, pictures=vision and not turn.images), current])
         return [{"role": "system", "content": system}, *history]
 
     def _active_context(self) -> str:
@@ -611,7 +680,9 @@ class Ai(BaseService):
             )
         return "\n".join(lines)
 
-    def _history(self, turn: Turn) -> list[dict[str, Any]]:
+    def _history(self, turn: Turn, *, pictures: bool = False) -> list[dict[str, Any]]:
+        """История чата для модели. pictures — картинки прошлого обмена (снимок экрана к «что это?») остаются
+        картинками: в размер истории не считаются, старше — только пометка."""
         groups = group_turns(self.chats.rows(turn.chat_id))
         index = next((i for i, g in enumerate(groups) if g[0]["id"] == turn.user_id), len(groups))
         groups = groups[:index]
@@ -623,6 +694,8 @@ class Ai(BaseService):
         for position, group in enumerate(reversed(groups)):
             messages = _group_messages(group, keep_tools=position < 2)
             size = _size(messages)
+            if pictures and position == 0:
+                messages = _group_messages(group, keep_tools=True, pictures=True)
             if selected and size > budget:
                 break
             selected.insert(0, messages)

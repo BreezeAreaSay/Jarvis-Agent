@@ -1188,7 +1188,7 @@ class ChatGpt:
                 self._start_turn(
                     runtime,
                     state.thread_id,
-                    self._items(turn.text, turn.images),
+                    self._items(turn.prompt, turn.images),
                     params,
                     self._resume_params(native),
                 )

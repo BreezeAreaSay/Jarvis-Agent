@@ -912,7 +912,7 @@ class CliBackend:
         sent: dict[str, str] = dict(saved.get("sent") or {}) if saved else {}
         context = context_prompt.context_text(sections, sent)
         history = "" if saved else self._history(turn)
-        text = turn.text or "Что на изображении?"
+        text = turn.prompt or "Что на изображении?"
         images = turn.images if self.info.images else []
         if turn.images and not self.info.images:
             text = f"{text}\n\n{prompt.NO_IMAGES}"

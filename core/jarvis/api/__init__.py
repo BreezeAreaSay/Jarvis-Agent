@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from jarvis.api import (
     ai,
+    browser,
     commands,
     core,
     data,
@@ -27,6 +28,7 @@ def include_all(app: FastAPI) -> None:
         commands,
         voice,
         ai,
+        browser,
         notes,
         mcp,
         plugins,

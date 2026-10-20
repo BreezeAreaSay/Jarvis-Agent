@@ -25,6 +25,7 @@ GROUPS: dict[str, str] = {
     "memory": "Память, заметки и дела",
     "computer": "Компьютер",
     "agent": "Агент: работа в окнах программ",
+    "browser": "Агент: браузер Jarvis",
 }
 
 # встроенные инструменты чата: имя → (название, что делает — простыми словами, группа)
@@ -95,6 +96,27 @@ AGENT_ACTIONS: list[dict[str, Any]] = [
      "description": "Когда неясно, что именно или кому, задаёт короткий вопрос и ждёт ответа"},
     {"name": "finish", "title": "Отчёт", "risk": "read",
      "description": "Заканчивает задачу и пишет, что сделано"},
+    # браузер Jarvis (jarvis.ai.browser): свой профиль Chrome или Edge, страницы — по CDP
+    {"name": "browser_open", "title": "Открывать сайты", "risk": "act", "group": "browser",
+     "description": "Открывает адрес во вкладке браузера Jarvis — отдельного окна Chrome или Edge со своим "
+                    "профилем. Ссылки с данными на незнакомые сайты — только с разрешения"},
+    {"name": "browser_click", "title": "Нажимать на сайтах", "risk": "act", "group": "browser",
+     "description": "Нажимает ссылки и кнопки страницы. «Купить», «Оплатить», «Отправить», «Удалить», вход, "
+                    "скачивание и выбор файла — только с разрешения"},
+    {"name": "browser_type", "title": "Заполнять поля на сайтах", "risk": "act", "group": "browser",
+     "description": "Вводит текст в поля страницы и выбирает в списках. Пароли, коды и данные карт — только "
+                    "с разрешения"},
+    {"name": "browser_press", "title": "Клавиши на странице", "risk": "act", "group": "browser",
+     "description": "Enter, Esc, стрелки; назад, обновить, новая и закрыть вкладку. Отправка и закрытие "
+                    "чужой вкладки — только с разрешения"},
+    {"name": "browser_tab", "title": "Переключать вкладки", "risk": "act", "group": "browser",
+     "description": "Выводит нужную вкладку браузера Jarvis вперёд"},
+    {"name": "browser_scroll", "title": "Листать страницу", "risk": "read", "group": "browser",
+     "description": "Прокручивает страницу или её часть"},
+    {"name": "browser_read", "title": "Читать страницу", "risk": "read", "group": "browser",
+     "description": "Читает текст страницы целиком, по частям"},
+    {"name": "browser_wait", "title": "Ждать загрузку", "risk": "read", "group": "browser",
+     "description": "Ждёт, пока страница загрузится или на ней появится нужный текст"},
 ]  # fmt: skip
 
 
@@ -205,6 +227,7 @@ def describe(ctx: "AppContext") -> dict[str, Any]:
         )
     for action in AGENT_ACTIONS:
         key = AGENT_PREFIX + action["name"]
+        group = action.get("group", "agent")
         items.append(
             _entry(
                 ai,
@@ -214,9 +237,9 @@ def describe(ctx: "AppContext") -> dict[str, Any]:
                 title=action["title"],
                 description=action["description"],
                 source="agent",
-                group="agent",
+                group=group,
                 modes=["agent"],
-                available=True,
+                available=group != "browser" or bool(getattr(ai, "browser", False)),
                 timeout=None,
             )
         )

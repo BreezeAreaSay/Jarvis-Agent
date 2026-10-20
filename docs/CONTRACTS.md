@@ -335,6 +335,9 @@ label, placeholder?, options?, required}], description}`.
 | `GET /api/agent/journal/{run_id}/{name}` | — | `{url}` — картинка шага (`NNN-K.jpg`) data URL'ом; нет — 404 |
 | `POST /api/agent/scenario` | `{chat_id?, message_id?}` | `{scenario}` — удачный прогон агента (итог с `meta.recipe`; пусто — последний) → сценарий: фраза — слова человека, шаги — его действия; повторно — тот же сценарий; нечего запомнить — 400 |
 | `GET /api/agent` | — | состояние текущего запуска (как `agent.state`) или `null` |
+| `GET /api/browser` | — | `BrowserState` — браузер Jarvis для агента (`jarvis/ai/browser`) |
+| `POST /api/browser/open` | `{url?}` | `BrowserState` — кнопка «Открыть браузер Jarvis»: включить (`ai.browser`), открыть окно со своим профилем или вывести его вперёд (`url` http/https — новой вкладкой); не вышло — 400 с тем, что сделать |
+| `POST /api/browser/disconnect` | — | `BrowserState` — отключиться (окна браузера остаются; агент подключится снова, когда понадобится сайт) |
 | `GET /api/ai/tools` | — | `{items: ToolInfo[], groups: [{id, title}], agent_confirm}` — каталог «Инструменты и разрешения» (`jarvis/ai/catalog.py`); разрешение меняется `PATCH /api/settings {ai: {tool_policy: {<policy_key>: allow\|ask\|deny\|auto}}}` (`auto` — снова по риску) |
 | `GET/POST /api/memory`, `DELETE /api/memory/{id}` | `{text, kind?}` | `{items}` / `MemoryItem` (временные с истёкшим сроком не приходят) |
 | `PATCH /api/memory/{id}` | `{text?, kind?}` | `MemoryItem` — поправленная запись становится записью человека (`source: user`); 404 — нет записи |
@@ -362,6 +365,9 @@ actions?: [{title, ok, detail?}], memory?: [string], images?: [string], error?, 
 agent?: {run_id, status, steps, plan}, recipe?: {request, actions: [{type, value}], scenario_id?}}}` — `stopped` —
 ответ оборван «Стопом», `agent` — итог запуска агента, `recipe` — его удачный прогон, который можно запомнить
 сценарием (`scenario_id` — уже запомнен).
+`BrowserState = {enabled, status: off|closed|starting|connected|error, app, found, version, error, tabs, profile}` —
+`app` — «Google Chrome» / «Microsoft Edge» (выбран или найден), `found: false` — ни того ни другого нет, `error` —
+что не так и что сделать, по-русски, `profile` — папка профиля браузера Jarvis.
 `ChatGptState = {installed, installing, logged_in, account, error, version, login_pending?, auth_url?,
 verification_url?, user_code?}` — `account`: «email (ChatGPT Plus)»; `error` — почему компонент не скачался или Codex
 не запустился (текст для человека); `login_pending` и ссылки — пока ждём входа в браузере.
@@ -392,6 +398,7 @@ error|disabled, error, tools: [{name, description}]}` — секретные `en
 | `reminder.fired` | `{item: {…, kind: reminder\|event, missed}}` |
 | `agent.state` | `{run_id, task, status: planning\|running\|waiting\|done\|stopped\|error, step, total, text, plan: string[], outcome: ""\|done\|partial\|failed, chat_id}` — `outcome` — как оценил итог сам агент (finish): «Готово» в интерфейсе только при `done`; `waiting` — ждёт разрешения или ответа на вопрос (`text`: «Жду ответа: …»); `chat_id` — чат, куда агент пишет итог (сообщение туда, пока он работает, — ему) |
 | `agent.step` | `{run_id, index, title, status: running\|ok\|error}` |
+| `browser.state` | `BrowserState` — браузер Jarvis подключился, закрылся, запускается, ошибка, выключен |
 | `agent.pointer` | `{run_id, kind: click\|double\|right\|type\|keys\|scroll\|focus, x, y, label, rect?: [l,t,r,b], ts}` — куда агент жмёт и что вводит, в физических точках экрана (оверлей рисует «курсор агента»; основной монитор: точка оверлея = физическая / масштаб − начало рабочей области) |
 | `mcp.status` | `{server_id, status, error?, tools_count}` |
 | `ai.configured` | `{configured}` — изменилось «ИИ настроен» (ключ, провайдер, адрес, каталог, вход в ChatGPT или программу) |
@@ -420,6 +427,7 @@ Telegram через MCP по настоящим именам инструмен�
 ничего не отправляют).
 
 Агент (`jarvis/ai/agent.py`). Действия: `ui_snapshot`, `screenshot`, `focus_window`, `ui_click` (`double`),
+`browser_*` (браузер Jarvis — ниже),
 `ui_type`, `click_point {x, y, what, button?, double?}` (координаты картинки последнего снимка окна → экран;
 окно сдвинули — пересчёт), `type_text {text, field?}` (туда, где фокус), `scroll {direction, amount, x?, y?}`,
 `press_keys`, `launch_app`, `open_url` (`https:`, `tg:`, `ms-settings:`, `spotify:`, `mailto:`, `whatsapp:`),
@@ -484,6 +492,57 @@ Teams, Steam, OBS, плееры, Notion…) — `jarvis/ai/playbooks.py`, вме
 «Стоп» — сразу и до конца: начатое действие обрывается (и когда его позвал Codex или программа-провайдер, не
 цикл агента), а вызовы инструментов, что ещё придут, — «Ошибка: пользователь остановил работу» без действия.
 Лимиты: `ai.max_agent_steps`, 30 минут на запуск, 3 минуты на действие.
+
+Браузер Jarvis (`settings.ai.browser`, по умолчанию выкл; `ai.browser_app`: `auto` — Chrome, иначе Edge, `chrome`,
+`edge`; `jarvis/ai/browser`) — агент работает с сайтами по Chrome DevTools Protocol, а не мышью и UI Automation.
+С Chrome 136 порт отладки для профиля по умолчанию закрыт, поэтому у Jarvis свой профиль — `<data>/browser`
+(`--user-data-dir`, `--remote-debugging-port=0`, `--no-first-run`, `--no-default-browser-check`; запуск —
+`platform.launch`, порт — из `<профиль>/DevToolsActivePort`, только 127.0.0.1, WebSocket без прокси): человек один
+раз входит в нужные сайты в этом окне; его обычный браузер не трогается. Окно открывается само при первом
+`browser_open` или кнопкой в настройках; открытое раньше (Jarvis перезапустили) — подхватывается без нового окна;
+порт есть, но браузер не ответил за 3 с — «не отвечает», второй не запускается; закрыли браузер — `closed`,
+выключили настройку — подключение закрывается (скачивания — снова как обычно). Действия: `browser_open {url, new_tab?}`
+(только http/https; «ozon.ru» — https; javascript:, file:, chrome:, data: — нет; ссылка с данными в адресе на сайт,
+которого нет в задаче и среди поисковых, — с разрешения; ждёт загрузку до 10 с; переходит только во вкладке, которую
+открыл агент в этом прогоне, или в пустой — во вкладке человека открывает новую), `browser_click {id, double?}`,
+`browser_type {id, text, submit?}` (содержимое заменяется; в `select` — выбор варианта; `submit` — Enter),
+`browser_scroll {direction: down|up|top|bottom, amount?, id?}`, `browser_press {keys}` (события клавиатуры в страницу;
+`alt+left`/`alt+right` — история, `f5` — обновить, `ctrl+t` — вкладка, `ctrl+w` — закрыть, `ctrl+tab`, `ctrl+1…9`;
+открыто окно сайта — `enter` OK, `escape` Отмена), `browser_wait {seconds?, text?}`, `browser_tab {number?, title?}`,
+`browser_read {part?}` (вся страница частями по 6000 знаков). Каталог: группа `browser` («Агент: браузер Jarvis»),
+ключи `agent.browser_*`; без настройки действия модели не даются. Правила модели (`BROWSER_RULES`) добавляются
+к `AGENT_PROMPT`, когда браузер включён; правила Codex и программ-провайдеров упоминают `browser_*`.
+Когда впереди окно браузера Jarvis (процесс браузера — `SystemInfo.getProcessInfo`), `Agent._look` берёт вместо
+UI Automation страницу видимой вкладки (`jarvis/ai/browser/page.py`): дерево доступности
+(`Accessibility.getFullAXTree`, рамки того же процесса — тоже) и раскладку (`DOMSnapshot.captureSnapshot`) —
+«Страница в браузере Jarvis» (как данные, `untrusted`): вкладка, адрес, вкладки, «экран N из M», что на экране —
+текстом и элементами `[b12 кнопка «Купить»]` (роль по-русски, значение, флаги: фокус, отмечен, пароль, скачивает
+файл…), выше и ниже экрана — элементы списком, ближние первыми, пока хватает места (дальше — «ещё N»); элементы
+не обрезаются по числу; id — по `backendNodeId`, не меняются, пока открыт тот же документ. Значения полей — из
+дерева доступности (пароли там скрыты; из раскладки, где они открытым текстом, не берутся), номера карт и токены
+замазаны. Нажимаемое без роли (обработчик щелчка, курсор-рука) — «элемент». Заметки: капча, форма входа, рамки
+других сайтов (видны только на картинке). Картинка экрана — как всегда, метки — `b…`. Впервые за прогон — подсказка,
+что приёмы «Браузер» из подсказок — для обычного браузера. Без подключения, с другим окном впереди или если
+страницу снять не вышло — как раньше. Нажатие — `DOM.scrollIntoViewIfNeeded`, `DOM.getContentQuads`, проверка
+`DOM.getNodeForLocation` (точку закрывает другой элемент — баннер, чужая рамка — «закрыт другим элементом», ничего не
+нажато) и `Input.dispatchMouseEvent`; без размера — `click()` элемента. Ввод — `DOM.focus`, выделение прежнего,
+`Input.insertText`. JavaScript от модели не выполняется (только свои функции), cookies, пароли и хранилище сайтов
+не читаются. Разрешения (`Agent._approve`, в карточке — сайт и что будет сделано): рискованные кнопки (`RISKY_NAME`:
+купить, оплатить, отправить, удалить, заказ…), отправка набранного в мессенджере (Telegram Web, WhatsApp, VK, почта —
+по сайту или заголовку), вход (кнопка или Enter в форме с паролем), ввод пароля или кода (`type=password`,
+`autocomplete` current-/new-password, one-time-code), данные карты (`cc-*`, номер по Луну), вставка из буфера обмена
+(`ctrl+v`), скачивание (ссылка с
+`download` или на файл) и выбор файла для загрузки, «Согласиться» в окне сайта с рискованным текстом и «Покинуть
+страницу?», закрытие вкладки, которую агент не открывал. Скачивания: пока агент работает, браузер их не начинает
+(`Browser.setDownloadBehavior deny`), кроме разрешённого нажатия; сайт попытался — агенту «Сайт начал скачивать
+«…» — Jarvis не дал»; закончил агент — `default`. Окно сайта (alert, confirm, prompt, beforeunload): пока открыто,
+страница не отвечает — нажатие, открывшее его, не ждёт ответа, снимок показывает окно, `browser_press` отвечает.
+Перед действием на странице впереди должно быть окно браузера Jarvis (окно Jarvis поверх — вперёд браузер; другая
+программа — `WindowChanged`). «Стоп» обрывает и ожидание загрузки. Журнал — как у всех действий (`args` без
+секретов: ввод в поле пароля — «••••»). Сценарий: `browser_open` → `Launch.Url` (повтор откроет сайт в браузере по
+умолчанию), чтение, ожидание и прокрутка — без шагов, нажатия, ввод, клавиши и вкладки — прогон не запоминается.
+Заметка `finish.lesson` в браузере Jarvis — о сайте (`ozon.ru`), а не о `chrome.exe`; «Заметки с прошлых раз о сайте
+«…»» — когда сайт впервые за прогон впереди.
 
 Заметки о программах (`ai.agent_notes`, `jarvis/ai/lessons.py`): `finish.lesson` — что в программе не сработало
 и как получилось — хранится по exe окна задачи (kv `agent:lessons`, последние 5 на программу, до 50 программ,

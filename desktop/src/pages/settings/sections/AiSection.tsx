@@ -3,6 +3,7 @@ import { Bot, Brain, CircleDollarSign, Plug, Sparkles, Wand } from "lucide-react
 import { Card, cx, Setting, Slider, Tabs, Toggle } from "@/ui";
 import { AccountPanel, AiConnection, isAccountProvider, ProviderCards, useAiConfigured } from "../ai";
 import { LazyText, NumberField, ProgressBar, useApi, useSettingsPatch } from "../kit";
+import BrowserCard from "./BrowserCard";
 
 interface Usage {
   month: { prompt_tokens: number; completion_tokens: number; cost: number };
@@ -248,6 +249,8 @@ export default function AiSection() {
           <Toggle checked={ai.agent_journal} onChange={(v) => patch({ ai: { agent_journal: v } })} label="Журнал" />
         </Setting>
       </Card>
+
+      <BrowserCard />
 
       <UsageCard />
     </div>

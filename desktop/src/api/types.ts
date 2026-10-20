@@ -107,6 +107,9 @@ export interface Settings {
     agent_notes: boolean;
     /** Шаги агента и снимки экрана — в журнал на этом компьютере. */
     agent_journal: boolean;
+    /** Браузер Jarvis: свой профиль Chrome или Edge, агент работает со страницами по CDP. */
+    browser: boolean;
+    browser_app: "auto" | "chrome" | "edge";
     monthly_budget: number;
     /** Разрешения инструментов ИИ по имени; нет записи или auto — по риску. */
     tool_policy: Record<string, "auto" | "allow" | "ask" | "deny">;

@@ -19,6 +19,7 @@ from jarvis.platform import Platform
 from jarvis.settings import Secrets, SettingsStore
 
 if TYPE_CHECKING:
+    from jarvis.ai.browser.service import Browser
     from jarvis.confirm import Confirmations
     from jarvis.retention import Retention
     from jarvis.scenarios.service import Scenarios
@@ -82,6 +83,7 @@ class AppContext:
         self.tts: TtsService
         self.ai: AiService
         self.agent: AgentService
+        self.browser: Browser
         self.notes: NotesService
         self.mcp: McpService
         self.plugins: PluginManager

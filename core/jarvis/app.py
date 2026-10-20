@@ -36,6 +36,8 @@ def build_context(platform_name: str = "auto") -> AppContext:
     from jarvis.remote.service import Remote
     from jarvis.retention import Retention
     from jarvis.scenarios.service import Scenarios
+    from jarvis.voice.character import Character
+    from jarvis.voice.presence import Presence
     from jarvis.voice.service import Voice
     from jarvis.voice.tts import Tts
     from jarvis.widgets.service import Widgets
@@ -53,6 +55,9 @@ def build_context(platform_name: str = "auto") -> AppContext:
     ctx.remote = Remote(ctx)
     ctx.scenarios = Scenarios(ctx)  # после команд: регистрирует в них свои фразы
     ctx.dispatcher = MainDispatcher(ctx)
+    # после диспетчера: его частые ответы готовятся первыми, ответы характера — следом
+    ctx.character = Character(ctx)
+    ctx.presence = Presence(ctx)
     ctx.retention = Retention(ctx)
     return ctx
 
@@ -71,6 +76,8 @@ START_ORDER = (
     "voice",
     "remote",
     "scenarios",  # последним: триггеры начинают работать, когда всё остальное готово
+    "character",
+    "presence",  # приветствие по возвращении (выключено по умолчанию)
     "retention",  # очистка по срокам хранения — через минуту после запуска и раз в сутки
 )
 

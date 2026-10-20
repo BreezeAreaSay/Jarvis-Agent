@@ -12,9 +12,10 @@ say(text) → текст для голоса (jarvis.voice.textprep: без mark
 
 Короткие фразы облачных движков (cacheable) помнятся в памяти: повторное «Готово, сэр.» не тратит кредиты
 и не ждёт сеть. На диск (cache/tts) — только фразы без личного: частые ответы (add_stock: «Готово, сэр.»,
-«Сейчас сделаю.», «Понял, учту.» — их звук готовится заранее, при запуске и смене голоса) и те, что модули
-пометили сами (keep: «Открываю Telegram.»); после перезапуска они звучат сразу. Остальное — только в памяти:
-в фразах бывает личное.
+«Сейчас сделаю.», «Понял, учту.», ответы характера Джарвиса — их звук готовится заранее, при запуске и смене
+голоса, не больше WARM_MAX_CHARS символов синтеза за раз) и те, что модули пометили сами (keep: «Открываю
+Telegram.»); после перезапуска они звучат сразу. Остальное — только в памяти: в фразах бывает личное.
+is_ready(text) — прозвучит ли фраза сразу (характер выбирает такие варианты первыми).
 
 События: tts.state {speaking, text?}, tts.level {level} ~20 Гц — аватар пульсирует в такт речи.
 speaking — правда с момента say() до конца звука: голосовой сервис в это время не слушает без «Джарвис» (эхо).
@@ -61,6 +62,9 @@ CACHE_MAX_CHARS = 160  # помнить только короткие фразы
 CACHE_MAX_BYTES = 24 * 1024 * 1024
 DISK_MAX_FILES = 300  # фраз на диске (по свежести использования)
 WARM_DELAY_S = 3.0  # частые ответы готовим не сразу: ползунок темпа двигают несколько раз подряд
+# за одну подготовку синтезируем не больше стольких символов (уже готовые с диска не в счёт): кредиты
+# облачного голоса тратятся понемногу — самое частое сразу, остальное — при следующих запусках
+WARM_MAX_CHARS = 1200
 
 
 class PhraseCache:
@@ -80,6 +84,10 @@ class PhraseCache:
             self._items.move_to_end(key)
         data, rate = item
         return pcm16_to_float(data), rate
+
+    def has(self, key: tuple[Any, ...]) -> bool:
+        with self._lock:
+            return key in self._items
 
     def put(self, key: tuple[Any, ...], samples: np.ndarray, rate: int) -> None:
         data = float_to_pcm16(samples)
@@ -157,6 +165,7 @@ class Tts(BaseService):
         self._keep: set[str] = set()  # предложения без личного — их звук можно хранить на диске
         self._warm_task: asyncio.Task[None] | None = None
         self.warm_delay_s = WARM_DELAY_S
+        self.warm_max_chars = WARM_MAX_CHARS
 
     # --- жизненный цикл ----------------------------------------------------------------------------
     async def start(self) -> None:
@@ -254,6 +263,24 @@ class Tts(BaseService):
         """В фразе нет личного («Открываю Telegram.»): её звук можно хранить на диске — и после перезапуска
         она прозвучит сразу."""
         self._keep.update(split_sentences(prepare(text, russian=False)))
+
+    def is_ready(self, text: str) -> bool:
+        """Фраза прозвучит сразу: голос локальный (синтез быстрый) или звук всех её предложений уже в памяти.
+        Только чтение — для выбора варианта ответа (jarvis.voice.character)."""
+        settings = self.ctx.settings.value
+        engine = self.engines.get(settings.tts.engine)
+        if engine is None or self._failed_until.get(engine.name, 0.0) > time.monotonic():
+            return False
+        if not getattr(engine, "cacheable", False):
+            return not engine.available()
+        voice = engine.voice(settings)
+        sentences = split_sentences(prepare(text, russian=False))
+        for sentence in sentences:
+            spoken = prepare(sentence, russian=True) if engine.russian(voice) else sentence
+            key = self._cache_key(engine, voice, spoken, settings)
+            if key is None or not self.cache.has(key):
+                return False
+        return bool(sentences)
 
     def play_earcon(self, name: str) -> None:
         """Короткий сигнал (wake | done | error) вне очереди речи; речью не считается (из любого потока)."""
@@ -541,16 +568,28 @@ class Tts(BaseService):
 
     async def _warm(self) -> None:
         """Частые ответы — заранее: с диска в память или, если их ещё нет, синтезом выбранного облачного
-        голоса (раз на голос и его настройки; локальный голос и так быстрый)."""
+        голоса (раз на голос и его настройки; локальный голос и так быстрый). Синтез за один раз — не больше
+        warm_max_chars символов (фразы с диска не в счёт): остальное подготовится при следующем запуске."""
         await asyncio.sleep(self.warm_delay_s)
         settings = self.ctx.settings.value
         engine = self.engines.get(settings.tts.engine)
         if engine is None or not getattr(engine, "cacheable", False):
             return
         voice = engine.voice(settings)
+        budget = self.warm_max_chars
         for sentence in self._stock_sentences():
             if engine.available() or self._failed_until.get(engine.name, 0.0) > time.monotonic():
                 return
+            text = prepare(sentence, russian=True) if engine.russian(voice) else sentence
+            key = self._cache_key(engine, voice, text, settings)
+            stored = key is not None and (
+                self.cache.has(key) or await asyncio.to_thread(self._disk_path(key).exists)
+            )
+            if not stored:
+                if budget < len(text):
+                    log.info("голос: частые ответы — остальное подготовлю при следующем запуске")
+                    return
+                budget -= len(text)
             try:
                 await self._synth_with(engine, sentence, voice, settings, strict=True)
             except UserFacingError as e:
@@ -639,8 +678,8 @@ class Tts(BaseService):
 
     def _on_settings(self, old: Settings, new: Settings) -> None:
         o, n = old.tts, new.tts
-        if o != n or old.profile.address != new.profile.address:
-            self._schedule_warm()  # другой голос, темп или обращение — другие частые ответы
+        if o != n or old.profile.address != new.profile.address or old.ai.persona != new.ai.persona:
+            self._schedule_warm()  # другой голос, темп, обращение или персона — другие частые ответы
         if o.volume != n.volume:
             self.player.volume = n.volume / 100
         if o.output_device != n.output_device:

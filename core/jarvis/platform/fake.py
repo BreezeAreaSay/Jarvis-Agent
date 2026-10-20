@@ -115,6 +115,11 @@ class FakePlatform:
         ]
         self._started = time.time()
         self.index_available = True  # тесты выключают «службу индексирования»
+        # тесты подставляют: сколько секунд без ввода, игра во весь экран, кто пишет микрофон (звонок)
+        self.idle = 0.0
+        self.fullscreen = False
+        self.mic_users: list[str] = []
+        self.gpu_temp: float | None = 54.0  # температура видеокарты (как nvidia-smi); None — неизвестна
 
     def _call(self, name: str, *args: Any) -> None:
         self.calls.append((name, args))
@@ -246,7 +251,7 @@ class FakePlatform:
         self._call("window_action", action, target)
 
     def is_fullscreen_app(self) -> bool:
-        return False
+        return self.fullscreen
 
     # --- система ----------------------------------------------------------------------------------
     def power(self, action: PowerAction, delay_s: int = 0) -> None:
@@ -319,6 +324,8 @@ class FakePlatform:
             battery=None,
             charging=None,
             uptime_s=t - self._started + 3600 * 5,
+            extra={"disk_free_gb": 186.4, "disk_total_gb": 476.9, "cpu_count": 12}
+            | ({"gpu_temp_c": self.gpu_temp} if self.gpu_temp is not None else {}),
         )
 
     def recent_files(self, limit: int = 10) -> list[FileInfo]:
@@ -332,7 +339,10 @@ class FakePlatform:
         return files[:limit]
 
     def idle_seconds(self) -> float:
-        return 0.0
+        return self.idle
+
+    def microphone_users(self) -> list[str]:
+        return list(self.mic_users)
 
     def known_folder(self, name: str) -> str | None:
         folders = {

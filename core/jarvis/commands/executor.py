@@ -65,6 +65,9 @@ FOLDER_NAMES = {
     "видео": "videos",
 }
 MUSIC_APPS = ("spotify", "yandex_music", "aimp", "foobar", "vlc")
+# лаунчеры игр — программы, а не игры: «открой Steam» — не «запускаю протокол игры»
+GAME_LAUNCHERS = frozenset({"steam", "epic", "battlenet", "ea_app", "ubisoft", "gog", "xbox"})
+GAME_LINKS = ("steam://rungameid/", "com.epicgames.launcher://apps/", "goggalaxy://opengameview/")
 # «Включи музыку»: заиграла ли — проверяем столько раз через столько секунд (≈2,4 с)
 PLAY_CHECKS = 8
 PLAY_CHECK_S = 0.3
@@ -281,6 +284,7 @@ class Executor:
             "Media.Next": self._media_next,
             "Media.Prev": self._media_prev,
             "Media.Stop": self._media_stop,
+            "Media.Close": self._media_close,
             "Window.MinimizeAll": self._minimize_all,
             "Window.Minimize": self._window_minimize,
             "Window.Maximize": self._window_maximize,
@@ -329,6 +333,8 @@ class Executor:
                 state.rest = len(cmd.actions) - i - 1
                 await self.run_action(action, state)
             say = substitute(cmd.say, slots) if cmd.say else state.say
+            if not cmd.actions:
+                state.data.setdefault("silent", True)  # команда-ответ («спасибо»): только голос, без тоста
         except (UserFacingError, PlatformError) as e:
             data = {"agent_task": e.task} if isinstance(e, NeedsAgent) else {}
             return ExecResult(False, title, str(e), icon=icon, command_ids=[cmd.id], data=data)
@@ -386,23 +392,29 @@ class Executor:
         platform = self.ctx.platform
         if _URI.match(value) and not _DRIVE.match(value):
             await self._platform(platform.open_url, value)
+            if _is_game("", value):  # steam://rungameid/730 — запуск игры ссылкой лаунчера
+                st.data["game"] = True
             return
         if _DRIVE.match(value) or "\\" in value or "/" in value:
             await self._platform(platform.launch, value, "")
             return
-        target, name, exe = value, value, ""
+        target, name, exe, key = value, value, "", ""
         if st.slots.get("app") == value and st.slots.get("app_id"):
             target = str(st.slots["app_id"])
         else:
             found = self.service.apps.resolve(value)
             if found is not None:
-                target, name, exe = found.app_id, found.name, found.exe
+                target, name, exe, key = found.app_id, found.name, found.exe, found.key
         before = await self._windows() if st.rest else []
         if _URI.match(target) and not _DRIVE.match(target):
             await self._platform(platform.open_url, target)
         else:
             await self._platform(platform.launch, target, "")
         st.data["app"] = name
+        if key:
+            st.data["app_key"] = key
+        if _is_game(key, target):
+            st.data["game"] = True  # «Запускаю протокол игры» вместо «Открываю …»
         if st.rest:  # дальше — действия в этой программе: дождаться, пока она откроется
             await self._wait_window(name, exe or target, before)
 
@@ -551,6 +563,7 @@ class Executor:
         closed = await self._platform(self.ctx.platform.close_app, target)
         if not closed:
             raise UserFacingError(f"{name} не запущен")
+        st.data["closed"] = name
 
     async def _app_kill(self, value: str, st: RunState) -> None:
         target, name = self._app_target(value, st)
@@ -752,6 +765,7 @@ class Executor:
         if delay is None or delay < 0 or delay > 7 * 86400:
             raise UserFacingError(f"Не понял задержку «{value}»")
         await self._platform(self.ctx.platform.power, action, int(delay))
+        st.data["delay"] = delay
         if delay >= 1:
             text = f"{what} через {numbers.duration_text(delay)}"
             st.info(text, text)
@@ -811,16 +825,22 @@ class Executor:
         if mode == "pause":
             if info is not None and info.status in ("paused", "stopped"):
                 st.info("Уже на паузе")
+                st.data["media"] = "already_paused"
                 return
             await self._platform(platform.media_key, "play_pause")
+            st.data["media"] = "paused"
             return
         if info is not None and info.status == "playing":
             st.info("Музыка уже играет")
+            st.data["media"] = "already_playing"
             return
         # программа — та, что играла, или только что запущенная сценарием; нет ни той, ни другой — своя
         app = info.app if info is not None else str(st.data.get("app") or "")
+        st.data["media"] = "playing"
         if info is None and not app:
             app = await self._start_music_app(st)
+            if app:
+                st.data["media"] = "launched"  # «Открываю приложение» — программу пришлось запустить
         await self._platform(platform.media_key, "play_pause")
         if not await self._playing():
             # клавиша «Play» без выбранного трека ничего не включает («Моя волна» ждёт щелчка) — агент
@@ -861,6 +881,42 @@ class Executor:
 
     async def _media_stop(self, value: str, st: RunState) -> None:
         await self._platform(self.ctx.platform.media_key, "stop")
+
+    async def _media_close(self, value: str, st: RunState) -> None:
+        """«Закрой музыку»: закрыть программу, которая играет (сеанс воспроизведения Windows), а нет её —
+        запущенную музыкальную программу (Spotify, Яндекс Музыка, AIMP…). Браузер не закрываем: в нём может
+        быть что угодно — только пауза."""
+        from jarvis.commands.apps import KNOWN_BY_KEY
+
+        platform = self.ctx.platform
+        info = await self._platform(platform.now_playing)
+        candidates: list[tuple[str, str]] = []  # (чем назвать платформе, название для людей)
+        if info is not None and info.app:
+            found = self.service.apps.resolve(info.app)
+            if found is not None and found.key and KNOWN_BY_KEY[found.key].kind == "browser":
+                if info.status == "playing":
+                    await self._platform(platform.media_key, "play_pause")
+                st.info(f"Музыка в «{found.name}» на паузе — браузер не закрываю")
+                st.data["media"] = "paused"
+                return
+            candidates.append((found.target, found.name) if found is not None else (info.app, info.app))
+        for key in MUSIC_APPS:
+            known = KNOWN_BY_KEY[key]
+            if known.exe and all(known.exe != target for target, _ in candidates):
+                candidates.append((known.exe, known.name))
+        for target, name in candidates:
+            if not await self._platform(platform.is_running, target):
+                continue
+            if await self._platform(platform.close_app, target):
+                st.info(f"Закрыто: {name}")
+                st.data["closed"] = name
+                return
+        if info is not None and info.status == "playing":  # плеер не узнали — хотя бы остановить
+            await self._platform(platform.media_key, "stop")
+            st.info("Музыка остановлена")
+            st.data["media"] = "paused"
+            return
+        raise UserFacingError("Музыкальная программа не запущена")
 
     # --- окна ---------------------------------------------------------------------------------------
     async def _minimize_all(self, value: str, st: RunState) -> None:
@@ -968,7 +1024,7 @@ class Executor:
         if value and city:
             spoken = f"{city}: {spoken[0].lower()}{spoken[1:]}"
         st.info(message, spoken)
-        st.data["weather"] = {"city": city, "temp": temp, "condition": condition}
+        st.data["weather"] = {"city": city, "temp": temp, "condition": condition, "feels": feels}
 
     async def _info_volume(self, value: str, st: RunState) -> None:
         platform = self.ctx.platform
@@ -1003,6 +1059,8 @@ class Executor:
         )
 
     async def _info_system(self, value: str, st: RunState) -> None:
+        """Загрузка компьютера; value «full» («как дела», «статус систем») — ещё диск, батарея и температура
+        видеокарты, если известна (температуру процессора Windows без драйвера не отдаёт — не выдумываем)."""
         s = await self._platform(self.ctx.platform.system_stats)
         cpu, ram = round(s.cpu), round(s.ram)
         message = f"Процессор {cpu}%, память {ram}%"
@@ -1015,7 +1073,32 @@ class Executor:
             f"Процессор загружен на {cpu} {numbers.plural(cpu, numbers.PERCENT)}, "
             f"память на {ram} {numbers.plural(ram, numbers.PERCENT)}"
         )
+        free = _first_number(s.extra, "disk_free_gb")
+        temp = _first_number(s.extra, "gpu_temp_c")
+        battery = round(s.battery) if s.battery is not None else None
+        if value.casefold() == "full":
+            if free is not None:
+                gb = round(free)
+                message += f", на диске свободно {gb} ГБ"
+                spoken += f", на системном диске свободно {gb} {numbers.plural(gb, GIGABYTES)}"
+            if battery is not None:
+                message += f", заряд {battery}%" + (" (заряжается)" if s.charging else "")
+                spoken += f", заряд батареи {battery} {numbers.plural(battery, numbers.PERCENT)}"
+            if temp is not None:
+                t = round(temp)
+                message += f", видеокарта {t}°C"
+                spoken += f", температура видеокарты {t} {numbers.plural(t, numbers.DEGREES)}"
         st.info(message, spoken)
+        st.data["system"] = {
+            "cpu": cpu,
+            "ram": ram,
+            "disk": round(s.disk),
+            "disk_free_gb": round(free, 1) if free is not None else None,
+            "battery": battery,
+            "charging": s.charging,
+            "gpu": round(s.gpu) if s.gpu is not None else None,
+            "gpu_temp": round(temp) if temp is not None else None,
+        }
 
     # --- джарвис ------------------------------------------------------------------------------------
     async def _open_desk(self, value: str, st: RunState) -> None:
@@ -1137,7 +1220,7 @@ class Executor:
         st.info(
             f"Напомню в {when}: {text}", f"Напомню через {numbers.duration_text(seconds, accusative=True)}"
         )
-        st.data.update({"at": at, "text": text})
+        st.data.update({"at": at, "text": text, "seconds": seconds})
 
     async def _briefing(self, value: str, st: RunState) -> None:
         # текст собирает jarvis.scenarios.briefing (погода, календарь, задачи…); голосом — через say итога
@@ -1145,6 +1228,19 @@ class Executor:
 
         text, spoken = await build(self.ctx, value, st.slots)
         st.info(text, spoken)
+
+
+GIGABYTES = ("гигабайт", "гигабайта", "гигабайт")
+
+
+def _is_game(key: str, target: str) -> bool:
+    """Запускается игра (не лаунчер): известная игра или ссылка запуска игры лаунчером."""
+    from jarvis.commands.apps import KNOWN_BY_KEY
+
+    known = KNOWN_BY_KEY.get(key) if key else None
+    if known is not None and known.kind == "game" and key not in GAME_LAUNCHERS:
+        return True
+    return target.casefold().startswith(GAME_LINKS)
 
 
 def _int(value: str, what: str) -> int:

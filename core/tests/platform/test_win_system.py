@@ -180,3 +180,63 @@ def test_known_folder_without_windows() -> None:
         pytest.skip("на Windows папка находится")
     assert s.known_folder("downloads") is None
     assert s.known_folder("неизвестная") is None
+
+
+# --- температура видеокарты и кто пишет микрофон ----------------------------------------------------------
+
+
+def test_parse_gpu_temps() -> None:
+    assert s.parse_gpu_temps("54\n61\n") == [54.0, 61.0]
+    assert s.parse_gpu_temps("[N/A]\n 47 \n\n") == [47.0]
+    assert s.parse_gpu_temps("0\n500\nошибка") == []  # невозможное — не температура
+    assert s.parse_gpu_temps("") == []
+
+
+def test_gpu_temp_cached_and_retried() -> None:
+    now = [1000.0]
+    runs: list[str] = []
+    out = ["54\n61"]
+
+    def run(exe: str) -> str:
+        runs.append(exe)
+        return out[0]
+
+    temp = s.GpuTemp(find=lambda: "nvidia-smi", run=run, clock=lambda: now[0], background=False)
+    assert temp.value() == 61.0 and len(runs) == 1  # самая горячая карта
+    now[0] += 10
+    assert temp.value() == 61.0 and len(runs) == 1  # не чаще раза в 30 с
+    now[0] += s.GPU_TEMP_EVERY_S
+    out[0] = "[N/A]"
+    assert temp.value() == 61.0 and len(runs) == 2  # замер не удался — ещё помним прежний
+    now[0] += s.GPU_TEMP_STALE_S
+    assert temp.value() is None  # устарел — не показываем
+    assert len(runs) == 2  # после неудачи — пауза GPU_TEMP_RETRY_S
+
+
+def test_gpu_temp_without_nvidia() -> None:
+    assert s.GpuTemp(find=lambda: None, run=lambda exe: "50", background=False).value() is None
+
+    def broken(exe: str) -> str:
+        raise subprocess.TimeoutExpired(exe, 4)
+
+    assert s.GpuTemp(find=lambda: "nvidia-smi", run=broken, background=False).value() is None
+
+
+def test_mic_users_from_consent_store() -> None:
+    start, stop = 133_000_000_000_000_000, 133_000_000_100_000_000
+    entries = [
+        ("C:#Program Files#Zoom#bin#Zoom.exe", start, 0),  # пишет сейчас
+        ("C:#Users#me#AppData#Local#Discord#app-1.0#Discord.exe", start, stop),  # уже закончил
+        ("MicrosoftTeams_8wekyb3d8bbwe", start, 0),  # программа из Магазина
+        ("C:#Program Files#Jarvis#resources#core#python.exe", start, 0),  # это мы
+        ("C:#Python312#python.exe", start, 0),  # и это мы (sys.executable)
+        ("C:#Tools#never.exe", 0, 0),  # не пользовалась
+    ]
+    assert s.mic_users_from(entries, own=[r"C:\Python312\python.exe"]) == ["Zoom.exe", "MicrosoftTeams"]
+    assert s.mic_users_from([]) == []
+
+
+def test_microphone_users_without_windows() -> None:
+    if sys.platform == "win32":
+        pytest.skip("на Windows реестр есть")
+    assert s.microphone_users() == []

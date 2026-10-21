@@ -1,7 +1,9 @@
 # Установщик Windows: Electron + встроенный Python с ядром (resources/core, готовит scripts/build-core-win.sh).
+# appId не менять: по нему Windows узнаёт установленный Jarvis — обновление ставится поверх, ярлыки и
+# уведомления те же (новый appId — вторая копия рядом со старой)
 appId: com.breezeareasay.jarvis
 productName: Jarvis
-copyright: "© 2026 BreezeAreaSay"
+copyright: "© 2026 stonebridgeway"
 directories:
   output: release
   buildResources: build
@@ -57,6 +59,6 @@ nsis:
 # файлы релиза кладёт scripts/publish-release.ps1
 publish:
   provider: github
-  owner: BreezeAreaSay
+  owner: stonebridgeway
   repo: Jarvis-Agent
   releaseType: release

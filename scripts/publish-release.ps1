@@ -8,7 +8,7 @@
     и latest.yml — и создаёт релиз vX.Y.Z. Установленный Jarvis находит его при запуске и каждые 6 часов
     («Настройки → Система → Обновления → Проверить сейчас» — сразу), качает и ставит поверх.
     Нужен GitHub CLI: winget install GitHub.cli, затем gh auth login.
-    Без него: https://github.com/BreezeAreaSay/Jarvis-Agent/releases/new — тег vX.Y.Z и те же три файла.
+    Без него: https://github.com/stonebridgeway/Jarvis-Agent/releases/new — тег vX.Y.Z и те же три файла.
 
 .EXAMPLE
     pwsh -File scripts\publish-release.ps1 -Notes "Исправлен вылет ядра; обновления из приложения"
@@ -17,7 +17,7 @@
 param(
     [string]$Notes = '',
     [string]$NotesFile = '',
-    [string]$Repo = 'BreezeAreaSay/Jarvis-Agent',
+    [string]$Repo = 'stonebridgeway/Jarvis-Agent',
     [switch]$Replace,
     [switch]$Draft
 )

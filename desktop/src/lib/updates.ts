@@ -32,7 +32,7 @@ export function bindUpdates() {
   bridge.on("update:state", (state) => useUpdates.setState(state as UpdateState, true));
 }
 
-export const RELEASES_URL = "https://github.com/BreezeAreaSay/Jarvis-Agent/releases";
+export const RELEASES_URL = "https://github.com/stonebridgeway/Jarvis-Agent/releases";
 
 export const updates = {
   check: () => bridge.send("update:check"),

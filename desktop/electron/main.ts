@@ -24,6 +24,7 @@ const DEV_URL = process.env.JARVIS_DEV_URL ?? (app.isPackaged ? "" : "http://127
 const START_HIDDEN = process.argv.includes("--hidden");
 const VERSION = app.getVersion();
 
+// как appId в electron-builder.yml — не менять: по нему Windows связывает уведомления и ярлыки с Jarvis
 app.setAppUserModelId("com.breezeareasay.jarvis");
 if (!app.requestSingleInstanceLock()) {
   app.quit();

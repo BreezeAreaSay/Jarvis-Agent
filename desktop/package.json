@@ -3,7 +3,7 @@
   "productName": "Jarvis",
   "version": "3.0.0",
   "description": "Jarvis — голосовой ассистент для Windows",
-  "author": "BreezeAreaSay",
+  "author": "stonebridgeway",
   "license": "UNLICENSED",
   "private": true,
   "main": "dist-electron/main.cjs",

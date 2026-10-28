@@ -271,3 +271,20 @@ async def test_create_needs_configured_ai(ctx: AppContext) -> None:
 
     with pytest.raises(UserFacingError):
         service(ctx).create("Что-нибудь")
+
+
+async def test_phrase_in_background_starts_task_from_chat(bg: Bg) -> None:
+    ctx, script, events = bg
+    script.add(calls(("finish", {"status": "done", "summary": "Собрал"})))
+    result = await ctx.ai.ask("в фоне: собери новости про ИИ за неделю", source="voice")
+    assert "работаю в фоне" in result.text and result.spoken.startswith("Принял")
+    task = next(iter(service(ctx)._tasks.values()))
+    assert task.brief == "собери новости про ИИ за неделю" and task.source == "voice"
+    messages = [m.data["message"] for m in events.items if m.type == "chat.message"]
+    assert messages[0]["role"] == "user" and messages[1]["role"] == "assistant"
+    await until(lambda: task.status == "done")
+
+
+def test_chat_has_background_tool(ctx: AppContext) -> None:
+    names = {t.name for t in ctx.ai.tools.builtin.values()}  # type: ignore[attr-defined]
+    assert "start_background_task" in names

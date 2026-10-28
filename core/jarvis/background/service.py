@@ -67,7 +67,6 @@ class Background(BaseService):
         self._started = False
         self._shutting = False
         self._unsubscribe: list[Callable[[], None]] = []
-        self.browser: Any = None  # браузер агента (jarvis.ai.browser.agent_browser), если подключён
 
     # --- жизнь сервиса --------------------------------------------------------------------------------
     async def start(self) -> None:
@@ -213,11 +212,13 @@ class Background(BaseService):
 
     # --- для захода задачи ---------------------------------------------------------------------------------
     def browser_tools(self) -> Any:
-        """Действия задачи в браузере агента (None — браузера нет)."""
-        browser = self.browser
-        if browser is None or not getattr(browser, "available", False):
+        """Браузер агента для одного захода (TaskBrowser: действия browser_*); нет Chrome или Edge — None."""
+        browser = getattr(self.ctx, "agent_browser", None)
+        if browser is None or not browser.available:
             return None
-        return browser.task_tools()
+        from jarvis.ai.browser.task_tools import TaskBrowser
+
+        return TaskBrowser(browser)
 
     async def ask(
         self,

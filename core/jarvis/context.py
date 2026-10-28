@@ -19,6 +19,7 @@ from jarvis.platform import Platform
 from jarvis.settings import Secrets, SettingsStore
 
 if TYPE_CHECKING:
+    from jarvis.ai.browser.agent_browser import AgentBrowser
     from jarvis.ai.browser.service import Browser
     from jarvis.ai.images import Images
     from jarvis.background.service import Background
@@ -90,6 +91,7 @@ class AppContext:
         self.images: Images
         self.agent: AgentService
         self.browser: Browser
+        self.agent_browser: AgentBrowser  # браузер фоновых задач (без окна)
         self.background: Background  # фоновые задачи
         self.notes: NotesService
         self.mcp: McpService

@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from jarvis.ai.agent import AgentLimit, Outcome
 from jarvis.ai.format import now_text, one_line
 from jarvis.ai.llm import LlmClient, LlmError, ToolCall, Usage
+from jarvis.ai.vision import sees_images
 from jarvis.ai.web import WebError
 from jarvis.background import tools as task_tools
 from jarvis.background.model import Task
@@ -41,7 +42,9 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 TEMPERATURE = 0.2  # цикл API: действиям нужна аккуратность, а не разнообразие
-BATCH_GAP_S = 0.5  # действие пришло так быстро после неудачного — оно из того же хода модели
+# действие пришло так быстро после неудачного — оно из того же хода модели (программы подписки зовут действия
+# хода по одному; свой цикл API знает ходы точно и сбрасывает отметку на каждом)
+BATCH_GAP_S = 0.5
 REPEAT_HINT = 2  # одно и то же действие без пользы столько раз подряд — подсказка сменить путь
 REPEAT_STOP = 5  # …а столько — заход останавливается
 LIMIT_GRACE = 3  # после лимита ещё столько вызовов — модель должна успеть вызвать finish
@@ -173,6 +176,11 @@ class Session:
     @property
     def vault(self) -> Any:
         return self.service.vault
+
+    @property
+    def stopping(self) -> bool:
+        """Для механики браузера: дальше не ждать (итог принят)."""
+        return self.closing
 
     def worked(self) -> float:
         return max(0.0, time.monotonic() - self.started - self.waited)
@@ -395,7 +403,8 @@ async def run_session(service: "Background", task: Task) -> Session:
     toolset.add(*task_tools.base_tools(web_search=not native_search, web_read=not native_read))
     browser = service.browser_tools()
     if browser is not None:
-        toolset.add(*browser.tools())
+        ai = ctx.settings.value.ai
+        toolset.add(*browser.tools(vision=sees_images(ai.provider, ai.model, ai.vision)))
     toolset.add(*task_tools.mcp_tools(ctx, set(toolset.tools) | {"finish"}))
     session.tools = toolset.tools
     search = SEARCH_NATIVE if native_search and native_read else SEARCH_CODEX if native_search else SEARCH_OWN
@@ -490,6 +499,7 @@ async def _api_loop(
             }
         )
         extras: list[dict[str, Any]] = []
+        session.failed_at = 0.0  # новый ход модели: она уже видела, что прошлое не вышло
         for call in response.tool_calls:
             if call.name == "finish" and not session.closing:
                 try:

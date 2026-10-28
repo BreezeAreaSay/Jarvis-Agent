@@ -66,6 +66,12 @@ AGENT_PHRASE = re.compile(
     rf"^\s*(?:агент|agent)\s*(?:[,:—–-]\s*|\s+(?=(?:сам\s+)?(?:{_AGENT_VERBS})\b))(?P<task>.+)$",
     re.I | re.S,
 )
+# «в фоне: собери…», «фоном найди…», «поставь задачу: …» — сразу фоновая задача (jarvis.background)
+BACKGROUND_PHRASE = re.compile(
+    r"^\s*(?:в\s+фоне|фоном|фоново|в\s+фоновом\s+режиме|фонов(?:ая|ую)\s+задач[аую]|"
+    r"поставь\s+(?:фоновую\s+)?задачу)\s*[:,—–-]?\s*(?P<task>.+)$",
+    re.I | re.S,
+)
 _IMAGE_URL = re.compile(r"^data:image/(?:png|jpe?g|webp|gif);base64,", re.I)
 
 
@@ -356,6 +362,13 @@ class Ai(BaseService):
         images: list[str] | None = None,
         agent_task: str = "",
     ) -> AskResult:
+        background = BACKGROUND_PHRASE.match(text or "") if not images and not agent_task else None
+        if (
+            background is not None
+            and background["task"].strip(" .,:")
+            and getattr(self.ctx, "background", None)
+        ):
+            return self._background(text, background["task"].strip(), chat_id, source, mode)
         images, note = await self._screen_question(text, images, chat_id, source, mode, agent_task)
         browser = await self._browser_front(agent_task)
         try:
@@ -372,6 +385,35 @@ class Ai(BaseService):
             return AskResult(chat_id or "", "", error=str(e))
         turn.note = note
         return await self._spawn(turn)
+
+    def _background(
+        self, text: str, brief: str, chat_id: str | None, source: Source, mode: str | None
+    ) -> AskResult:
+        """«В фоне: …» — фоновая задача без ответа модели: в чат — просьба и короткое «Принял»."""
+        chat = self._chat_for(chat_id, source, mode)
+        row = self.chats.add_message(chat["id"], "user", text)
+        self.ctx.bus.publish("chat.message", {"chat_id": chat["id"], "message": ui_message(row)})
+        kind = {"voice": "voice", "telegram": "remote", "remote": "remote"}.get(str(source), "text")
+        meta: dict[str, Any] = {"turn": row["id"]}
+        try:
+            task = self.ctx.background.create(brief, source=kind)
+        except UserFacingError as e:
+            reply, spoken, meta["error"] = str(e), "", str(e)
+        else:
+            meta["background"] = task.id
+            address = self.ctx.settings.value.profile.address.strip()
+            reply = (
+                f"Принял — работаю в фоне: «{task.title}». Ход — на странице «Фоновые задачи», итог запишу "
+                "в заметки."
+            )
+            spoken = f"Принял{', ' + address if address else ''}. Работаю в фоне."
+        answer = self.chats.add_message(chat["id"], "assistant", reply, meta=meta)
+        self.ctx.bus.publish("chat.message", {"chat_id": chat["id"], "message": ui_message(answer)})
+        self.ctx.bus.publish(
+            "chat.done",
+            {"chat_id": chat["id"], "message_id": answer["id"], "text": reply, "sources": [], "actions": []},
+        )
+        return AskResult(chat["id"], reply, spoken=spoken, error=meta.get("error", ""))
 
     async def _screen_question(
         self,

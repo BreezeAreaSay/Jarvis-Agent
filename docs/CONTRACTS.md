@@ -1019,6 +1019,21 @@ events, reminders, clipboard, summaries, screenshots, file_index, voice_cache, u
   других с точкой).
 - **Уведомления** — `settings.background.notify_question` / `notify_done`: список из `toast` (тост с `task_id`),
   `voice` (вслух, кроме тихого режима), `telegram` (сообщение владельцу бота); пусто — тихо.
+- **Запуск из чата и голосом**: «в фоне: …», «фоном …», «поставь задачу: …», «фоновая задача: …» (`ai.ask`, без
+  картинок) — сразу задача, в чат — просьба и «Принял — работаю в фоне: «…»» (`meta.background` — id задачи,
+  голосом — «Принял, сэр. Работаю в фоне.»); модель в режиме «Всё вместе» сама ставит большое дело в фон
+  инструментом `start_background_task {task, result?}` (риск `act`).
+- **Браузер агента** (`jarvis/ai/browser/agent_browser.py`, `ctx.agent_browser`): Chrome или Edge без окна
+  (`--headless=new`, подпись — как у обычного Chrome, флаг автоматизации снят), профиль `<данные>/agent-browser`,
+  своя вкладка у каждой задачи (`task_tabs`), скачивания запрещены. Запускается при первом сайте задачи или
+  открытии панели, закрывается вместе с Jarvis и через 10 минут без задач и зрителей. Действия задачи
+  (`jarvis/ai/browser/task_tools.py`): `browser_open, browser_click, browser_type, browser_scroll, browser_press,
+  browser_wait, browser_read` (и `browser_screenshot` — модели с картинками); ответ каждого — снимок страницы
+  (элементы `b1, b2…`). Разрешение (вопрос задачи): деньги, отправка и публикация — всегда; удаление — кроме
+  «Спрашивать реже»; остальное рискованное — при «Спрашивать чаще» (тогда и ввод текста). Пароли, коды и данные
+  карт задача не вводит (ответ модели — попросить человека), файлы не скачивает и не загружает. Вкладкой
+  управляет человек (`held`) — действие ждёт и не выполняется: «Пока человек управлял страницей, ничего не
+  сделано…».
 
 Настройки `background`: `vault`, `folder`, `read_vault`, `parallel` (1–4, 2), `autonomy` (`careful | normal | bold`),
 `max_steps` (10–1000, 150), `max_hours` (0.25–48, 4), `notify_question`, `notify_done` (`["toast"]`).
@@ -1034,6 +1049,19 @@ events, reminders, clipboard, summaries, screenshots, file_index, voice_cache, u
 | `POST /api/background/{id}/cancel` | — | `{task: TaskCard}` |
 | `POST /api/background/{id}/retry` | — | `{task: TaskCard}` — снова в очередь, с тем же планом и ходом работы |
 | `DELETE /api/background/{id}` | — | `{ok}` — из списка Jarvis (заметки в хранилище остаются) |
+| `GET /api/agent-browser` | — | `{status: closed\|starting\|connected\|error, app, found, version, error, tasks: {задача: вкладка}, held: [вкладка], profile}` |
+| `POST /api/agent-browser/close` | — | то же — браузер агента закрыт |
+
+WebSocket `/ws/agent-browser?token=&task=` — панель «Браузер агента»: смотрит вкладку задачи `task` (у задачи её
+ещё нет — `target: ""`, браузер не запускается) или, без `task`, свою вкладку `manual` (войти на сайты; закрывается
+вместе с панелью). От ядра: `{type: "state", data: {target, task, url, title, held, status, error}}`, `{type:
+"frame", data: {data: JPEG base64, metadata: {deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX,
+scrollOffsetY, timestamp}}}` (только последние кадры), `{type: "error", data: {text}}`. От панели: `{type: "watch",
+task?}`, `{type: "take"}` / `{type: "release"}`, ввод в страницу (координаты — CSS-точки, как в `metadata`):
+`{type: "mouse", event: mousePressed|mouseReleased|mouseMoved, x, y, button, clickCount, modifiers}`, `{type:
+"wheel", x, y, dx, dy}`, `{type: "key", event: keyDown|keyUp|rawKeyDown, key, code, keyCode, text, modifiers}`,
+`{type: "text", text}`, `{type: "navigate", url}`, `{type: "history", back: bool}`, `{type: "reload"}`. Панель
+закрылась — управление само возвращается агенту.
 
 `TaskCard = {id, title, brief, status: queued|running|waiting|done|partial|failed|cancelled, source, created,
 updated, finished, plan_done, plan_total, steps, progress: [{ts, text, kind}] (последние 3), question: Question|null,
@@ -1046,3 +1074,4 @@ answer, answered}`.
 | `background.question` | `{task_id, question: Question}` |
 | `background.done` | `{task_id, status, summary, error, note, result}` |
 | `background.deleted` | `{id}` |
+| `agent_browser.state` | как `GET /api/agent-browser` |

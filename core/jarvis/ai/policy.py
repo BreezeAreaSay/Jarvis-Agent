@@ -39,6 +39,7 @@ BUILTIN_RISK: dict[str, Risk] = {
     "type_text": "act",
     "press_keys": "act",
     "run_agent": "act",
+    "start_background_task": "act",
 }
 
 # слова в названии инструмента MCP (send_message, deleteChat, get-history…): глагол риска где угодно в имени

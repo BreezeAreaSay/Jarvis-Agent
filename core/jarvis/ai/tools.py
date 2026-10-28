@@ -525,6 +525,24 @@ async def _run_agent(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
     )
 
 
+async def _start_background_task(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
+    brief = _str(args, "task")
+    if not brief:
+        return ToolOutput.fail("не описана задача")
+    service = getattr(env.ctx, "background", None)
+    if service is None:
+        return ToolOutput.fail("фоновые задачи недоступны")
+    source = {"voice": "voice", "telegram": "remote", "remote": "remote"}.get(str(env.source), "text")
+    task = service.create(brief, deliverable=_str(args, "result"), source=source)
+    return ToolOutput(
+        f"Фоновая задача поставлена: «{task.title}». Она идёт сама, в фоне, итог запишется в заметки "
+        "(хранилище Obsidian), ход виден на странице «Фоновые задачи». Коротко скажи пользователю, что "
+        "задача взята в работу; сам её не выполняй.",
+        title=f"Фоновая задача: {one_line(task.title, 60)}",
+        detail="Поставлена",
+    )
+
+
 # --- обработчики: интернет ------------------------------------------------------------------------------
 
 
@@ -1081,6 +1099,24 @@ def builtin_tools() -> list[Tool]:
             _run_agent,
             lambda a: f"Агент: {one_line(_str(a, 'task'), 60)}",
             status_text="Запускаю агента…",
+            action=True,
+        ),
+        Tool(
+            "start_background_task",
+            "Поставить большую задачу в фон: агент сам, без экрана пользователя, ищет и читает сайты, "
+            "работает в своём браузере и записывает результат в заметки (Obsidian) — исследование, "
+            "сравнение, обзор, сбор данных, подборка, мониторинг. Для того, что займёт больше пары минут и "
+            "не требует окон программ на экране; ответ «прямо сейчас» в чате — не сюда.",
+            _obj(
+                {
+                    "task": _s("Задача целиком, со всеми подробностями: что найти, сравнить, собрать"),
+                    "result": _s("Какой нужен результат: отчёт, таблица, список… (необязательно)"),
+                },
+                ["task"],
+            ),
+            _start_background_task,
+            lambda a: f"Фоновая задача: {one_line(_str(a, 'task'), 60)}",
+            status_text="Ставлю фоновую задачу…",
             action=True,
         ),
         Tool(

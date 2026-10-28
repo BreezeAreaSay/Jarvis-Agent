@@ -447,6 +447,12 @@
   outline: none;
 }
 
+/* картинка страницы: рамка по её пропорциям, без пустой полосы под ней */
+.abv-screen.framed {
+  flex: none;
+  min-height: 0;
+}
+
 .abv-screen.live {
   border-color: var(--line-accent);
   box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.25);

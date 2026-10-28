@@ -197,7 +197,8 @@ export function AgentBrowserView({ task, onClose }: { task?: string; onClose?: (
         )}
       </div>
       <div
-        className={cx("abv-screen", interactive && "live")}
+        className={cx("abv-screen", interactive && "live", frame && !note && "framed")}
+        style={frame && !note ? { aspectRatio: `${frame.width} / ${frame.height}` } : undefined}
         tabIndex={0}
         onKeyDown={key("keyDown")}
         onKeyUp={key("keyUp")}

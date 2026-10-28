@@ -26,6 +26,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from jarvis import paths
 from jarvis.ai.browser import launch
@@ -42,6 +43,8 @@ HEADLESS = (
     "--disable-blink-features=AutomationControlled",
     "--disable-features=Translate,MediaRouter",
     "--mute-audio",
+    "--lang=ru-RU",  # сайты — по-русски (Accept-Language), как у пользователей Jarvis
+    "--accept-lang=ru-RU,ru,en-US,en",
     "--no-default-browser-check",
 )
 IDLE_S = 10 * 60.0  # без задач и зрителей столько — закрыть браузер (память)
@@ -50,6 +53,25 @@ FRAME_MAX = (1600, 1100)
 HOLD_POLL_S = 0.25
 
 FrameSink = Callable[[dict[str, Any]], None]
+LOGIN_SITES = (
+    ("Google", "https://accounts.google.com/"),
+    ("Яндекс", "https://passport.yandex.ru/"),
+    ("Mail.ru", "https://account.mail.ru/"),
+    ("ВКонтакте", "https://vk.com/"),
+    ("Госуслуги", "https://www.gosuslugi.ru/"),
+    ("Ozon", "https://www.ozon.ru/"),
+    ("Wildberries", "https://www.wildberries.ru/"),
+    ("Авито", "https://www.avito.ru/"),
+)
+START_PAGE = "data:text/html;charset=utf-8," + quote(
+    "<!doctype html><title>Браузер агента</title><body style='font:16px system-ui;max-width:720px;"
+    "margin:48px auto;color:#222;line-height:1.5'><h1>Браузер агента Jarvis</h1><p>В нём фоновые задачи "
+    "работают с сайтами. Профиль — отдельный: ваш обычный браузер Jarvis не трогает.</p><p>Войдите здесь "
+    "в сайты, где агент должен работать за вас, — один раз. Пароли Jarvis не видит: они остаются "
+    "в браузере.</p><p>"
+    + " · ".join(f"<a href='{url}'>{name}</a>" for name, url in LOGIN_SITES)
+    + "</p><p style='color:#666'>Другой сайт — адрес в строке над страницей.</p></body>"
+)
 
 
 def profile_dir() -> Path:
@@ -227,8 +249,9 @@ class AgentBrowser(Browser):
         return False
 
     # --- вкладки задач --------------------------------------------------------------------------------------
-    async def task_tab(self, task_id: str) -> str:
-        """Вкладка задачи (нет — новая пустая)."""
+    async def task_tab(self, task_id: str, *, fresh: bool = False) -> str:
+        """Вкладка задачи (нет — пустая свободная или новая). fresh — только новая: вкладку панели могут
+        закрывать, пока её же взяла другая панель."""
         await self.connect(launch=True)
         self.touch()
         tabs = {str(t["targetId"]): t for t in await self.tabs()}
@@ -236,18 +259,32 @@ class AgentBrowser(Browser):
         if target in tabs:
             return target
         taken = set(self.task_tabs.values())
-        blank = next(
-            (
-                t
-                for t, info in tabs.items()
-                if t not in taken and str(info.get("url") or "").startswith(BLANK_URLS)
-            ),
-            "",
+        blank = (
+            ""
+            if fresh
+            else next(
+                (
+                    t
+                    for t, info in tabs.items()
+                    if t not in taken and str(info.get("url") or "about:blank").startswith(BLANK_URLS)
+                ),
+                "",
+            )
         )
         target = blank or await self.open_tab("about:blank")
         self.task_tabs[task_id] = target
         self.ctx.bus.publish("agent_browser.state", self.state())
         return target
+
+    async def start_page(self, target: str) -> None:
+        """Пустую вкладку панели — на страницу «войдите в сайты» (со ссылками на входы популярных сайтов)."""
+        tab = next((t for t in await self.tabs() if t["targetId"] == target), None)
+        url = str(tab.get("url") or "") if tab is not None else "-"
+        if url and not url.startswith(BLANK_URLS):  # новая вкладка — с пустым адресом
+            return
+        with contextlib.suppress(CdpError, TimeoutError):
+            session = await self.session(target)
+            await self._client().send("Page.navigate", {"url": START_PAGE}, session=session, timeout=10.0)
 
     def drop_task(self, task_id: str) -> str:
         """Забыть вкладку задачи (сразу, без ожидания браузера); вернёт её — закрыть её можно close_target."""
@@ -290,33 +327,45 @@ class AgentBrowser(Browser):
             await asyncio.sleep(HOLD_POLL_S)
         return waited
 
-    async def watch(self, target: str, sink: FrameSink) -> Callable[[], Any]:
-        """Живая картинка вкладки: кадры JPEG (base64) с размером страницы — в sink; вернёт «остановить»."""
+    async def watch(
+        self, target: str, sink: FrameSink, changed: Callable[[], None] | None = None
+    ) -> Callable[[], Any]:
+        """Живая картинка вкладки: кадры JPEG (base64) с размером страницы — в sink; вернёт «остановить».
+
+        Кадры идут, только когда страница перерисовывается, а переход на другую страницу (новый процесс
+        страницы) показ обрывает: после каждого перехода показ включается заново, и первым кадром сразу
+        идёт снимок страницы — панель не ждёт перерисовки. changed — страница сменилась (адрес в панели)."""
         client = await self.connect(launch=True)
         assert client is not None
         session = await self.session(target)
         self.viewers += 1
         self.touch()
+        restarts: set[asyncio.Future[None]] = set()
 
         def on_event(method: str, params: dict[str, Any], from_session: str) -> None:
-            if method != "Page.screencastFrame" or from_session != session:
+            if from_session != session:
                 return
-            sink({"data": params.get("data") or "", "metadata": params.get("metadata") or {}})
-            ack = asyncio.ensure_future(self._ack(session, params.get("sessionId")))
-            self._acks.add(ack)
-            ack.add_done_callback(self._acks.discard)
+            if method == "Page.screencastFrame":
+                sink({"data": params.get("data") or "", "metadata": params.get("metadata") or {}})
+                ack = asyncio.ensure_future(self._ack(session, params.get("sessionId")))
+                self._acks.add(ack)
+                ack.add_done_callback(self._acks.discard)
+            elif method in ("Page.frameNavigated", "Page.loadEventFired"):
+                frame = params.get("frame") or {}
+                if method == "Page.loadEventFired" or not frame.get("parentId"):
+                    restart = asyncio.ensure_future(self._screencast(session, sink, delay=0.3))
+                    restarts.add(restart)
+                    restart.add_done_callback(restarts.discard)
+                    if changed is not None:
+                        changed()
 
         off = client.on(on_event)
-        width, height = FRAME_MAX
-        with contextlib.suppress(CdpError, TimeoutError):
-            await client.send(
-                "Page.startScreencast",
-                {"format": "jpeg", "quality": FRAME_QUALITY, "maxWidth": width, "maxHeight": height},
-                session=session,
-            )
+        await self._screencast(session, sink)
 
         async def stop() -> None:
             off()
+            for restart in list(restarts):
+                restart.cancel()
             self.viewers = max(0, self.viewers - 1)
             self.touch()
             if not client.closed:
@@ -324,6 +373,39 @@ class AgentBrowser(Browser):
                     await client.send("Page.stopScreencast", session=session, timeout=3.0)
 
         return stop
+
+    async def _screencast(self, session: str, sink: FrameSink, delay: float = 0.0) -> None:
+        """(Пере)включить показ кадров и сразу отдать снимок страницы первым кадром."""
+        if delay:
+            await asyncio.sleep(delay)
+        client = self.client
+        if client is None or client.closed:
+            return
+        width, height = FRAME_MAX
+        with contextlib.suppress(CdpError, TimeoutError):
+            await client.send("Page.stopScreencast", session=session, timeout=3.0)
+        with contextlib.suppress(CdpError, TimeoutError):
+            await client.send(
+                "Page.startScreencast",
+                {"format": "jpeg", "quality": FRAME_QUALITY, "maxWidth": width, "maxHeight": height},
+                session=session,
+                timeout=5.0,
+            )
+        with contextlib.suppress(CdpError, TimeoutError):
+            metrics = await client.send("Page.getLayoutMetrics", session=session, timeout=5.0)
+            view = metrics.get("cssVisualViewport") or metrics.get("cssLayoutViewport") or {}
+            shot = await client.send(
+                "Page.captureScreenshot",
+                {"format": "jpeg", "quality": FRAME_QUALITY},
+                session=session,
+                timeout=10.0,
+            )
+            if shot.get("data"):
+                meta = {
+                    "deviceWidth": float(view.get("clientWidth") or 1280),
+                    "deviceHeight": float(view.get("clientHeight") or 800),
+                }
+                sink({"data": shot["data"], "metadata": meta})
 
     async def _ack(self, session: str, frame_id: Any) -> None:
         with contextlib.suppress(Exception):

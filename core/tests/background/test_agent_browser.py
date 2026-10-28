@@ -179,10 +179,10 @@ def test_panel_streams_frames_and_takes_control(client: TestClient, tmp_path: Pa
         target = moved["data"]["target"]
     # панель закрылась — управление вернулось агенту, своя вкладка для входа закрыта (сервер доделывает сам)
     for _ in range(100):
-        if "manual" not in ctx.agent_browser.task_tabs:
+        if not ctx.agent_browser.task_tabs:
             break
         time.sleep(0.02)
-    assert target not in ctx.agent_browser.held and "manual" not in ctx.agent_browser.task_tabs
+    assert target not in ctx.agent_browser.held and not ctx.agent_browser.task_tabs
 
 
 def test_panel_for_task_without_tab_does_not_start_browser(client: TestClient) -> None:

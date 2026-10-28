@@ -61,6 +61,8 @@ class Viewer:
         self.frames: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=2)
         self.stop: Callable[[], Awaitable[Any]] | None = None
         self.taken = False
+        self.own = f"{MANUAL}:{id(self):x}"  # своя вкладка этой панели (панелей может быть открыто две)
+        self._states: set[asyncio.Future[None]] = set()  # «страница сменилась» — состояние панели заново
 
     async def send(self, kind: str, data: dict[str, Any]) -> None:
         await self.ws.send_text(json.dumps({"type": kind, "data": data}, ensure_ascii=False))
@@ -109,10 +111,22 @@ class Viewer:
                 return
         else:
             self.task = MANUAL
-            target = await browser.task_tab(MANUAL)
+            target = await browser.task_tab(self.own, fresh=True)
+            await browser.start_page(target)
         self.target = target
-        self.stop = await browser.watch(target, self.sink)
+        self.stop = await browser.watch(target, self.sink, self.changed)
         await self.state()
+
+    def changed(self) -> None:
+        """Страница сменилась сама (ссылка, действие агента) — адрес и заголовок в панели заново."""
+        work = asyncio.ensure_future(self._state_quietly())
+        self._states.add(work)
+        work.add_done_callback(self._states.discard)
+
+    async def _state_quietly(self) -> None:
+        await asyncio.sleep(0.2)
+        with contextlib.suppress(Exception):
+            await self.state()
 
     async def unwatch(self) -> None:
         if self.taken and self.target:
@@ -133,9 +147,6 @@ class Viewer:
             await self.state()
         elif kind in INPUT and self.target:
             await self.browser.human_input(self.target, message)
-            if kind in ("navigate", "history", "reload"):
-                await asyncio.sleep(0.3)
-                await self.state()
 
 
 @router.websocket("/ws/agent-browser")
@@ -175,7 +186,7 @@ async def agent_browser_ws(ws: WebSocket) -> None:
     finally:
         # сначала — то, что не ждёт браузера (обработчик могут оборвать на любом ожидании)
         sender.cancel()
-        own = browser.drop_task(MANUAL) if viewer.task == MANUAL else ""
+        own = browser.drop_task(viewer.own)
         await viewer.unwatch()
         with contextlib.suppress(Exception):
             await browser.close_target(own)

@@ -1053,8 +1053,10 @@ events, reminders, clipboard, summaries, screenshots, file_index, voice_cache, u
 | `POST /api/agent-browser/close` | — | то же — браузер агента закрыт |
 
 WebSocket `/ws/agent-browser?token=&task=` — панель «Браузер агента»: смотрит вкладку задачи `task` (у задачи её
-ещё нет — `target: ""`, браузер не запускается) или, без `task`, свою вкладку `manual` (войти на сайты; закрывается
-вместе с панелью). От ядра: `{type: "state", data: {target, task, url, title, held, status, error}}`, `{type:
+ещё нет — `target: ""`, браузер не запускается) или, без `task`, свою новую вкладку (`task: "manual"`, стартовая
+страница со ссылками на входы популярных сайтов — войти на сайты; закрывается вместе с панелью). Страница
+сменилась сама (ссылка, действие агента) — снова `state`; после каждого перехода показ кадров включается заново,
+первый кадр — сразу снимком страницы. От ядра: `{type: "state", data: {target, task, url, title, held, status, error}}`, `{type:
 "frame", data: {data: JPEG base64, metadata: {deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX,
 scrollOffsetY, timestamp}}}` (только последние кадры), `{type: "error", data: {text}}`. От панели: `{type: "watch",
 task?}`, `{type: "take"}` / `{type: "release"}`, ввод в страницу (координаты — CSS-точки, как в `metadata`):

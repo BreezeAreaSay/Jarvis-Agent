@@ -71,6 +71,7 @@ def test_template_instructions_are_not_sent(vault: Vault) -> None:
 def test_write_only_inside_own_folder(vault: Vault) -> None:
     path = vault.write("Исследования/Ноутбуки", "# Ноутбуки")
     assert path == "Jarvis/Исследования/Ноутбуки.md"
+    assert vault.write("jarvis/Исследования/Мыши.md", "x") == "Jarvis/Исследования/Мыши.md"
     assert (vault.root / path).read_text("utf-8") == "# Ноутбуки\n"
     for bad in ("../outside.md", "Jarvis/../../x.md", ".obsidian/app.json", "Jarvis/.git/x.md"):
         with pytest.raises(UserFacingError):

@@ -226,8 +226,9 @@ class Vault:
         if any(p == ".." or p.startswith(".") for p in parts):
             raise UserFacingError("Ошибка: путь выходит за хранилище или в служебную папку")
         if write:
-            if parts[0] != self.folder:
+            if parts[0].casefold() != self.folder.casefold():
                 parts = [self.folder, *parts]
+            parts[0] = self.folder
             parts = [*parts[:-1], safe_name(parts[-1], 120)]
             if not parts[-1].lower().endswith(NOTE_EXTS):
                 parts[-1] += ".md"

@@ -230,6 +230,8 @@ const SECTION_NAMES: Record<string, string> = {
   disabled_commands: "Выключенные команды",
 };
 
+const LICENSE_URL = "https://polyformproject.org/licenses/noncommercial/1.0.0";
+
 function AboutCard() {
   const version = useApp((s) => s.version);
   const platform = useApp((s) => s.platform);
@@ -239,7 +241,7 @@ function AboutCard() {
       <div className="about">
         <LogoMark size={52} />
         <div className="grow">
-          <div className="about-name">Jarvis 2.0</div>
+          <div className="about-name">Jarvis</div>
           <div className="faint small">Голосовой ассистент для Windows</div>
         </div>
         <div className="about-grid">
@@ -251,6 +253,10 @@ function AboutCard() {
           <span>{PLATFORMS[platform] ?? (platform || "—")}</span>
           <span className="faint">Работает</span>
           <span>{status.data ? fmtUptime(status.data.uptime_s) : "—"}</span>
+          <span className="faint">Лицензия</span>
+          <button type="button" className="link-btn" onClick={() => bridge.openExternal(LICENSE_URL)} title="Бесплатно для некоммерческого использования">
+            PolyForm Noncommercial 1.0.0
+          </button>
         </div>
       </div>
     </Card>

@@ -4,7 +4,7 @@
   "version": "3.0.0",
   "description": "Jarvis — голосовой ассистент для Windows",
   "author": "stonebridgeway",
-  "license": "UNLICENSED",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
   "main": "dist-electron/main.cjs",
   "type": "module",

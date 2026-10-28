@@ -329,7 +329,7 @@ async def test_codex_or_cli_run_continues_with_a_late_interjection(
             return {"steps": ["Открыть почту"]}
 
         async def run_agent(
-            self, agent: Any, run: Any, *, system: str, first: str, specs: Any, images: Any = None
+            self, agent: Any, run: Any, *, system: str, first: str, specs: Any, images: Any = None, **kw: Any
         ) -> str:
             self.firsts.append(first)
             self.images.append(list(images or []))

@@ -637,8 +637,12 @@ async def test_agent_step_limit_and_screenshot(
         assert shot["contentItems"][0]["text"].startswith("Снимок окна приложен")
         t.call("ui_snapshot", {})
         t.call("ui_snapshot", {})
+        # лимит: ещё три вызова — просьба закончить, потом — остановка, и Codex прерывается
+        for _ in range(3):
+            assert text_of(t.call("ui_snapshot", {})).startswith("Лимит шагов исчерпан")
+        assert "не уложился в 3 шагов" in text_of(t.call("ui_snapshot", {}))
         refused = t.call("ui_snapshot", {})
-        assert text_of(refused) == "Лимит шагов (3) исчерпан"
+        assert text_of(refused) == "Лимит шагов (6) исчерпан"
         assert t.wait_interrupt()
 
     codex.add(answer('{"steps": []}'), work)

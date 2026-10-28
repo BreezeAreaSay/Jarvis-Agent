@@ -1045,7 +1045,7 @@ class CliBackend:
                 return McpResult("ok")
             if finish["summary"] is not None:
                 return McpResult("Пропущено: работа уже завершена", is_error=True)
-            if run.count >= limit:
+            if run.count >= limit or getattr(run, "halt", ""):
                 finish["limit"] = True
                 proc = holder.get("proc")
                 if proc is not None:
@@ -1081,7 +1081,7 @@ class CliBackend:
             self.ai.mcp_server.unbind(binding)
         run.usage.add(self._record_usage(out, model))
         if finish["limit"]:
-            raise AgentLimit(f"Агент не уложился в {limit} шагов")
+            raise AgentLimit(getattr(run, "halt", "") or f"Агент не уложился в {limit} шагов")
         if finish["summary"] is not None:
             self._succeeded()
             return str(finish["summary"])

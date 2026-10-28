@@ -30,6 +30,8 @@ spotify:, mailto:) и инструментами подключённых сер
 import asyncio
 import contextlib
 import copy
+import hashlib
+import json
 import logging
 import re
 import sys
@@ -112,6 +114,23 @@ RECENT_RECIPE_S = 15 * 60.0  # «запомни это» — про дело а�
 ASK_TIMEOUT_S = APPROVAL_TIMEOUT  # ask_user: ответ (голосом, в чате, фразой) ждём, как решение о разрешении
 MAX_MCP_TOOLS = 64  # больше инструментов провайдеры не принимают (вместе с действиями агента)
 STOPPED = "Ошибка: пользователь остановил работу — больше ничего не делай"
+TEMPERATURE = 0.2  # действиям на экране нужна аккуратность, а не разнообразие (модели без «раздумий»)
+# действие пришло так быстро после неудачного — оно из того же хода модели (Codex и программы зовут действия
+# хода по одному; свой цикл API знает ходы точно и сбрасывает отметку на каждом)
+BATCH_GAP_S = 0.5
+SKIPPED = (
+    "Не выполнено: предыдущее действие этого хода не удалось — посмотри на его ответ и свежий снимок и реши "
+    "заново, что делать."
+)
+REPEAT_HINT = 2  # одно и то же действие с тем же итогом столько раз подряд — подсказка сменить путь
+REPEAT_STOP = 5  # …а столько — работа останавливается
+NO_REPEAT = frozenset({"wait", "ask_user", "ui_snapshot", "screenshot", "zoom", "finish"})
+LIMIT_GRACE = 3  # после лимита шагов ещё столько вызовов — успеть вызвать finish и честно подвести итог
+LIMIT_TEXT = (
+    "Лимит шагов исчерпан — больше ничего не делай: вызови finish (status=partial) и честно опиши, что "
+    "сделано, а что нет."
+)
+UNTRUSTED_TAG = re.compile(r"\[[0-9a-f]{6}\]")
 
 RISKY_NAME = re.compile(
     r"\b(send|submit|delete|remove|pay|buy|order|purchase|checkout|confirm|publish|post|transfer|uninstall|"
@@ -322,6 +341,12 @@ class AgentRun:
     vision: bool = False  # модель понимает картинки
     ask_all: bool = False  # после отказа спрашивать перед каждым действием, которое что-то меняет
     ask_once: bool = False  # это действие человек велел спрашивать всегда (разрешения инструментов)
+    failed_at: float = 0.0  # когда отдан ответ сорвавшегося действия: остальные действия того же хода — нет
+    repeats: dict[str, tuple[str, int]] = field(default_factory=dict)  # действие → (итог, сколько раз подряд)
+    over: int = 0  # вызовов после лимита шагов
+    halt: str = (
+        ""  # работа остановлена (лимит, хождение по кругу): почему — бэкенды подписки тоже останавливаются
+    )
     outcome: str = ""
     given: set[str] = field(default_factory=set)  # подсказки по программам, которые модель уже получила
     plan_sent: bool = False  # план (он составляется параллельно) уже показан модели
@@ -988,7 +1013,13 @@ class Agent(BaseService):
             specs = self._specs(run)
             summary = str(
                 await chatgpt.run_agent(
-                    self, run, system=system, first=first, specs=specs, images=_image_urls(extras)
+                    self,
+                    run,
+                    system=system,
+                    first=first,
+                    specs=specs,
+                    images=_image_urls(extras),
+                    limit=limit + LIMIT_GRACE,
                 )
             )
             while run.notes and not run.closing and run.count < limit and time.monotonic() < run.deadline:
@@ -996,7 +1027,13 @@ class Agent(BaseService):
                 again, extras = await self._continuation(run)
                 summary = str(
                     await chatgpt.run_agent(
-                        self, run, system=system, first=again, specs=specs, images=_image_urls(extras)
+                        self,
+                        run,
+                        system=system,
+                        first=again,
+                        specs=specs,
+                        images=_image_urls(extras),
+                        limit=limit + LIMIT_GRACE,
                     )
                 )
             return summary
@@ -1012,7 +1049,13 @@ class Agent(BaseService):
                 raise AgentLimit(f"Агент работал дольше {int(RUN_DEADLINE_S // 60)} минут и остановлен")
             _prune(messages)
             try:
-                response = await llm.chat(messages, tools=self._specs(run), stream=False)
+                response = await llm.chat(
+                    messages,
+                    tools=self._specs(run),
+                    stream=False,
+                    temperature=TEMPERATURE,
+                    speed=_agent_speed(settings.ai.speed),
+                )
             except LlmError as e:
                 if run.vision and _image_refused(e):
                     if refused_once:
@@ -1044,6 +1087,7 @@ class Agent(BaseService):
             )
             extras = []
             summary: str | None = None
+            run.failed_at = 0.0  # новый ход модели: она уже видела, что прошлое не вышло
             for call in response.tool_calls:
                 if summary is not None:
                     messages.append(
@@ -1063,13 +1107,13 @@ class Agent(BaseService):
                     summary = self.finish_summary(run, finish_args)
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": "ok"})
                     continue
-                if run.count >= limit:
-                    raise AgentLimit(f"Агент не уложился в {limit} шагов")
                 content, extra = await self._act(run, call)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
                 extras.extend(extra)
             if summary is not None:
                 return summary
+            if run.halt:
+                raise AgentLimit(run.halt)
             messages.extend(extras)
 
     # --- удачный прогон → сценарий ---------------------------------------------------------------------
@@ -1236,6 +1280,19 @@ class Agent(BaseService):
     async def _act(self, run: AgentRun, call: ToolCall) -> tuple[str, list[dict[str, Any]]]:
         if run.stopping or run.finished:
             return STOPPED, []
+        now = time.monotonic()
+        if run.failed_at and now - run.failed_at < BATCH_GAP_S:
+            run.failed_at = now  # остальные действия того же хода — тоже не выполнять
+            return SKIPPED, []
+        if run.halt:
+            return f"Ошибка: {run.halt} — больше ничего не делай", []
+        limit = self.ctx.settings.value.ai.max_agent_steps
+        if run.count >= limit:
+            run.over += 1
+            if run.over > LIMIT_GRACE:
+                run.halt = f"Агент не уложился в {limit} шагов"
+                return f"Ошибка: {run.halt} — больше ничего не делай", []
+            return LIMIT_TEXT, []
         action = self._actions.get(call.name) or run.mcp.get(call.name)
         if action is None:
             return f"Ошибка: инструмента «{call.name}» нет", []
@@ -1331,6 +1388,8 @@ class Agent(BaseService):
             result=outcome.content,
             images=_image_urls(outcome.extras),
         )
+        run.failed_at = time.monotonic() if not outcome.ok else 0.0
+        repeat = self._repeat(run, call.name, args, outcome)
         # реплика человека посреди работы (модель узнаёт сразу, с ответом на это действие) и план (составлялся
         # параллельно) — до снимка окна: устаревшие снимки вырезаются (_prune), а они должны остаться
         head: list[str] = []
@@ -1341,7 +1400,36 @@ class Agent(BaseService):
             run.plan_sent = True
             steps = "\n".join(f"{i}. {s}" for i, s in enumerate(run.plan, 1))
             head.append(f"План работы (номер шага — параметр step в действиях):\n{steps}")
-        return "\n\n".join([*head, outcome.content]), outcome.extras
+        tail = [repeat] if repeat else []
+        left = limit - run.count
+        if 0 < left <= 3:
+            tail.append(
+                f"Осталось шагов: {left} из {limit}. Доделай главное и вызови finish (status=partial, если "
+                "всё не успеть)."
+            )
+        return "\n\n".join([*head, outcome.content, *tail]), outcome.extras
+
+    def _repeat(self, run: AgentRun, name: str, args: dict[str, Any], outcome: Outcome) -> str:
+        """Одно и то же действие с тем же итогом (тот же снимок окна или снова ошибка) раз за разом — модель
+        ходит по кругу: подсказка сменить путь, а REPEAT_STOP раз — остановка (run.halt)."""
+        if name in NO_REPEAT:
+            return ""
+        key = name + json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)
+        plain = UNTRUSTED_TAG.sub("", outcome.content)
+        digest = hashlib.sha1(plain.encode("utf-8", "replace")).hexdigest()
+        last, times = run.repeats.get(key, ("", 0))
+        times = times + 1 if last and (not outcome.ok or digest == last) else 1
+        run.repeats[key] = (digest, times)
+        if times >= REPEAT_STOP:
+            run.halt = "Агент раз за разом повторял одно и то же действие без пользы и остановлен"
+            return f"Ошибка: {run.halt} — больше ничего не делай"
+        if times >= REPEAT_HINT:
+            return (
+                f"Это действие уже {times} раза подряд дало тот же итог — оно не помогает. Не повторяй его: "
+                "попробуй другой путь (клавиши, адрес, другой элемент, картинка экрана) или закончи (finish, "
+                "status=partial) и объясни, что мешает."
+            )
+        return ""
 
     # --- подтверждения ----------------------------------------------------------------------------------
     @property
@@ -2545,6 +2633,11 @@ class Agent(BaseService):
         finally:
             for task in waits:
                 task.cancel()
+
+
+def _agent_speed(speed: str) -> str:
+    """Сколько думать агенту: «быстро» в настройках — для чата; многошаговой работе — не меньше обычного."""
+    return "balanced" if speed == "fast" else speed
 
 
 def _cuts_off(text: str) -> bool:

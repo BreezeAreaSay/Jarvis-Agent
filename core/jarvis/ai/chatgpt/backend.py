@@ -1474,7 +1474,7 @@ class ChatGpt:
                 return {"contentItems": [{"type": "inputText", "text": "ok"}], "success": True}
             if finish["summary"] is not None:
                 return tool_failure("Пропущено: работа уже завершена")
-            if run.count >= limit:
+            if run.count >= limit or getattr(run, "halt", ""):
                 finish["limit"] = True
                 current = run_ref["run"]
                 if current is not None:
@@ -1510,7 +1510,7 @@ class ChatGpt:
             _background(lambda: runtime.thread_unsubscribe(thread_id), "unsubscribe")
         run.usage.add(self._usage(out, model))
         if finish["limit"]:
-            raise AgentLimit(f"Агент не уложился в {limit} шагов")
+            raise AgentLimit(getattr(run, "halt", "") or f"Агент не уложился в {limit} шагов")
         if finish["summary"] is not None:
             return str(finish["summary"])
         if out.status == "completed":

@@ -12,6 +12,7 @@ stream_options): известное описано в jarvis.ai.providers, ос�
 
 import asyncio
 import contextlib
+import dataclasses
 import hashlib
 import ipaddress
 import json
@@ -1078,13 +1079,16 @@ class LlmClient:
         json_schema: dict[str, Any] | None = None,
         stream: bool = False,
         on_delta: DeltaFn | None = None,
+        speed: str | None = None,
     ) -> LlmResponse:
         """Один ответ модели (с вызовами инструментов, если они есть). on_delta — куски текста по ходу.
 
         tool_choice="none" — инструменты описаны (история с их вызовами остаётся понятной), но вызывать
-        их нельзя.
+        их нельзя. speed — сколько модели думать вместо settings.ai.speed (агенту «быстро» мало).
         """
         cfg = self.config(model)
+        if speed and speed != cfg.speed:
+            cfg = dataclasses.replace(cfg, speed=speed)
         problem = cfg.problem()
         if problem:
             raise LlmError(problem)

@@ -43,7 +43,7 @@ async def _draft_run(ctx: AppContext, llm: ScriptedLlm) -> tuple[str, dict[str, 
     llm.add(
         PLAN,
         calls(("ui_click", {"id": "e1"})),
-        calls(("ui_type", {"id": "e1", "text": "ivan@example.com"}), ("press_keys", {"combo": "Ctrl+S"})),
+        calls(("ui_type", {"id": "e3", "text": "ivan@example.com"}), ("press_keys", {"combo": "Ctrl+S"})),
         calls(("wait", {"seconds": 0.5})),
         calls(("finish", {"summary": "Черновик сохранён."})),
         calls(("finish", {"summary": "Черновик сохранён."})),  # после проверки по снимку

@@ -49,10 +49,11 @@ def _mail_script(llm: ScriptedLlm, final: str) -> None:
         PLAN,
         calls(("ui_click", {"id": "e1", "step": 2})),
         calls(
-            ("ui_type", {"id": "e1", "text": "ivan@example.com", "step": 3}),
-            ("ui_type", {"id": "e3", "text": "Отчёт готов, смотри вложение", "step": 3}),
+            # id — из снимка окна нового письма: «Написать» и «Входящие» были e1 и e2, новые элементы — дальше
+            ("ui_type", {"id": "e3", "text": "ivan@example.com", "step": 3}),
+            ("ui_type", {"id": "e5", "text": "Отчёт готов, смотри вложение", "step": 3}),
         ),
-        calls(("ui_click", {"id": "e4", "step": 4})),
+        calls(("ui_click", {"id": "e6", "step": 4})),
         calls(("finish", {"summary": final})),
         calls(("finish", {"summary": final})),  # после проверки по свежему снимку
     )

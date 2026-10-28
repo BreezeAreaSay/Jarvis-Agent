@@ -10,6 +10,7 @@ e1…eN, именами, типами и прямоугольниками; id д
 """
 
 import ctypes
+import dataclasses
 import functools
 import logging
 import sys
@@ -69,6 +70,7 @@ class UiElement:
     password: bool = False
     value: str = ""
     page: bool = False  # элемент открытой страницы (окно браузера), а не самого браузера
+    key: str = ""  # постоянный ключ элемента (RuntimeId UI Automation), если бэкенд его знает
 
     @property
     def center(self) -> tuple[int, int]:
@@ -91,6 +93,71 @@ class UiSnapshot:
 
     def find(self, element_id: str) -> UiElement | None:
         return next((e for e in self.elements if e.id == element_id), None)
+
+
+@dataclass
+class StableIds:
+    """id элементов окна, которые видит модель агента, — постоянные, пока элемент на экране.
+
+    Бэкенд нумерует каждый снимок заново (e1…eN), а модель действует по тому снимку, который видела: несколько
+    действий одного хода ссылаются на один снимок, хотя после первого окно уже снято заново, — и прежний e7
+    указал бы на другой элемент. Поэтому агент показывает модели свои id: элемент из прошлых снимков (тот же
+    RuntimeId UI Automation или тот же тип, имя и место; сдвинулся — тот же тип и имя, если такой один)
+    сохраняет id, новый получает следующий номер. Номера не переиспользуются: старый id не укажет на чужой
+    элемент — его просто нет в окне."""
+
+    next: int = 1
+    known: dict[str, str] = field(default_factory=dict)  # точный ключ элемента → id
+    loose: dict[str, str] = field(default_factory=dict)  # тип и имя → последний id
+    backend: dict[str, str] = field(default_factory=dict)  # id модели → id последнего снимка бэкенда
+
+    @staticmethod
+    def _keys(hwnd: int, element: UiElement) -> tuple[str, str]:
+        exact = f"rid:{element.key}" if element.key else f"{hwnd}|{element.kind}|{element.name}|{element.rect}"
+        loose = f"{hwnd}|{element.kind}|{element.name}" if element.name else ""
+        return exact, loose
+
+    def assign(self, snapshot: UiSnapshot) -> UiSnapshot:
+        """Снимок бэкенда → тот же снимок с id модели (сам снимок бэкенда не меняется)."""
+        keys = [self._keys(snapshot.hwnd, e) for e in snapshot.elements]
+        counts: dict[str, int] = {}
+        for _, loose in keys:
+            if loose:
+                counts[loose] = counts.get(loose, 0) + 1
+        used: set[str] = set()
+        ids: list[str] = []
+        for exact, loose in keys:  # сначала точные совпадения: сдвинувшемуся не достанется чужой id
+            known = self.known.get(exact, "")
+            ids.append(known if known and known not in used else "")
+            if ids[-1]:
+                used.add(ids[-1])
+        for i, (exact, loose) in enumerate(keys):
+            if ids[i]:
+                continue
+            same = self.loose.get(loose, "") if loose and counts[loose] == 1 else ""
+            if same and same not in used:
+                ids[i] = same
+            else:
+                ids[i] = f"e{self.next}"
+                self.next += 1
+            used.add(ids[i])
+        elements: list[UiElement] = []
+        self.backend = {}
+        for element, element_id, (exact, loose) in zip(snapshot.elements, ids, keys, strict=True):
+            self.known[exact] = element_id
+            if loose:
+                self.loose[loose] = element_id
+            self.backend[element_id] = element.id
+            elements.append(dataclasses.replace(element, id=element_id))
+        return dataclasses.replace(snapshot, elements=elements)
+
+    def backend_id(self, element_id: str) -> str | None:
+        """id бэкенда для id модели; элемента в последнем снимке нет — None."""
+        return self.backend.get(element_id)
+
+    def forget(self) -> None:
+        """Последний снимок — не UI Automation (страница браузера Jarvis): нажимать по e… нечего."""
+        self.backend = {}
 
 
 class UiBackend(Protocol):

@@ -69,7 +69,15 @@ from jarvis.ai.tools import (
     untrusted,
     window_appeared,
 )
-from jarvis.ai.uia import SNAPSHOT_LIMIT, UiBackend, UiElement, UiSnapshot, create_ui, format_snapshot
+from jarvis.ai.uia import (
+    SNAPSHOT_LIMIT,
+    StableIds,
+    UiBackend,
+    UiElement,
+    UiSnapshot,
+    create_ui,
+    format_snapshot,
+)
 from jarvis.ai.web import site_name
 from jarvis.commands.validate import MAX_ACTIONS as MAX_RECIPE
 from jarvis.confirm import parse_yes_no
@@ -173,7 +181,7 @@ AGENT_PROMPT = """Ты — агент Jarvis: сам выполняешь зад
 
 Как видеть:
 - После каждого действия приходит свежий снимок: элементы окна впереди с id (e1, e2…), типом, именем \
-и координатами. После действия старые id устаревают.
+и координатами. id элемента не меняется, пока он в окне; исчез — его id больше не действует.
 - Если ты понимаешь картинки, к снимку прикладывается картинка всего экрана: окно впереди обведено, его \
 элементы подписаны метками e…, сетка координат через 100 точек; мониторов несколько — остальные следом, \
 мельче; окно впереди, если на снимке оно мелкое, — следом крупно (или крупно то, что изменилось): по \
@@ -302,7 +310,8 @@ class AgentRun:
     searching: bool = (
         False  # открыт поиск (ctrl+k, щелчок по полю поиска): набранное — запрос, а не сообщение
     )
-    snapshot: UiSnapshot | None = None
+    snapshot: UiSnapshot | None = None  # последний снимок окна — с id, которые видит модель
+    ids: StableIds = field(default_factory=StableIds)  # id элементов модели ↔ id снимка UI Automation
     target: WindowInfo | None = None  # окно, с которым агент работает
     shot: vision.Shot | None = None  # последний снимок окна картинкой — для click_point
     window_shot: vision.Shot | None = None  # окно впереди крупно к этому снимку — click_point on="window"
@@ -1560,11 +1569,12 @@ class Agent(BaseService):
             page = await self.browser.look(run, fg)
             if page is not None and page.hint:
                 parts.append(page.hint)  # до снимка: заметки о сайте не вырезаются со старыми снимками
-            snapshot = (
-                page.snapshot
-                if page is not None
-                else await self.ctx.run_platform(self.ui.snapshot, SNAPSHOT_LIMIT, fg.hwnd if fg else None)
-            )
+            if page is not None:
+                snapshot = page.snapshot
+                run.ids.forget()
+            else:
+                found = await self.ctx.run_platform(self.ui.snapshot, SNAPSHOT_LIMIT, fg.hwnd if fg else None)
+                snapshot = run.ids.assign(found)
         except PlatformError as e:
             parts.append(f"{SNAPSHOT_HEADER}\n(Элементы окна недоступны: {e}.)")
         except BaseException:
@@ -1948,9 +1958,19 @@ class Agent(BaseService):
         # параметры Windows: переключатели и «Применить» меняют систему
         return self._settings_window(run) and (kind in TOGGLE_KINDS or bool(SETTINGS_CHANGE.search(name)))
 
+    def _backend_id(self, run: AgentRun, element_id: str) -> str:
+        """id элемента у UI Automation по id, который видела модель; элемента в окне уже нет — ошибка."""
+        found = run.ids.backend_id(element_id)
+        if found is None:
+            raise UserFacingError(
+                f"элемента {element_id} сейчас нет в окне (оно изменилось) — выбери элемент по свежему снимку"
+            )
+        return found
+
     async def _ui_click(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
         element_id = _arg(args, "id")
         double = bool(args.get("double"))
+        backend_id = self._backend_id(run, element_id)
         element = run.snapshot.find(element_id) if run.snapshot is not None else None
         name = (element.name if element is not None else "") or element_id
         fg = await self._target(run, explicit=True)
@@ -1973,7 +1993,7 @@ class Agent(BaseService):
             await self._mouse(element.center, "left", True)
             result = "двойной щелчок"
         else:
-            result = await self.ctx.run_platform(self.ui.click, element_id)
+            result = await self.ctx.run_platform(self.ui.click, backend_id)
         if SEND_NAME.search(name):
             run.unsent = []
         return await self._observe(run, self.settle_s, f"«{name}»: {result}")
@@ -1981,6 +2001,7 @@ class Agent(BaseService):
     async def _ui_type(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
         element_id = _arg(args, "id")
         text = str(args.get("text") or "")
+        backend_id = self._backend_id(run, element_id)
         element = run.snapshot.find(element_id) if run.snapshot is not None else None
         name = (element.name if element is not None else "") or element_id
         fg = await self._target(run, explicit=True)
@@ -2000,7 +2021,7 @@ class Agent(BaseService):
             await self._point(
                 run, "type", *element.center, "пароль" if password else one_line(text, 40), element.rect
             )
-        result = await self.ctx.run_platform(self.ui.set_text, element_id, text)
+        result = await self.ctx.run_platform(self.ui.set_text, backend_id, text)
         if not password:
             self._note_typed(run, text, name)
         detail = "пароль" if password else one_line(text, 60)

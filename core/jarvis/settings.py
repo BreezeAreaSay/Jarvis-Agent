@@ -182,6 +182,24 @@ class AiSettings(_Model):
         return value
 
 
+NotifyChannel = Literal["toast", "voice", "telegram"]
+
+
+class BackgroundSettings(_Model):
+    """Фоновые задачи (jarvis/background): хранилище заметок, очередь, самостоятельность, уведомления."""
+
+    vault: str = ""  # хранилище Obsidian (папка); пусто — найти самому, нет Obsidian — Документы\Jarvis
+    folder: str = "Jarvis"  # своя папка агента в хранилище: пишет он только сюда
+    read_vault: bool = True  # читать и искать всё хранилище (иначе — только свою папку)
+    parallel: int = Field(2, ge=1, le=4)  # сколько задач идёт одновременно
+    # самостоятельность: careful — спрашивать чаще, normal — неясное и необратимое, bold — деньги и вход
+    autonomy: Literal["careful", "normal", "bold"] = "normal"
+    max_steps: int = Field(150, ge=10, le=1000)  # действий на задачу
+    max_hours: float = Field(4.0, ge=0.25, le=48.0)  # часов работы на задачу (без ожидания ответа)
+    notify_question: list[NotifyChannel] = Field(default_factory=lambda: ["toast"])  # есть вопрос
+    notify_done: list[NotifyChannel] = Field(default_factory=lambda: ["toast"])  # задача закончена
+
+
 class AvatarSettings(_Model):
     desktop: bool = True  # живой аватар на рабочем столе
     size: int = Field(150, ge=60, le=400)
@@ -233,6 +251,7 @@ class Settings(_Model):
     voice: VoiceSettings = Field(default_factory=VoiceSettings)
     tts: TtsSettings = Field(default_factory=TtsSettings)
     ai: AiSettings = Field(default_factory=AiSettings)
+    background: BackgroundSettings = Field(default_factory=BackgroundSettings)
     avatar: AvatarSettings = Field(default_factory=AvatarSettings)
     system: SystemSettings = Field(default_factory=SystemSettings)
     remote: RemoteSettings = Field(default_factory=RemoteSettings)

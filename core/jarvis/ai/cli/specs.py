@@ -5,8 +5,10 @@ env-vars); Gemini CLI — исходники google-gemini/gemini-cli 0.66 (docs
 Qwen Code — исходники QwenLM/qwen-code 0.25 (docs/users/features/headless.md, top-level-options.ts).
 
 Общие правила: программа работает в пустой рабочей папке Jarvis, её встроенные инструменты (оболочка, правка
-файлов, веб) выключены, а инструменты Jarvis приходят с сервера MCP ядра. Текст человека — только через stdin,
-системный промпт — файлом: в аргументах командной строки ничего человеческого нет.
+файлов, веб) выключены, а инструменты Jarvis приходят с сервера MCP ядра. Исключение — фоновые задачи
+(CliRun.web): им включены веб-поиск и чтение страниц самой программы (WEB_TOOLS), оболочка и файлы — нет.
+Текст человека — только через stdin, системный промпт — файлом: в аргументах командной строки ничего
+человеческого нет.
 """
 
 import json
@@ -54,6 +56,7 @@ class CliRun:
     session_id: str = ""  # id новой сессии (Claude Code, Qwen Code)
     resume: str = ""  # продолжить сессию
     ephemeral: bool = False  # не сохранять сессию (одиночный запрос, агент)
+    web: bool = False  # фоновая задача: веб-поиск и чтение страниц самой программы включены
     files: list[Path] = field(default_factory=list)  # временные файлы запуска — удаляются после
     tag: str = field(default_factory=lambda: uuid.uuid4().hex[:12])  # для имён временных файлов
 
@@ -86,7 +89,7 @@ class CliKind:
     def parser(self) -> Any:
         return ClaudeStream()
 
-    def prepare_dir(self, work_dir: Path, *, tools: bool) -> None:
+    def prepare_dir(self, work_dir: Path, *, tools: bool, web: bool = False) -> None:
         """Подготовить рабочую папку (файлы настроек программы)."""
         work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -102,6 +105,8 @@ class CliKind:
 
 
 # --- Claude Code ------------------------------------------------------------------------------------------
+
+CLAUDE_WEB = ("WebSearch", "WebFetch")  # встроенные инструменты Claude Code для фоновых задач
 
 
 class ClaudeCode(CliKind):
@@ -142,9 +147,10 @@ class ClaudeCode(CliKind):
             "stream-json",
             "--system-prompt-file",
             str(system),
-            # встроенные инструменты (Bash, правка файлов, WebFetch…) выключены; остальное — запрещено
+            # встроенные инструменты (Bash, правка файлов, WebFetch…) выключены; остальное — запрещено.
+            # Фоновой задаче — только веб-поиск и чтение страниц
             "--tools",
-            "",
+            ",".join(CLAUDE_WEB) if run.web else "",
             "--permission-mode",
             "dontAsk",
             "--disable-slash-commands",
@@ -165,7 +171,8 @@ class ClaudeCode(CliKind):
                 }
             }
             path = run.temp(f"mcp-{run.tag}.json", json.dumps(config, ensure_ascii=False))
-            args += ["--mcp-config", str(path), "--allowedTools", f"mcp__{SERVER_NAME}__*"]
+            allowed = [f"mcp__{SERVER_NAME}__*", *(CLAUDE_WEB if run.web else ())]
+            args += ["--mcp-config", str(path), "--allowedTools", ",".join(allowed)]
         if run.model:
             args += ["--model", run.model]
         if run.resume:
@@ -212,6 +219,7 @@ class ClaudeCode(CliKind):
 
 # --- Gemini CLI -------------------------------------------------------------------------------------------
 
+GEMINI_WEB = ("google_web_search", "web_fetch")  # фоновым задачам — веб-поиск и чтение страниц Gemini
 GEMINI_DENY = (
     "run_shell_command",
     "write_file",
@@ -255,10 +263,13 @@ class GeminiCli(CliKind):
         ),
     )
 
-    def settings(self, *, tools: bool) -> dict[str, Any]:
+    def settings(self, *, tools: bool, web: bool = False) -> dict[str, Any]:
+        core = [f"mcp_{SERVER_NAME}_*", *(GEMINI_WEB if web else ())]
+        exclude = [t for t in GEMINI_DENY if not (web and t in GEMINI_WEB)]
         out: dict[str, Any] = {
-            # встроенные инструменты: список разрешённых, где нет ни одного встроенного (только наш сервер)
-            "tools": {"core": [f"mcp_{SERVER_NAME}_*"], "exclude": list(GEMINI_DENY)},
+            # встроенные инструменты: список разрешённых, где нет ни одного встроенного (только наш сервер);
+            # у фоновых задач — ещё веб-поиск и чтение страниц
+            "tools": {"core": core, "exclude": exclude},
             "mcp": {"allowed": [SERVER_NAME] if tools else [NO_SERVER]},
             "hooksConfig": {"enabled": False},
             "skills": {"enabled": False},
@@ -279,10 +290,10 @@ class GeminiCli(CliKind):
             }
         return out
 
-    def prepare_dir(self, work_dir: Path, *, tools: bool) -> None:
+    def prepare_dir(self, work_dir: Path, *, tools: bool, web: bool = False) -> None:
         folder = work_dir / ".gemini"
         folder.mkdir(parents=True, exist_ok=True)
-        text = json.dumps(self.settings(tools=tools), ensure_ascii=False, indent=2)
+        text = json.dumps(self.settings(tools=tools, web=web), ensure_ascii=False, indent=2)
         path = folder / "settings.json"
         try:
             if path.read_text(encoding="utf-8") == text:
@@ -329,6 +340,7 @@ class GeminiCli(CliKind):
 
 # --- Qwen Code --------------------------------------------------------------------------------------------
 
+QWEN_WEB = ("web_fetch",)  # фоновым задачам — чтение страниц (веб-поиск Qwen Code требует своего ключа)
 QWEN_DENY = (
     "run_shell_command",
     "exec",
@@ -388,9 +400,9 @@ class QwenCode(CliKind):
             "default",
             # список разрешённых встроенных инструментов из одного безвредного — остальные не регистрируются
             "--core-tools",
-            "structured_output",
+            ",".join(("structured_output", *(QWEN_WEB if run.web else ()))),
             "--exclude-tools",
-            ",".join(QWEN_DENY),
+            ",".join(t for t in QWEN_DENY if not (run.web and t in QWEN_WEB)),
         ]
         if run.mcp_url:
             config = {
@@ -410,7 +422,7 @@ class QwenCode(CliKind):
                 "--allowed-mcp-server-names",
                 SERVER_NAME,
                 "--allowed-tools",
-                f"mcp__{SERVER_NAME}__*",
+                ",".join((f"mcp__{SERVER_NAME}__*", *(QWEN_WEB if run.web else ()))),
             ]
         else:
             args += ["--allowed-mcp-server-names", NO_SERVER]

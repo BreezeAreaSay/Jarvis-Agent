@@ -25,6 +25,9 @@ export type AiProvider =
   | "lmstudio"
   | "custom";
 
+/** Как сообщать о фоновой задаче. */
+export type NotifyChannel = "toast" | "voice" | "telegram";
+
 export interface Settings {
   version: number;
   onboarding_done: boolean;
@@ -119,6 +122,24 @@ export interface Settings {
     monthly_budget: number;
     /** Разрешения инструментов ИИ по имени; нет записи или auto — по риску. */
     tool_policy: Record<string, "auto" | "allow" | "ask" | "deny">;
+  };
+  /** Фоновые задачи: агент работает в фоне, итог — в хранилище заметок (Obsidian). */
+  background: {
+    /** Хранилище Obsidian (папка); пусто — найти самому, нет Obsidian — Документы\Jarvis. */
+    vault: string;
+    /** Своя папка агента в хранилище — пишет он только сюда. */
+    folder: string;
+    /** Читать и искать всё хранилище (иначе — только свою папку). */
+    read_vault: boolean;
+    /** Сколько задач идёт одновременно. */
+    parallel: number;
+    /** careful — спрашивать чаще, normal — неясное и необратимое, bold — только деньги и вход. */
+    autonomy: "careful" | "normal" | "bold";
+    max_steps: number;
+    max_hours: number;
+    /** Как сообщать о вопросе и об итоге: всплывающее окно, голос, Telegram; пусто — тихо. */
+    notify_question: NotifyChannel[];
+    notify_done: NotifyChannel[];
   };
   avatar: {
     desktop: boolean;

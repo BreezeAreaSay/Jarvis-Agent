@@ -1392,9 +1392,13 @@ class ChatGpt:
         first: str,
         specs: list[dict[str, Any]],
         images: list[str] | None = None,
+        rules: str | None = None,
+        web_search: bool = False,
+        limit: int | None = None,
     ) -> str:
         """Работа агента ходом Codex: инструменты — действия агента; вернёт итог (finish) для чата. images —
-        картинки экрана (data URL) к первому сообщению."""
+        картинки экрана (data URL) к первому сообщению. Фоновая задача (jarvis.background) зовёт со своими
+        правилами (rules), веб-поиском Codex (web_search) и своим лимитом действий (limit)."""
         from jarvis.ai.agent import AgentLimit
 
         problem = self.problem()
@@ -1402,7 +1406,8 @@ class ChatGpt:
             raise UserFacingError(problem)
         runtime = await self._runtime_for_use()
         model = self.resolve_model()
-        limit = self.ctx.settings.value.ai.max_agent_steps
+        if limit is None:
+            limit = self.ctx.settings.value.ai.max_agent_steps
         tools = []
         for spec in specs:
             fn = spec.get("function") or {}
@@ -1426,9 +1431,9 @@ class ChatGpt:
                     "sandbox": "read-only",
                     "cwd": str(component.work_dir()),
                     "ephemeral": True,
-                    "developerInstructions": f"{prompt.AGENT_RULES}\n\n{system}",
+                    "developerInstructions": f"{prompt.AGENT_RULES if rules is None else rules}\n\n{system}",
                     "dynamicTools": tools,
-                    "config": component.thread_config(web_search=False),
+                    "config": component.thread_config(web_search=web_search),
                 },
             ),
             CALL_TIMEOUT_S,

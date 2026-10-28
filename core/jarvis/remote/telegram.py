@@ -634,6 +634,15 @@ class TelegramBot:
         await self._send(chat_id, text, keyboard, as_html=True)
 
     # --- ответы -----------------------------------------------------------------------------------
+    async def notify_owner(self, text: str) -> bool:
+        """Сообщение владельцу бота (уведомление Jarvis: вопрос или итог фоновой задачи). Бот не подключён или
+        владельца нет — False."""
+        owner = self._owner()
+        if not owner or self.api is None:
+            return False
+        await self._send(owner, text)
+        return True
+
     def _require_api(self) -> TelegramApi:
         if self.api is None:
             raise TelegramError("бот не подключён")

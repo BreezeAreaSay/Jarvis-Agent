@@ -113,7 +113,9 @@ class StableIds:
 
     @staticmethod
     def _keys(hwnd: int, element: UiElement) -> tuple[str, str]:
-        exact = f"rid:{element.key}" if element.key else f"{hwnd}|{element.kind}|{element.name}|{element.rect}"
+        exact = (
+            f"rid:{element.key}" if element.key else f"{hwnd}|{element.kind}|{element.name}|{element.rect}"
+        )
         loose = f"{hwnd}|{element.kind}|{element.name}" if element.name else ""
         return exact, loose
 
@@ -126,12 +128,12 @@ class StableIds:
                 counts[loose] = counts.get(loose, 0) + 1
         used: set[str] = set()
         ids: list[str] = []
-        for exact, loose in keys:  # сначала точные совпадения: сдвинувшемуся не достанется чужой id
+        for exact, _loose in keys:  # сначала точные совпадения: сдвинувшемуся не достанется чужой id
             known = self.known.get(exact, "")
             ids.append(known if known and known not in used else "")
             if ids[-1]:
                 used.add(ids[-1])
-        for i, (exact, loose) in enumerate(keys):
+        for i, (_exact, loose) in enumerate(keys):
             if ids[i]:
                 continue
             same = self.loose.get(loose, "") if loose and counts[loose] == 1 else ""

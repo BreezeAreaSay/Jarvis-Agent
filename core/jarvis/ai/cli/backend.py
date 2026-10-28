@@ -184,9 +184,10 @@ class CliBackend:
         self._auth_task: asyncio.Task[Any] | None = None
 
     # --- папки -----------------------------------------------------------------------------------------
-    def work_dir(self, *, once: bool = False) -> Path:
-        """Пустая рабочая папка программы (отдельная — для одиночных запросов и агента)."""
-        name = self.info.binary + ("-once" if once else "")
+    def work_dir(self, *, once: bool = False, task: bool = False) -> Path:
+        """Пустая рабочая папка программы (отдельная — для одиночных запросов и агента; для фоновых задач —
+        своя: там включены веб-поиск и чтение страниц программы)."""
+        name = self.info.binary + ("-task" if task else "-once" if once else "")
         return paths.sub_dir("cli", name)
 
     # --- состояние -------------------------------------------------------------------------------------
@@ -624,7 +625,7 @@ class CliBackend:
         launch = self.launch()
         if launch is None:
             raise UserFacingError(errors.NOT_INSTALLED.format(name=self.info.name))
-        self.kind.prepare_dir(run.work_dir, tools=bool(run.mcp_url))
+        self.kind.prepare_dir(run.work_dir, tools=bool(run.mcp_url), web=run.web)
         out = CliOutcome()
         proc: CliProcess | None = None
         try:
@@ -994,16 +995,22 @@ class CliBackend:
         first: str,
         specs: list[dict[str, Any]],
         images: list[str] | None = None,
+        limit: int | None = None,
+        web: bool = False,
+        wrap_system: bool = True,
     ) -> str:
         """Работа агента одним запуском программы: инструменты — действия агента; вернёт итог (finish).
-        images — картинки экрана (data URL) к первому сообщению: их получает только программа с картинками."""
+        images — картинки экрана (data URL) к первому сообщению: их получает только программа с картинками.
+        Фоновая задача (jarvis.background) зовёт со своим лимитом действий (limit), с веб-поиском и чтением
+        страниц самой программы (web) и своим системным промптом целиком (wrap_system=False)."""
         from jarvis.ai.agent import AgentLimit
 
         problem = self.problem() or self._tools_problem()
         if problem:
             raise UserFacingError(problem)
         model = self.resolve_model()
-        limit = self.ctx.settings.value.ai.max_agent_steps
+        if limit is None:
+            limit = self.ctx.settings.value.ai.max_agent_steps
         finish: dict[str, Any] = {"summary": None, "limit": False}
         holder: dict[str, Any] = {}
         one_at_a_time = asyncio.Lock()  # окно одно — действия по очереди
@@ -1059,14 +1066,15 @@ class CliBackend:
         binding = self.ai.mcp_server.bind(tools, handler, label=f"{self.id}:agent:{run.id}")
         try:
             cli_run = CliRun(
-                work_dir=self.work_dir(once=True),
+                work_dir=self.work_dir(once=True, task=web),
                 prompt=first,
-                system=prompt.agent_system(system),
+                system=prompt.agent_system(system) if wrap_system else system,
                 model=model,
                 images=list(images or []) if self.info.images else [],
                 mcp_url=self.ai.mcp_server.url,
                 mcp_headers=self.ai.mcp_server.headers(binding),
                 ephemeral=True,
+                web=web,
             )
             out = await self._execute(cli_run, None, binding, holder)
         finally:

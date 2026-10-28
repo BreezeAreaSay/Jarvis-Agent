@@ -986,3 +986,63 @@ events, reminders, clipboard, summaries, screenshots, file_index, voice_cache, u
 | `data.purged` | `{removed: {memory?, history?, chats?, voice_chats?, tool_results?, summaries?, logs?}, ts}` |
 | `data.cleared` | `{cleared: {id: сколько}, ts}` |
 | `notes.changed` / `tasks.changed` / `events.changed` / `reminders.changed` | ещё и `{op: "clear"}` — удалены все |
+
+## 8. Фоновые задачи (`jarvis/background`, `jarvis/api/background.py`)
+
+Агент работает над большой задачей сам, в фоне: ищет, читает страницы, пишет итог в хранилище заметок
+(Obsidian). Экрана, мыши, клавиатуры, команд Jarvis и запуска программ у него нет. Устройство и план —
+`docs/BACKGROUND_TASKS.md`.
+
+- **Очередь**: одновременно идёт не больше `settings.background.parallel` задач; остальные — `queued`. Задача,
+  которая работала, когда Jarvis закрыли, при запуске снова встаёт в очередь и продолжается с плана и хода работы
+  (новый «заход»: `runs` + 1). Состояние — файлом `<данные>/background/<id>.json`.
+- **Провайдер** — как у Jarvis AI: ChatGPT (подписка) — ход Codex с его веб-поиском; Claude Code, Gemini CLI,
+  Qwen Code — запуск программы с её веб-поиском и чтением страниц (оболочка и файлы — выключены), инструменты
+  Jarvis — с сервера MCP ядра; ключ API — цикл Jarvis (`temperature` 0.2) с поиском DuckDuckGo/Bing.
+- **Инструменты задачи**: `web_search`, `web_read` (если у провайдера нет своих), `vault_search`, `vault_read`,
+  `vault_list`, `vault_write`, `update_plan`, `report`, `ask_user`, `finish`, инструменты серверов MCP
+  (рискованные — с разрешения, см. ниже). Сорвалось действие — остальные действия того же хода модели не
+  выполняются (ответ «Не выполнено: предыдущее действие этого хода не удалось…»); одно и то же действие с тем же
+  ответом дважды подряд — подсказка сменить путь, пять раз — заход останавливается (`partial`); за 10, 5, 3, 2 и 1
+  действие до `settings.background.max_steps` — предупреждение модели; после лимита действий или времени
+  (`max_hours`, без ожидания ответа) — просьба вызвать `finish`, потом остановка (`partial`).
+- **Вопросы**: `ask_user` (и разрешение на рискованное — `kind: "approval"`, варианты «Разрешить» / «Отклонить»)
+  ставит задачу в `waiting` и ждёт ответа до 9 минут; дольше — заход заканчивается, задача ждёт, а ответ
+  (`POST …/answer`) запускает новый заход. Разрешение, данное после паузы, запоминается (`approved`) — то же
+  действие не спрашивается снова.
+- **Хранилище** — `settings.background.vault`; пусто — открытое хранилище Obsidian из его списка (`obsidian.json`),
+  нет — `Документы\Jarvis`. Агент пишет только в свою папку (`settings.background.folder`, «Jarvis»): `README.md`,
+  `Инструкции.md` (указания человека — в промпт каждой задачи, если отличаются от шаблона), `Задачи/` (заметка
+  задачи — её ведёт Jarvis: свойства `type: jarvis-task, status, created, updated, finished, sources, steps`, бриф,
+  итог, план, вопросы, ход работы, источники), `Исследования/`, `Замеры/`, `Журнал/<дата>.md` (строка на
+  законченную задачу). Читать и искать — всё хранилище (`read_vault`), кроме служебных папок (`.obsidian` и
+  других с точкой).
+- **Уведомления** — `settings.background.notify_question` / `notify_done`: список из `toast` (тост с `task_id`),
+  `voice` (вслух, кроме тихого режима), `telegram` (сообщение владельцу бота); пусто — тихо.
+
+Настройки `background`: `vault`, `folder`, `read_vault`, `parallel` (1–4, 2), `autonomy` (`careful | normal | bold`),
+`max_steps` (10–1000, 150), `max_hours` (0.25–48, 4), `notify_question`, `notify_done` (`["toast"]`).
+
+| Маршрут | Тело | Ответ |
+|---|---|---|
+| `GET /api/background` | — | `{items: TaskCard[]}` — идущие первыми, потом новые |
+| `POST /api/background` | `{brief, deliverable?, title?, source?: ui\|text\|voice\|remote\|vault}` | `{task: TaskCard}`; ИИ не настроен — 400 |
+| `GET /api/background/vault?refresh=` | — | `{path, folder, exists, obsidian, auto, vaults: [{path, name, open, ts}]}` |
+| `POST /api/background/vault/setup` | — | то же — после создания своей папки агента |
+| `GET /api/background/{id}` | — | `{task: Task}` — целиком: `brief, deliverable, plan[], log[], questions[], sources[], summary, note, result, error, steps, worked_s, runs, usage, provider, model, card, note_link, result_link` (`obsidian://…`) |
+| `POST /api/background/{id}/answer` | `{text, question_id?}` | `{task: TaskCard}`; вопроса нет — 400 |
+| `POST /api/background/{id}/cancel` | — | `{task: TaskCard}` |
+| `POST /api/background/{id}/retry` | — | `{task: TaskCard}` — снова в очередь, с тем же планом и ходом работы |
+| `DELETE /api/background/{id}` | — | `{ok}` — из списка Jarvis (заметки в хранилище остаются) |
+
+`TaskCard = {id, title, brief, status: queued|running|waiting|done|partial|failed|cancelled, source, created,
+updated, finished, plan_done, plan_total, steps, progress: [{ts, text, kind}] (последние 3), question: Question|null,
+summary, error, note, result, sources}`. `Question = {id, text, kind: question|approval, options, detail, key, asked,
+answer, answered}`.
+
+| Событие | Данные |
+|---|---|
+| `background.updated` | `{task: TaskCard}` — по ходу работы не чаще раза в секунду |
+| `background.question` | `{task_id, question: Question}` |
+| `background.done` | `{task_id, status, summary, error, note, result}` |
+| `background.deleted` | `{id}` |

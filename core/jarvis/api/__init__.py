@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from jarvis.api import (
     ai,
+    background,
     browser,
     commands,
     core,
@@ -31,6 +32,7 @@ def include_all(app: FastAPI) -> None:
         voice,
         ai,
         browser,
+        background,
         images,
         notes,
         mcp,

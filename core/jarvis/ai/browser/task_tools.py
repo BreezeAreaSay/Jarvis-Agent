@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from jarvis.ai.agent import RISKY_NAME, SEND_NAME, Outcome
 from jarvis.ai.browser import page as pages
-from jarvis.ai.browser.agent_browser import AgentBrowser
+from jarvis.ai.browser.agent_browser import AgentBrowser, download_folder
 from jarvis.ai.browser.cdp import CdpError
 from jarvis.ai.browser.tools import (
     BACK_KEYS,
@@ -59,8 +59,8 @@ SECRET_FIELD = (
     "панели «Браузер агента» в Jarvis, а ты продолжишь после его ответа."
 )
 NO_FILES = (
-    "Ошибка: скачивать и загружать файлы фоновая задача не может — дай ссылку человеку в итоге или попроси "
-    "его (ask_user) сделать это в панели «Браузер агента»."
+    "Ошибка: загружать файлы на сайты фоновая задача не может — попроси человека (ask_user) сделать это в "
+    "панели «Браузер агента»."
 )
 HELD = (
     "Пока человек управлял страницей, ничего не сделано — страница могла измениться: посмотри на неё заново "
@@ -220,8 +220,10 @@ class TaskBrowser(BrowserTools):
         session = await self._session(browser, page)
         name = element.name or element.kind
         site = self._site(page)
-        if element.download or element.file:
+        if element.file:
             return Outcome(False, NO_FILES)
+        if element.download:
+            return await self._download(run, browser, page, session, element)
         pending = self.unsent.get(page.host, "") if self._messenger(run, page) else ""
         if pending and (SEND_NAME.search(name) or not element.name):
             await self._ok(
@@ -245,6 +247,38 @@ class TaskBrowser(BrowserTools):
             await self._settle(run, browser, session, CLICK_SETTLE_S)
         return await self._done(
             run, f"«{one_line(name, 80)}»: {_said(result)}", f"Нажал «{one_line(name, 50)}» на {site}"
+        )
+
+    async def _download(
+        self, run: "Session", browser: AgentBrowser, page: pages.Page, session: str, element: Any
+    ) -> Outcome:
+        """Скачать файл по ссылке — с разрешения человека, в «Загрузки\\Jarvis», без открытия и запуска."""
+        name = one_line(element.name or "файл", 60)
+        site = self._site(page)
+        folder = download_folder(run.ctx)
+        await self._ok(
+            run,
+            f"Скачать файл с {site}: «{name}»?",
+            f"В папку {folder} — без открытия и запуска",
+            f"download:{page.host}:{element.name}",
+        )
+
+        async def click() -> None:
+            await self._press_element(run, browser, page, session, element, double=False)
+
+        info = await browser.download(folder, click)
+        if info is None:
+            return Outcome(
+                False, "Ошибка: скачивание не началось — возможно, нужна другая кнопка или вход на сайт"
+            )
+        if info["state"] != "completed":
+            return Outcome(False, f"Ошибка: скачивание «{info['name']}» не закончилось ({info['state']})")
+        run.task.add_log(f"Скачан файл «{info['name']}» — {info['path']}", "progress")
+        return Outcome(
+            True,
+            f"Скачан файл «{info['name']}»: {info['path']}. Он не открывался и не запускался — сошлись на "
+            "него в итоге, прочитать его ты не можешь.",
+            f"Скачал «{one_line(info['name'], 50)}»",
         )
 
     async def _type(self, run: "Session", args: dict[str, Any]) -> Outcome:
@@ -322,8 +356,10 @@ class TaskBrowser(BrowserTools):
             self.unsent.pop(page.host if page else "", None)
         focused = page.find(page.focused) if page is not None and page.focused else None
         if combo in ("enter", "space") and focused is not None and not focused.is_field:
-            if focused.download or focused.file:
+            if focused.file:
                 return Outcome(False, NO_FILES)
+            if focused.download and page is not None:
+                return await self._download(run, browser, page, session, focused)
             if self._needs_ok(run, focused.name or ""):
                 await self._ok(
                     run,

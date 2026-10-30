@@ -28,7 +28,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -96,6 +96,20 @@ def profile_dir() -> Path:
     return paths.data_dir() / "agent-browser"
 
 
+DOWNLOAD_START_S = 8.0  # щелчок по ссылке на файл: скачивание не началось за столько — значит, не начнётся
+DOWNLOAD_WAIT_S = 300.0  # большой файл — столько ждать конца загрузки
+
+
+def download_folder(ctx: Any) -> Path:
+    """Куда фоновые задачи скачивают файлы: «Загрузки\\Jarvis» (нет такой папки — <данные Jarvis>/
+    downloads)."""
+    with contextlib.suppress(Exception):
+        raw = ctx.platform.known_folder("downloads")
+        if raw and Path(raw).is_dir():
+            return Path(raw) / "Jarvis"
+    return paths.data_dir() / "downloads"
+
+
 class AgentBrowser(Browser):
     def __init__(self, ctx: Any) -> None:
         super().__init__(ctx)
@@ -115,6 +129,10 @@ class AgentBrowser(Browser):
         self._window_proc: Any = None
         self._window_client: CdpClient | None = None
         self._window_watch: asyncio.Task[None] | None = None
+        # скачивания с разрешения (фоновая задача): guid → {name, url, state, bytes}; браузер общий —
+        # скачивают по одной
+        self.download_events: dict[str, dict[str, Any]] = {}
+        self._download_lock = asyncio.Lock()
 
     # --- что это за браузер ------------------------------------------------------------------------------
     @property
@@ -253,6 +271,58 @@ class AgentBrowser(Browser):
         with contextlib.suppress(CdpError, TimeoutError):  # скачивания — только с разрешения (задача спросит)
             await client.send("Browser.setDownloadBehavior", {"behavior": "deny", "eventsEnabled": True})
             self.downloads_allowed = False
+
+    def _event(self, method: str, params: dict[str, Any], session: str) -> None:
+        if method == "Browser.downloadWillBegin" and self.downloads_allowed:
+            name = Path(str(params.get("suggestedFilename") or "файл")).name or "файл"
+            self.download_events[str(params.get("guid") or "")] = {
+                "name": name,
+                "url": str(params.get("url") or ""),
+                "state": "inProgress",
+                "bytes": 0,
+            }
+        elif method == "Browser.downloadProgress":
+            item = self.download_events.get(str(params.get("guid") or ""))
+            if item is not None:
+                item["state"] = str(params.get("state") or item["state"])
+                item["bytes"] = int(params.get("receivedBytes") or item["bytes"])
+        super()._event(method, params, session)
+
+    async def download(
+        self, folder: Path, click: Callable[[], Awaitable[Any]], *, timeout: float = DOWNLOAD_WAIT_S
+    ) -> dict[str, Any] | None:
+        """Скачать то, что начнёт click(), в folder: браузер скачивает только на время этого щелчка (в
+        остальное время — нет); ждёт конца загрузки до timeout. Итог — {name, url, state, bytes, path}; не
+        началось за DOWNLOAD_START_S — None."""
+        async with self._download_lock:
+            folder.mkdir(parents=True, exist_ok=True)
+            client = self._client()
+            known = set(self.download_events)
+            await client.send(
+                "Browser.setDownloadBehavior",
+                {"behavior": "allow", "downloadPath": str(folder), "eventsEnabled": True},
+            )
+            self.downloads_allowed = True
+            try:
+                await click()
+                began = time.monotonic()
+                found: dict[str, Any] | None = None
+                while time.monotonic() - began < timeout:
+                    new = [g for g in self.download_events if g not in known]
+                    if new:
+                        found = self.download_events[new[0]]
+                        if found["state"] != "inProgress":
+                            break
+                    elif time.monotonic() - began > DOWNLOAD_START_S:
+                        break
+                    await asyncio.sleep(0.1)
+                return None if found is None else {**found, "path": str(folder / found["name"])}
+            finally:
+                with contextlib.suppress(CdpError, TimeoutError, UserFacingError):
+                    await client.send(
+                        "Browser.setDownloadBehavior", {"behavior": "deny", "eventsEnabled": True}
+                    )
+                self.downloads_allowed = False
 
     def _closed(self) -> None:
         super()._closed()

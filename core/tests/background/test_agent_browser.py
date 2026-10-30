@@ -330,3 +330,42 @@ async def test_window_waits_for_starting_browser_and_task_never_gets_the_window(
         await browser.task_tab("t2")
     await browser.close_window()
     await window.stop()
+
+
+async def test_download_with_permission_into_own_folder(bg: Bg, chrome: FakeChrome, data_dir: Path) -> None:
+    ctx, script, _ = bg
+    use_agent_browser(ctx, chrome)
+    ids: dict[str, str] = {}
+
+    def act(name: str, **extra: Any) -> Any:
+        def respond(request: Any, body: dict[str, Any]) -> Any:
+            import httpx
+
+            from tests.ai.fakes import completion
+
+            ids.update(_ids(_tool(script, len(script.requests) - 1)))
+            return httpx.Response(
+                200, json=completion(calls((name, {"id": ids[extra.pop("what")], **extra})))
+            )
+
+        return respond
+
+    script.add(
+        calls(("browser_open", {"url": "https://shop.test/"})),
+        act("browser_click", what="Скачать прайс"),
+        calls(("finish", {"status": "done", "summary": "Скачал прайс"})),
+    )
+    task = service(ctx).create("Скачай прайс с shop.test")
+    await until(lambda: task.open_question() is not None, 10)
+    question = task.open_question()
+    assert question is not None and question.kind == "approval"
+    assert question.text == "Скачать файл с shop.test: «Скачать прайс»?"
+    assert "без открытия и запуска" in question.detail
+    assert chrome.downloads == []  # пока не разрешили — не скачано
+    service(ctx).answer(task.id, question.id, "Разрешить")
+    await until(lambda: task.status == "done", 10)
+    folder = data_dir / "downloads"  # «Загрузки» заглушки на этом ПК нет — своя папка Jarvis
+    assert chrome.downloads == [{"name": "price.zip", "state": "completed"}]
+    assert f"Скачан файл «price.zip»: {folder / 'price.zip'}" in _tool(script, 2)
+    assert chrome.download_behavior == "deny"  # после щелчка — снова без скачиваний
+    assert any("Скачан файл «price.zip»" in e.text for e in task.log)

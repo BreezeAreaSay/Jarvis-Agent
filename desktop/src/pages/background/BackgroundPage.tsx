@@ -30,6 +30,7 @@ import {
   RotateCcw,
   Send,
   Settings,
+  Sparkles,
   Telescope,
   Trash2,
   TriangleAlert,
@@ -127,6 +128,9 @@ function TaskRow({ task, active }: { task: TaskCard; active: boolean }) {
 }
 
 // --- новая задача -----------------------------------------------------------------------------------------
+// первая задача — за минуту видно, как это работает: агент ищет, читает и пишет заметку
+const DEMO_BRIEF = "Собери 5 главных новостей про ИИ за сегодня: по абзацу на новость и ссылка на источник";
+
 function NewTask({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [brief, setBrief] = useState("");
   const [deliverable, setDeliverable] = useState("");
@@ -684,10 +688,30 @@ export default function BackgroundPage({ route }: { route: string[] }) {
   const missing = useBackground((s) => s.missing);
   const aiConfigured = useApp((s) => s.aiConfigured);
   const [creating, setCreating] = useState(false);
+  const [trying, setTrying] = useState(false);
   useEffect(() => {
     wireBackground();
     void useBackground.getState().load();
   }, []);
+  const startNew = () => setCreating(true);
+  const tryDemo = async () => {
+    setTrying(true);
+    try {
+      const r = await api.post<{ task: TaskCard }>("/api/background", {
+        brief: DEMO_BRIEF,
+        deliverable: "",
+        source: "ui",
+        repeat: {},
+        run_now: true,
+      });
+      useBackground.getState().upsert(r.task);
+      navigate("background", r.task.id);
+    } catch (e) {
+      notifyError(e);
+    } finally {
+      setTrying(false);
+    }
+  };
   const selected = route[0] && route[0] !== "browser" ? route[0] : "";
   const browser = route[0] === "browser";
 
@@ -700,7 +724,7 @@ export default function BackgroundPage({ route }: { route: string[] }) {
             <Button variant="soft" icon={<Globe />} onClick={() => navigate("background", "browser")}>
               Браузер агента
             </Button>
-            <Button variant="primary" icon={<Plus />} onClick={() => setCreating(true)} disabled={missing}>
+            <Button variant="primary" icon={<Plus />} onClick={startNew} disabled={missing}>
               Новая задача
             </Button>
             <IconButton icon={<Settings />} label="Настройки фоновых задач" variant="ghost" onClick={() => navigate("settings", "background")} />
@@ -743,13 +767,26 @@ export default function BackgroundPage({ route }: { route: string[] }) {
                 заметки — в папку «Jarvis» хранилища Obsidian. Экран, мышь и клавиатура остаются вашими.
               </p>
               <div className="row wrap" style={{ justifyContent: "center" }}>
-                <Button variant="primary" icon={<Plus />} onClick={() => setCreating(true)} disabled={missing}>
+                <Button variant="primary" icon={<Plus />} onClick={startNew} disabled={missing}>
                   Новая задача
                 </Button>
                 <Button variant="soft" icon={<Globe />} onClick={() => navigate("background", "browser")}>
                   Войти на сайты для агента
                 </Button>
               </div>
+              {loaded && !tasks.length && (
+                <div className="bg-demo">
+                  <p className="small muted">Впервые? Попробуйте на примере — займёт около минуты, итог появится в заметках:</p>
+                  <Button
+                    variant="soft"
+                    icon={trying ? <Loader2 className="spin" /> : <Sparkles />}
+                    onClick={() => void tryDemo()}
+                    disabled={missing || !aiConfigured || trying}
+                  >
+                    5 главных новостей про ИИ за сегодня
+                  </Button>
+                </div>
+              )}
               <p className="faint small">Голосом или в чате: «в фоне: собери главные новости про ИИ за неделю»</p>
             </div>
           )}

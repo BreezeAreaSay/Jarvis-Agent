@@ -356,6 +356,19 @@
   color: var(--accent-text);
 }
 
+/* первая задача: пример одним нажатием */
+.bg-demo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 14px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  width: 100%;
+}
+
 .bg-browser-page {
   height: 100%;
   display: flex;

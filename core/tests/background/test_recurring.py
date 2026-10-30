@@ -53,8 +53,15 @@ async def test_recurring_task_runs_now_then_by_schedule(bg: Bg, vault_dir: Path)
     card = task.card()
     assert card["status"] == "scheduled" and card["repeat_text"] == "каждый день в 21:00"
     assert card["last_run"]["summary"] == "Курс ЦБ 81,10 ₽" and card["tables"] == task.tables
+    await until(  # заметку задачи ядро пишет в фоне, следом за состоянием
+        lambda: (
+            bool(task.note)
+            and (vault_dir / task.note).exists()
+            and "## Запуски" in (vault_dir / task.note).read_text("utf-8")
+        )
+    )
     note = (vault_dir / task.note).read_text("utf-8")
-    assert "**Повторяется:** каждый день в 21:00" in note and "## Запуски" in note and "## Замеры" in note
+    assert "**Повторяется:** каждый день в 21:00" in note and "## Замеры" in note
 
     # время не пришло — ничего; пришло — новый запуск со своим планом и лимитами
     await bg_service.tick(now=task.next_run - 60)

@@ -2,6 +2,7 @@
 инструменты MCP с разрешениями, подтверждение отправки в мессенджере, свои горячие клавиши Jarvis,
 подсказки по программам."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -573,3 +574,47 @@ def test_close_up_of_the_window_or_of_what_changed() -> None:
         )
         == []
     )
+
+
+async def test_agent_waits_while_the_human_uses_mouse(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx.settings.patch({"ai": {"vision": "on"}})
+    _telegram(ui)
+    monkeypatch.setattr(agent_module, "HUMAN_QUIET_S", 0.2)
+    monkeypatch.setattr(agent_module, "HUMAN_WAIT_S", 0.5)
+    platform: Any = ctx.platform
+    platform.report_input = True
+    platform.idle = 0.0  # человек сейчас двигает мышь…
+    statuses: list[str] = []
+    ctx.bus.on("agent.state", lambda e: statuses.append(str(e.data.get("text", ""))))
+
+    async def human_stops() -> None:
+        await asyncio.sleep(0.15)
+        platform.idle = 5.0  # …и перестал
+
+    async def human_grabs_mouse(request: httpx.Request, body: dict[str, Any]) -> httpx.Response:
+        # пока модель думает над следующим шагом, человек снова взялся за мышь и не отпускает
+        platform.idle = 0.0
+        await asyncio.sleep(0.4)
+        from tests.ai.fakes import completion
+
+        return httpx.Response(
+            200, json=completion(calls(("click_point", {"x": 100, "y": 60, "what": "поле поиска"})))
+        )
+
+    llm.add(
+        PLAN,
+        calls(("click_point", {"x": 100, "y": 50, "what": "поле поиска"})),
+        human_grabs_mouse,
+        calls(("finish", {"status": "done", "summary": "Готово."})),
+        calls(("finish", {"status": "done", "summary": "Готово."})),
+    )
+    stopper = asyncio.ensure_future(human_stops())
+    await _run(ctx, "Нажми поиск в Telegram")
+    assert stopper.done()
+    assert any("вы работаете мышью или клавиатурой" in s for s in statuses)
+    clicks = [c for c in platform.calls if c[0] == "mouse_click"]
+    assert len(clicks) == 1  # первый — после того, как человек отпустил мышь; второй — не делается
+    texts = [str(m.get("content")) for m in llm.requests[-1]["messages"] if m.get("role") == "tool"]
+    assert any("человек сам работает мышью и клавиатурой" in t for t in texts)

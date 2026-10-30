@@ -125,6 +125,7 @@ class FakePlatform:
         self.index_available = True  # тесты выключают «службу индексирования»
         # тесты подставляют: сколько секунд без ввода, игра во весь экран, кто пишет микрофон (звонок)
         self.idle = 0.0
+        self.report_input = False  # idle — настоящий ввод человека (агент ждёт, пока человек работает мышью)
         self.fullscreen = False
         self.mic_users: list[str] = []
         self.gpu_temp: float | None = 54.0  # температура видеокарты (как nvidia-smi); None — неизвестна

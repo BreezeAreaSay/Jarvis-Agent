@@ -38,7 +38,7 @@ import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from rapidfuzz import fuzz, process
@@ -64,6 +64,7 @@ from jarvis.ai.policy import (
     lookalike_host,
     normalize_combo,
     tool_risk,
+    web_url,
 )
 from jarvis.ai.tools import (
     SHELL_RE,
@@ -85,7 +86,7 @@ from jarvis.ai.uia import (
 )
 from jarvis.ai.web import site_name
 from jarvis.commands.validate import MAX_ACTIONS as MAX_RECIPE
-from jarvis.confirm import high_risk, parse_yes_no
+from jarvis.confirm import NOT_BY_VOICE, high_risk, parse_yes_no
 from jarvis.db import new_id
 from jarvis.platform.base import PlatformError, WindowInfo
 from jarvis.redact import redact
@@ -121,6 +122,14 @@ TEMPERATURE = 0.2  # действиям на экране нужна аккур�
 # действие пришло так быстро после неудачного — оно из того же хода модели (Codex и программы зовут действия
 # хода по одному; свой цикл API знает ходы точно и сбрасывает отметку на каждом)
 BATCH_GAP_S = 0.5
+# действия настоящей мышью и клавиатурой: пока человек сам работает ими — не мешать, подождать
+HUMAN_INPUT = frozenset({"click_point", "type_text", "scroll", "press_keys"})
+HUMAN_QUIET_S = 2.0  # человек не трогал мышь и клавиатуру столько — можно действовать
+HUMAN_WAIT_S = 30.0  # дольше не ждём: действие не выполняется, модель узнаёт почему
+HUMAN_BUSY = (
+    "Ничего не сделано: человек сам работает мышью и клавиатурой — не мешай. Подожди (wait) и продолжи, или "
+    "спроси его (ask_user), можно ли продолжать."
+)
 SKIPPED = (
     "Не выполнено: предыдущее действие этого хода не удалось — посмотри на его ответ и свежий снимок и реши "
     "заново, что делать."
@@ -323,6 +332,7 @@ class AgentRun:
     step: int = 0
     total: int = 0
     text: str = ""
+    last_input: float = 0.0  # monotonic последнего ввода самого агента (мышь, клавиатура)
     plan: list[str] = field(default_factory=list)
     actions: list[dict[str, Any]] = field(default_factory=list)  # карточки для чата: {title, ok, detail?}
     count: int = 0  # сколько действий сделано (лимит — ai.max_agent_steps)
@@ -521,7 +531,7 @@ class Agent(BaseService):
         run = self._run
         return run is not None and not run.finished and run.question is not None and not run.question.done()
 
-    def interject(self, text: str) -> str:
+    def interject(self, text: str, source: str = "text") -> str:
         """Реплика человека, пока агент работает. Вернёт, чем она стала: "answer" — ответ на вопрос ask_user;
         "approval" — «да» / «нет», пока агент ждёт разрешения (как кнопка на карточке); "note" — поправка,
         модель получит её с ответом на ближайшее действие (и до итога); "" — агент не работает."""
@@ -533,21 +543,31 @@ class Agent(BaseService):
         if run.question is not None and not run.question.done():
             run.question.set_result(text)
             return "answer"
-        if run.status == "waiting" and self._decide(text):
+        if run.status == "waiting" and self._decide(text, source):
             if len(text.split()) > 2:  # «нет, напиши лучше Маше» — не только решение, но и поправка
                 run.notes.append(text)
             return "approval"
         run.notes.append(text)
         return "note"
 
-    def _decide(self, text: str) -> bool:
-        """«да» / «нет» на открытые подтверждения агента. False — это не ответ или подтверждений нет."""
+    def _decide(self, text: str, source: str = "text") -> bool:
+        """«да» / «нет» на открытые подтверждения агента. False — это не ответ или подтверждений нет.
+        Голосовое «да» необратимое (risk=high) не разрешает — только кнопка (или voice.confirm_high_by_voice);
+        «нет» — всегда."""
         allow = parse_yes_no(text)
         confirmations = getattr(self.ctx, "confirmations", None)
         if allow is None or confirmations is None:
             return False
-        ids = [c["id"] for c in confirmations.pending() if c.get("kind") == "agent"]
-        return sum(bool(confirmations.resolve(i, allow)) for i in ids) > 0
+        pending = [c for c in confirmations.pending() if c.get("kind") == "agent"]
+        by_voice = allow and source == "voice" and not self.ctx.settings.value.voice.confirm_high_by_voice
+        if by_voice and any(c.get("risk") == "high" for c in pending):
+            if self.ctx.loop is not None:
+                self.ctx.spawn(self.ctx.tts.say(NOT_BY_VOICE, interrupt=True), "agent-not-by-voice")
+            for c in pending:
+                if c.get("risk") != "high":
+                    confirmations.resolve(c["id"], allow)
+            return True  # «да» услышано, но необратимое ждёт кнопки — это не поправка к задаче
+        return sum(bool(confirmations.resolve(c["id"], allow)) for c in pending) > 0
 
     def _take_notes(self, run: AgentRun) -> str:
         notes, run.notes = run.notes, []
@@ -605,6 +625,9 @@ class Agent(BaseService):
         ai = self.ctx.settings.value.ai
         model = ai.model
         backend = self._chatgpt()
+        if backend is None:  # ключ API — или запасной, пока подписка на паузе: зрение — того, кто ответит
+            with contextlib.suppress(Exception):
+                return bool(self._llm().config().vision)
         resolve = getattr(backend, "resolve_model", None)
         if callable(resolve):
             with contextlib.suppress(Exception):
@@ -949,6 +972,7 @@ class Agent(BaseService):
                 for r in self.chats.rows(run.chat_id)
                 if r["role"] in ("user", "assistant")
                 and not r["meta"].get("hidden")
+                and not r["meta"].get("private")  # «приватно: …» — только для модели на этом ПК
                 and r["id"] != run.turn_id
             ]
         except Exception:
@@ -1337,7 +1361,7 @@ class Agent(BaseService):
             "agent.step", {"run_id": run.id, "index": index, "title": doing, "status": "running"}
         )
         self._set(run, "running", doing)
-        work = asyncio.ensure_future(action.run(run, args))
+        work = asyncio.ensure_future(self._perform(run, call.name, action, args))
         run.acting.add(work)
         look = False  # действие на экране сорвалось — модели свежий снимок: что там сейчас
         try:
@@ -1441,6 +1465,47 @@ class Agent(BaseService):
 
     def _ask(self, run: AgentRun, risky: bool = False) -> bool:
         return risky or self._always or run.ask_all or run.ask_once
+
+    async def _perform(self, run: AgentRun, name: str, action: Any, args: dict[str, Any]) -> Outcome:
+        """Действие; мышью и клавиатурой — только когда человек сам ими не работает (ждём до HUMAN_WAIT_S)."""
+        if name not in HUMAN_INPUT:
+            return cast(Outcome, await action.run(run, args))
+        if await self._human_busy(run):
+            return Outcome(False, HUMAN_BUSY, "Ждал, пока вы закончите")
+        try:
+            return cast(Outcome, await action.run(run, args))
+        finally:
+            run.last_input = time.monotonic()
+
+    async def _human_busy(self, run: AgentRun) -> bool:
+        """Человек двигает мышь или печатает (ввод был позже последнего ввода самого агента): подождать, пока
+        он не затихнет на HUMAN_QUIET_S; не затих за HUMAN_WAIT_S — True (действие не выполнять)."""
+        platform = self.ctx.platform
+        if getattr(platform, "name", "") == "fake" and not getattr(platform, "report_input", False):
+            return False  # заглушка не знает о вводе человека (тесты, демо, проверочные задачи) — не ждём
+        previous, waited = run.text, False
+        deadline = time.monotonic() + HUMAN_WAIT_S
+        try:
+            while not run.stopping:
+                try:
+                    idle = float(await self.ctx.run_platform(self.ctx.platform.idle_seconds))
+                except Exception:
+                    return False  # время ввода не узнать — как раньше, не ждём
+                human_at = time.monotonic() - idle
+                if idle >= HUMAN_QUIET_S or human_at <= run.last_input + 0.3:
+                    return False
+                if time.monotonic() >= deadline:
+                    return True
+                if not waited:
+                    waited = True
+                    self._set(
+                        run, "waiting", "Жду: вы работаете мышью или клавиатурой — продолжу, когда закончите"
+                    )
+                await asyncio.sleep(0.3)
+            return False
+        finally:
+            if waited and not run.stopping:
+                self._set(run, "running", previous)
 
     async def _approve(self, run: AgentRun, title: str, detail: str = "") -> None:
         """Спросить разрешения; отказ — Denied, и дальше в этом запуске спрашиваем обо всём."""
@@ -2321,6 +2386,10 @@ class Agent(BaseService):
             return Outcome(
                 False, "Ошибка: нужна ссылка https, tg:, ms-settings:, spotify:, mailto: или whatsapp:"
             )
+        if low.startswith(("http://", "https://")):
+            url, problem = web_url(url)
+            if problem:
+                return Outcome(False, problem)
         parsed = urlparse(url)
         host = (parsed.hostname or "").casefold()
         # ссылка с данными на незнакомый сайт может унести их наружу (инструкция из чужого текста) — спросить

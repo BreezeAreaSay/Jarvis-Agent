@@ -68,6 +68,14 @@ _VERB_SPLIT = re.compile(
     re.IGNORECASE,
 )
 
+# запрос поиска («найди {query}») не забирает составное дело: «найди отели и забронируй самый дешёвый»,
+# «найди файл и отправь его» — это задача агенту, а не поиск в браузере
+_TASK_TAIL = re.compile(
+    r"(?:^|\s)(?:и|а|потом|затем|после)\s+(?:перешли|отправь|пошли|скинь|напиши|позвони|удали|сохрани|"
+    r"забронируй|купи|закажи|оплати|переведи|открой|запусти|включи|выключи|закрой|скачай|установи|"
+    r"прочитай|сравни|выбери|запиши|добавь)(?!\w)"
+)
+
 # слот → (значения слотов, похожесть 0..100) или None
 SlotResolver = Callable[[str], tuple[dict[str, Any], float] | None]
 
@@ -428,7 +436,10 @@ class Matcher:
             return
         if name in FREE_SLOTS:
             for end in [n] if last else range(wi + 1, n):
-                yield end, {name: " ".join(words[wi:end])}, 100.0
+                value = " ".join(words[wi:end])
+                if name == "query" and _TASK_TAIL.search(value):
+                    continue
+                yield end, {name: value}, 100.0
             return
         if name == "keys":
             for end in [n] if last else range(wi + 1, min(n, wi + 6) + 1):

@@ -231,6 +231,11 @@ def resolve_fallback(settings: "AiSettings", secrets: "Secrets") -> LlmConfig | 
     return cfg if cfg.problem() is None else None
 
 
+PRIVATE_NONE = (
+    "Для «приватно: …» нужна модель на этом ПК — выберите её основной или запасной в настройках Jarvis AI "
+    "(Ollama или LM Studio)"
+)
+
 # --- запасной провайдер --------------------------------------------------------------------------------
 # сбой основного провайдера (ключ API, подписка ChatGPT, программа человека — у каждого свои причины) → вид
 OUTAGE_KINDS = {
@@ -1087,6 +1092,20 @@ class LlmClient:
     def fallback_config(self) -> LlmConfig | None:
         return resolve_fallback(self.ctx.settings.value.ai, self.ctx.secrets)
 
+    def private_config(self) -> LlmConfig | None:
+        """Модель на этом ПК для «приватно: …»: основная, если она на этом ПК, иначе запасная, если она на
+        этом ПК (Ollama, LM Studio, свой сервер в домашней сети); нет такой — None."""
+        primary = self.primary_config()
+        if primary.local and primary.problem() is None:
+            return primary
+        backup = self.fallback_config()
+        return backup if backup is not None and backup.local else None
+
+    def private_problem(self) -> str | None:
+        if self.private_config() is None:
+            return PRIVATE_NONE
+        return None
+
     # --- запасной провайдер ---------------------------------------------------------------------------
     def outage(self, provider: str) -> str:
         """Вид сбоя, после которого провайдер на паузе (не зовётся), или "" — можно звать."""
@@ -1305,13 +1324,20 @@ class LlmClient:
         stream: bool = False,
         on_delta: DeltaFn | None = None,
         speed: str | None = None,
+        private: bool = False,
     ) -> LlmResponse:
         """Один ответ модели (с вызовами инструментов, если они есть). on_delta — куски текста по ходу.
 
         tool_choice="none" — инструменты описаны (история с их вызовами остаётся понятной), но вызывать
         их нельзя. speed — сколько модели думать вместо settings.ai.speed (агенту «быстро» мало).
         """
-        cfg = self.config(model)
+        if private:  # «приватно: …» — только модель на этом ПК, без запасного в облаке
+            local = self.private_config()
+            if local is None:
+                raise LlmError(PRIVATE_NONE, kind="config")
+            cfg = dataclasses.replace(local, backup=True)
+        else:
+            cfg = self.config(model)
         if speed and speed != cfg.speed:
             cfg = dataclasses.replace(cfg, speed=speed)
         problem = cfg.problem()

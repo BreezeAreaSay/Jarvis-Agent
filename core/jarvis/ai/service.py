@@ -75,6 +75,14 @@ BACKGROUND_PHRASE = re.compile(
     r"поставь\s+(?:фоновую\s+)?задачу)\s*[:,—–-]?\s*(?P<task>.+)$",
     re.I | re.S,
 )
+# «приватно: …» — ответ только моделью на этом ПК: без облака, поиска в интернете и серверов MCP
+PRIVATE_PHRASE = re.compile(
+    r"^\s*(?:джарвис[,\s]+)?(?:приватно|локально|по\s+секрету|без\s+облака|"
+    r"только\s+на\s+этом\s+(?:пк|компьютере))\s*[:,—–-]?\s*(?P<text>.+)$",
+    re.I | re.S,
+)
+# инструменты, которые ходят в интернет: в приватном ответе их нет
+NETWORK_TOOLS = frozenset({"web_search", "fetch_page", "get_weather", "get_news", "get_rates", "run_agent"})
 _IMAGE_URL = re.compile(r"^data:image/(?:png|jpe?g|webp|gif);base64,", re.I)
 
 
@@ -92,6 +100,7 @@ class Turn:
     model: str
     kind: str
     agent_task: str = ""
+    private: bool = False  # «приватно: …» — только модель на этом ПК (LlmClient.private_config)
     note: str = ""  # пометка для модели к словам человека (снимок экрана приложен…) — в чат не пишется
     shown: str = ""  # текст, уже отправленный в интерфейс
     pending: str = ""  # текст, ещё не отправленный событием chat.delta
@@ -377,6 +386,9 @@ class Ai(BaseService):
         images: list[str] | None = None,
         agent_task: str = "",
     ) -> AskResult:
+        private = PRIVATE_PHRASE.match(text or "") if not agent_task else None
+        if private is not None and private["text"].strip(" .,:"):
+            return await self._private(private["text"].strip(), chat_id, source, images)
         background = BACKGROUND_PHRASE.match(text or "") if not images and not agent_task else None
         if (
             background is not None
@@ -399,6 +411,21 @@ class Ai(BaseService):
         except UserFacingError as e:
             return AskResult(chat_id or "", "", error=str(e))
         turn.note = note
+        return await self._spawn(turn)
+
+    async def _private(
+        self, text: str, chat_id: str | None, source: Source, images: list[str] | None
+    ) -> AskResult:
+        """«Приватно: …» — ответ в режиме «Чат» моделью на этом ПК: без облака, поиска и серверов MCP. Модели
+        на этом ПК нет — понятная ошибка, а не тихий уход в облако."""
+        problem = self.llm.private_problem()
+        if problem:
+            return AskResult(chat_id or "", "", error=problem)
+        try:
+            turn = self._begin(text, chat_id=chat_id, source=source, mode="chat", images=images)
+        except UserFacingError as e:
+            return AskResult(chat_id or "", "", error=str(e))
+        turn.private = True
         return await self._spawn(turn)
 
     def _background(
@@ -667,14 +694,16 @@ class Ai(BaseService):
 
     # --- ответ модели с инструментами ---------------------------------------------------------------------
     async def _run_chat(self, turn: Turn) -> AskResult:
-        backend = self.account_backend()
+        backend = None if turn.private else self.account_backend()
         if backend is not None:
             return await backend.run_chat(turn)
-        problem = self.llm.problem(turn.model or None)
+        problem = self.llm.private_problem() if turn.private else self.llm.problem(turn.model or None)
         if problem:
             return self._finish(turn, error=problem)
         self._status(turn, "thinking", "Думаю…")
         tools = self.tools.available(turn.mode, source=turn.source)
+        if turn.private:  # только то, что не ходит в интернет
+            tools = {k: t for k, t in tools.items() if k not in NETWORK_TOOLS and not k.startswith("mcp__")}
         specs = [t.spec() for t in tools.values()]
         env = ToolEnv(self.ctx, self.web, turn.source, turn.chat_id, user_text=turn.text)
         try:
@@ -699,6 +728,7 @@ class Ai(BaseService):
                     model=turn.model or None,
                     stream=True,
                     on_delta=lambda delta: self._delta(turn, delta),
+                    private=turn.private,
                 )
                 self._flush(turn)
                 turn.usage.add(response.usage)

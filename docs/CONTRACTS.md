@@ -63,6 +63,8 @@ desktop/ (Electron + React)                     core/ (Python 3.12, FastAPI)
 | `DELETE /api/history` | — | `{ok}` |
 | `GET /api/confirm` | — | `{items: Confirmation[]}` |
 | `POST /api/confirm/{id}` | `{allow: bool}` | `{ok}` |
+| `GET /api/diagnostics` | — | `{items: [{id, title, status: ok\|warn\|fail\|off, detail, hint, action}], report}` — «Система» → «Диагностика» (`jarvis/diagnostics.py`): ядро и свободное место, Jarvis AI и запасной ИИ, распознавание, голос и словарь ударений, заметки и браузер фоновых задач, пульт в Telegram, аварийные остановки, журналы; `report` — то же текстом без ключей и личной папки (`~`) |
+| `POST /api/diagnostics/crashes/reset` | — | то же, что `GET /api/diagnostics` — забыть аварийные остановки (`crashguard.reset()`; пункт с `action: "reset"`) |
 
 Settings — модель `jarvis/settings.py` (в интерфейсе — `desktop/src/api/types.ts`). Секреты:
 `ai_api_key, openai_api_key, fish_api_key, elevenlabs_api_key, telegram_token, ha_token, yandex_iot_token,
@@ -95,6 +97,14 @@ sources, error, history}` | `{kind: "unknown", history}` | `{kind: "stop"}` | `{
 denied, detail, icon, command_id}` — `confirm`: итог подтверждения (`title` — вопрос, `status`: `ok` разрешено, `denied`
 отклонено, `cancelled` нет ответа или отменено «Стопом»; `detail` — «Разрешено · Будет отправлено: …», секреты
 замаскированы).
+
+Самопроверка сборки — `python -X utf8 -m jarvis --selftest [--strict] [--json]` (`jarvis/selftest.py`): без сети и
+настоящих данных (временный каталог, платформа `fake`) проверяет версию Python, импорт всех модулей `jarvis.*`,
+библиотеки с нативными частями (на Windows — ещё pywin32, comtypes, pycaw, uiautomation, pynput, soundcard, winrt),
+sherpa-onnx нужной версии и PortAudio, паки команд и словарь ударений (SHA-256 по `ru_dict.json`, рядом
+`LICENSE.md`; `--strict` — без словаря ✗), подъём ядра со всеми сервисами и ответы API с токеном и без него. Код
+выхода 0 — всё ✓; `scripts/build-win.ps1` запускает её встроенным Python после сборки ядра и без ✓ установщик не
+собирает.
 
 `ExecResult = {ok, title, message, icon, say, command_ids, data}`; `data.silent` — не показывать тост,
 `data.cancelled` — отменено человеком.
@@ -405,6 +415,7 @@ Jarvis добавляет вопрос и открывает окно продо
 | `GET /api/ai/models` | — | `{items: [string]}` (с провайдера; у `chatgpt` — каталог Codex; ошибка — пресеты) |
 | `POST /api/ai/test` | — | `{ok, error?, latency_ms, model}` (у `chatgpt` — крошечный ход Codex) |
 | `GET /api/ai/usage` | — | `{month: {requests, prompt_tokens, completion_tokens, cost, since}, budget}` |
+| `GET /api/ai/fallback` | — | `{configured, provider, model, paused: [{provider, reason, text, seconds}]}` — запасной ИИ и кто сейчас на паузе |
 | `GET /api/ai/chatgpt` | — | `ChatGptState` (запускает Codex, если компонент есть) |
 | `POST /api/ai/chatgpt/install` | — | `{ok, installing: true}` — скачивание в фоне (события `ai.chatgpt`), или `{ok, installed: true}` |
 | `POST /api/ai/chatgpt/login` | `{device?: bool}` | `{ok, logged_in, opened?, auth_url?}` — ядро само открывает браузер (вход OAuth ChatGPT); `device: true` — `{verification_url, user_code}` для входа с другого устройства; итог — событием `ai.chatgpt`; 400 — нет компонента или вход не начался |
@@ -495,6 +506,7 @@ error|disabled, error, tools: [{name, description}]}` — секретные `en
 | `agent.pointer` | `{run_id, kind: click\|double\|right\|type\|keys\|scroll\|focus, x, y, label, rect?: [l,t,r,b], ts}` — куда агент жмёт и что вводит, в физических точках экрана (оверлей рисует «курсор агента»; основной монитор: точка оверлея = физическая / масштаб − начало рабочей области) |
 | `mcp.status` | `{server_id, status, error?, tools_count}` |
 | `ai.configured` | `{configured}` — изменилось «ИИ настроен» (ключ, провайдер, адрес, каталог, вход в ChatGPT или программу) |
+| `ai.fallback` | `{active: true, provider, backup, reason, text, seconds}` — основной не ответил, на паузе, отвечает запасной (и тост «Отвечает запасной ИИ — …»); `{active: false}` — паузы сняты (новые настройки или ключ) |
 | `ai.cli` | `{provider, state: installing\|log\|installed\|error\|login\|auth, line?, version?, error?, opened?, logged_in?}` — установка программы-провайдера, окно терминала для входа, смена состояния входа |
 | `ai.chatgpt` | `{state: installing\|installed\|login\|device\|logged_in\|logged_out\|error, error?, version?, account?, auth_url?, verification_url?, user_code?, opened?}` — компонент и вход ChatGPT |
 
@@ -745,6 +757,20 @@ Claude Code — только официальным установщиком (`i
 с действиями агента как инструментами. Ошибки — по-русски (не установлена, нужен вход, лимит подписки со временем
 сброса, модель недоступна, регион, нет связи). Расход записывается с ценой 0 (подписка). `ANTHROPIC_API_KEY` в
 окружение Claude Code не передаётся (иначе он платит ключом, а не подпиской).
+
+**Запасной ИИ** (`settings.ai.fallback_provider` — провайдер по ключу или на этом ПК, не подписка; `fallback_model` —
+пусто: модель по умолчанию; `fallback_base_url` — пусто: адрес пресета; ключ — секрет `ai_fallback_api_key`, у того
+же провайдера, что основной, — его ключ). `LlmError.kind` — вид сбоя: `auth`, `quota`, `rate`, `region`, `server`,
+`network`, `timeout` (запасной поможет) или `config`, `model`, `too_long`, `rejected`, `format` (не поможет — чинить
+запрос или настройки). Основной провайдер по ключу не ответил так, что поможет запасной (после своих повторов), и
+на экран ещё ничего не ушло — `LlmClient.chat` повторяет тот же запрос запасному, а основной ставит на паузу
+(`OUTAGE_COOLDOWN`: квота — 30 мин, ключ и регион — 10, сервер — 2, связь — 1, частота — по `Retry-After`, 10 с —
+10 мин): пока пауза, `LlmClient.config()` отдаёт запасной, и основной не зовётся вовсе. Подписка ChatGPT и
+программы (Claude Code, Gemini CLI, Qwen Code) после сбоя хода (лимит подписки, нет входа, регион, сбой, нет
+связи; `note_outage(provider, reason)`) тоже встают на паузу — `Ai.account_backend()` тогда `None`, и ответы,
+агент и фоновые задачи идут через запасной по ключу (настройки — проверка связи и список моделей —
+`account_backend(routed=False)` и `llm.primary_config()`: всегда основной). Без запасного пауза не ставится.
+Новые настройки ИИ или ключ снимают все паузы.
 
 Провайдеры по ключу — OpenAI-совместимый `/chat/completions` с особенностями пресета (`jarvis/ai/providers.py`):
 регионы (Qwen/Model Studio, Kimi, GLM, MiniMax, Doubao, SiliconFlow), YandexGPT — заголовки

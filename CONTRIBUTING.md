@@ -28,6 +28,10 @@ pwsh -File scripts\dev.ps1        # Windows: ядро + интерфейс с г
 pwsh -File scripts\build-win.ps1  # установщик: desktop\release\Jarvis-Setup-<версия>.exe
 ```
 
+Сборка установщика собирает словарь ударений голоса (`scripts/ru_dict`, нужна сеть; `-SkipStressDict` — без него)
+и запускает самопроверку собранного ядра (`python -m jarvis --selftest --strict`): не прошла — установщик не
+собирается. Самопроверка в разработке: `cd core && uv run python -m jarvis --selftest`.
+
 Без Windows — ядро с платформой-заглушкой (ничего не делает с системой, отдаёт правдоподобные данные) и
 интерфейс в браузере:
 

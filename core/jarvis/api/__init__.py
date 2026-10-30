@@ -11,6 +11,7 @@ from jarvis.api import (
     core,
     data,
     desks,
+    diagnostics,
     images,
     mcp,
     notes,
@@ -45,6 +46,7 @@ def include_all(app: FastAPI) -> None:
         desks,
         scenarios,
         data,
+        diagnostics,
         tools,
     ):
         app.include_router(module.router)

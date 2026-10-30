@@ -99,7 +99,11 @@ denied, detail, icon, command_id}` — `confirm`: итог подтвержде�
 `ExecResult = {ok, title, message, icon, say, command_ids, data}`; `data.silent` — не показывать тост,
 `data.cancelled` — отменено человеком.
 
-`Confirmation = {id, title, detail, kind: command|agent|plugin, source, created, timeout}`.
+`Confirmation = {id, title, detail, kind: command|agent|plugin, source, created, timeout, risk: normal|high}`.
+`risk: high` — необратимое (оплата, перевод, покупка, отправка, удаление, публикация, ввод пароля или данных карты,
+форматирование, выключение; имя сайта, похожее на подделку; `jarvis.confirm.high_risk` по заголовку и подробности):
+голосовое «да» такое не разрешает — только кнопка (Jarvis так и говорит); «нет» голосом работает всегда.
+`settings.voice.confirm_high_by_voice: true` — разрешать голосом и необратимое.
 
 ### События ядра
 
@@ -628,7 +632,8 @@ Teams, Steam, OBS, плееры, Notion…) — `jarvis/ai/playbooks.py`, вме
 порт есть, но браузер не ответил за 3 с — «не отвечает», второй не запускается; закрыли браузер — `closed`,
 выключили настройку — подключение закрывается (скачивания — снова как обычно). Действия: `browser_open {url, new_tab?}`
 (только http/https; «ozon.ru» — https; javascript:, file:, chrome:, data: — нет; ссылка с данными в адресе на сайт,
-которого нет в задаче и среди поисковых, — с разрешения; ждёт загрузку до 10 с; переходит только во вкладке, которую
+которого нет в задаче и среди поисковых, — с разрешения, имя сайта, похожее на подделку, — с разрешения всегда (§7);
+ждёт загрузку до 10 с; переходит только во вкладке, которую
 открыл агент в этом прогоне, или в пустой — во вкладке человека открывает новую), `browser_click {id, double?}`,
 `browser_type {id, text, submit?}` (содержимое заменяется; в `select` — выбор варианта; `submit` — Enter),
 `browser_scroll {direction: down|up|top|bottom, amount?, id?}`, `browser_press {keys}` (события клавиатуры в страницу;
@@ -729,7 +734,8 @@ Claude Code — только официальным установщиком (`i
 
 Провайдеры по ключу — OpenAI-совместимый `/chat/completions` с особенностями пресета (`jarvis/ai/providers.py`):
 регионы (Qwen/Model Studio, Kimi, GLM, MiniMax, Doubao, SiliconFlow), YandexGPT — заголовки
-`Authorization: Api-Key <ключ>` (IAM-токен `t1.…` — `Bearer`) и `OpenAI-Project: <folder_id>`, модель
+`Authorization: Api-Key <ключ>` (IAM-токен `t1.…` — `Bearer`), `OpenAI-Project: <folder_id>` и
+`x-data-logging-enabled: false` (не сохранять запросы), модель
 `gpt://<folder_id>/<модель>` (`settings.ai.folder_id`); Mistral — id вызовов из 9 символов; Doubao — без ключей длины
 в схемах инструментов; Gemini — подписи рассуждений (`extra_content`) возвращаются вместе с вызовами; убранные
 провайдером модели (`deepseek-chat`, `deepseek-reasoner`) заменяются моделью по умолчанию.
@@ -965,7 +971,34 @@ briefcase, battery, calendar, bell, music, home, rocket, heart, book, monitor` �
 
 Секреты не попадают в журналы: `jarvis.log.RedactFilter` прогоняет сообщение и текст исключения через
 `jarvis.redact.redact()` — номера карт (по Луну), CVV, «пароль: …», пин-коды, ключи (`sk-…`, `ghp_…`, `xox…`,
-`AIza…`, `y0_…`, токены ботов Telegram, `Bearer`/`Basic`, JWT) и `key=…`/`token: …`/`*_SESSION_STRING=…`.
+`AIza…`, `y0_…`, `glpat-…`, `hf_…`, Stripe `sk_live_…`, Yandex Cloud `AQVN…` и IAM `t1.…`, Google `ya29.…`, токены
+ботов Telegram, `Bearer`/`Basic`, JWT), закрытые ключи PEM целиком, пароль в адресе подключения
+(`postgres://user:•••@host`) и `key=…`/`token: …`/`*_SESSION_STRING=…`.
+
+**Наружу — без секретов** (`settings.ai.mask_secrets`, по умолчанию `true`): тот же `redact()` проходит всё, что
+уходит облачной модели, — сообщения в API провайдера (`redact_messages`: текст и текстовые части, картинки как есть;
+модели на этом ПК и в локальной сети — без маски), запросы, инструкции и результаты инструментов подписки ChatGPT
+(Codex), задание и системный текст программ (Claude Code, Gemini CLI, Qwen Code), ответы MCP-сервера Jarvis.
+Модель видит `•••` вместо ключа; печатает и вводит Jarvis то, что сказал человек.
+YandexGPT получает заголовок `x-data-logging-enabled: false` — Yandex не сохраняет запросы и ответы у себя.
+
+**Окна, скрытые от ИИ** (`jarvis/ai/private_windows.py`): менеджеры паролей (KeePass, KeePassXC, 1Password,
+Bitwarden, LastPass, Dashlane, Enpass, RoboForm, Keeper, NordPass, Proton Pass, Password Safe, Kaspersky Password
+Manager), окно «Безопасность Windows» с вводом пароля и запрос UAC, а также программы и слова заголовка из
+`settings.ai.private_apps` («keepass» / «keepass.exe» / «Сбербанк Онлайн»). Агент такое окно не снимает и не читает
+(ни элементов, ни снимка — модели только «окно скрыто от ИИ»), в нём не кликает и не печатает; снимок всего экрана,
+на котором видно такое окно, не делается (лупа на его месте — тоже); «что на экране?» с таким окном впереди — без
+снимка, с пояснением.
+
+**Ссылки**: имя сайта не латиницей в вопросе «Открыть …?» показывается и в настоящем виде (punycode:
+`пример.рф` — `xn--e1afmkfd.xn--p1ai`); имя, похожее на подделку (буквы разных алфавитов в одном имени —
+`gооgle.com` с русскими «о»; имя целиком из русских двойников латинских букв вне русских зон — `аррӏе.com`),
+спрашивается всегда, даже без данных в адресе, с предупреждением и настоящим именем в заголовке, и только кнопкой
+(`jarvis.ai.policy.lookalike_host`, `link_note`) — в чате, у агента на экране и в браузере агента.
+
+`core/tests/test_hygiene.py` проверяет всё, что лежит в git: ни ключей и паролей (тесты с поддельными — не в счёт),
+ни личных путей (`C:\Users\<имя>` — только образцы вроде `me`), ни адресов почты не на `example.*`/`noreply`, ни
+программ, моделей, баз, журналов и ключевых файлов; текст — до 1 МБ, двоичный файл — до 512 КБ.
 
 | Маршрут | Тело | Ответ |
 |---|---|---|

@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from jarvis.ai.browser import launch, task_tools
-from jarvis.ai.browser.agent_browser import HEADLESS, START_PAGE, WINDOW, AgentBrowser
+from jarvis.ai.browser.agent_browser import HEADLESS, START_PAGE, WINDOW, AgentBrowser, safe_file_name
 from jarvis.background import runner
 from jarvis.background.model import Task
 from jarvis.context import AppContext
@@ -369,3 +369,39 @@ async def test_download_with_permission_into_own_folder(bg: Bg, chrome: FakeChro
     assert f"Скачан файл «price.zip»: {folder / 'price.zip'}" in _tool(script, 2)
     assert chrome.download_behavior == "deny"  # после щелчка — снова без скачиваний
     assert any("Скачан файл «price.zip»" in e.text for e in task.log)
+    assert task.approved == ["download:shop.test:/price.zip"]  # разрешена эта ссылка, а не все скачивания
+
+
+def test_downloaded_names_are_safe_for_windows() -> None:
+    assert safe_file_name("get?id=7") == "get_id=7"
+    assert safe_file_name("..\\..\\Windows\\evil.exe") == "evil.exe"
+    assert safe_file_name("CON.txt") == "_CON.txt" and safe_file_name("  .  ") == "файл"
+
+
+async def test_download_keeps_files_and_takes_only_its_own_tab(
+    bg: Bg, chrome: FakeChrome, tmp_path: Path
+) -> None:
+    ctx, _, _ = bg
+    folder = tmp_path / "Загрузки"
+    folder.mkdir()
+    use_agent_browser(ctx, chrome)
+    browser: AgentBrowser = ctx.agent_browser  # type: ignore[attr-defined]
+    mine, other = await browser.task_tab("t1"), await browser.task_tab("t2", fresh=True)
+    session = await browser.session(mine)
+    (folder / "price.zip").write_bytes(b"old")
+    tab, foreign = chrome.tab(mine), chrome.tab(other)
+    assert tab is not None and foreign is not None
+
+    async def click() -> None:
+        await chrome.start_download(foreign, "https://shop.test/other.zip")  # вкладка другой задачи
+        await chrome.start_download(tab, "https://shop.test/price.zip")
+        await chrome.start_download(tab, "https://shop.test/price.zip")  # второе подряд — уже не наше
+
+    info = await browser.download(folder, click, session=session)
+    assert info is not None and info["state"] == "completed"
+    assert info["name"] == "price (2).zip" and info["path"] == str(folder / "price (2).zip")
+    assert (folder / "price.zip").read_bytes() == b"old"  # прежний файл не затёрт
+    assert (folder / "price (2).zip").read_bytes() == b"PK"
+    assert [d["state"] for d in chrome.downloads] == ["canceled", "completed", "canceled"]
+    assert sorted(p.name for p in folder.iterdir()) == ["price (2).zip", "price.zip"]  # без файлов-guid
+    assert chrome.download_behavior == "deny"

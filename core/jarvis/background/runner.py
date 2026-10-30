@@ -17,11 +17,13 @@ Host здесь ведёт себя как агент (check_finish, finish_summ
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
 import re
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -54,6 +56,7 @@ KEEP_TOOL_RESULTS = 12  # цикл API: столько последних отв
 OLD_RESULT = 400
 MAX_NUDGES = 2  # модель ответила текстом без finish — столько раз попросить продолжить
 UNTRUSTED_TAG = re.compile(r"\[[0-9a-f]{6}\]")
+TIMEOUT_TICK_S = 0.5  # как часто run_tool сверяет timeout инструмента
 LIVE_WAIT_S = 540.0  # вопрос: столько ждать ответа в заходе (вызов MCP у программ — до 10 минут), потом пауза
 
 SKIPPED = (
@@ -190,6 +193,7 @@ class Session:
     written: list[str] = field(default_factory=list)  # заметки, записанные в этом заходе
     live_wait: float = field(default_factory=lambda: LIVE_WAIT_S)
     tab: str = ""  # вкладка браузера агента (её ведёт jarvis.ai.browser.task_tools)
+    held: int = 0  # ждём ответа человека или скачивания со своим сроком — не в счёт timeout инструмента
 
     @property
     def ctx(self) -> Any:
@@ -206,6 +210,37 @@ class Session:
 
     def worked(self) -> float:
         return max(0.0, time.monotonic() - self.started - self.waited)
+
+    @contextlib.contextmanager
+    def untimed(self) -> Iterator[None]:
+        """Время внутри не считается в timeout инструмента: ответ человека, скачивание со своим сроком."""
+        self.held += 1
+        try:
+            yield
+        finally:
+            self.held -= 1
+
+
+async def run_tool(run: Session, tool: task_tools.TaskTool, args: dict[str, Any]) -> Outcome:
+    """tool.run не дольше tool.timeout — не считая времени, пока человек отвечает на вопрос инструмента
+    (разрешение, план) или идёт скачивание: иначе вопрос обрывался бы через минуту, а ответа ждут дольше."""
+    job = asyncio.ensure_future(tool.run(run, args))
+    spent = 0.0
+    try:
+        while True:
+            step = min(TIMEOUT_TICK_S, max(0.01, tool.timeout - spent))
+            done, _ = await asyncio.wait({job}, timeout=step)
+            if done:
+                return job.result()
+            if not run.held:
+                spent += step
+            if spent >= tool.timeout:
+                raise TimeoutError
+    finally:
+        if not job.done():
+            job.cancel()
+            with contextlib.suppress(BaseException):
+                await job
 
 
 class Host:
@@ -278,7 +313,7 @@ class Host:
         task.steps += 1
         title = one_line(tool.title(args) or call.name, 120)
         try:
-            outcome = await asyncio.wait_for(tool.run(run, args), tool.timeout)
+            outcome = await run_tool(run, tool, args)
         except Parked:
             run.parked = True
             return PARKED, []

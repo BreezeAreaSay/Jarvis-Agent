@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -100,6 +101,33 @@ DOWNLOAD_START_S = 8.0  # щелчок по ссылке на файл: скач
 DOWNLOAD_WAIT_S = 300.0  # большой файл — столько ждать конца загрузки
 
 
+_BAD_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_RESERVED = frozenset(
+    {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+)
+
+
+def safe_file_name(name: str) -> str:
+    """Имя файла с сайта — годное для Windows: без «?», «:» и путей, не CON/NUL."""
+    clean = _BAD_NAME.sub("_", Path(name.replace("\\", "/")).name).strip(" .") or "файл"
+    stem = clean.split(".", 1)[0]
+    return f"_{clean}" if stem.casefold() in _RESERVED else clean[:180]
+
+
+def place_download(folder: Path, guid: str, name: str) -> Path:
+    """Скачанное браузером под именем guid (allowAndName) — переименовать в имя с сайта, не затирая уже
+    лежащий в папке файл: «прайс.zip», «прайс (2).zip»…"""
+    target = folder / safe_file_name(name)
+    stem, suffix, n = target.stem, target.suffix, 1
+    while target.exists():
+        n += 1
+        target = folder / f"{stem} ({n}){suffix}"
+    source = folder / guid
+    if source.exists():
+        os.replace(source, target)
+    return target
+
+
 def download_folder(ctx: Any) -> Path:
     """Куда фоновые задачи скачивают файлы: «Загрузки\\Jarvis» (нет такой папки — <данные Jarvis>/
     downloads)."""
@@ -133,6 +161,8 @@ class AgentBrowser(Browser):
         # скачивают по одной
         self.download_events: dict[str, dict[str, Any]] = {}
         self._download_lock = asyncio.Lock()
+        self._download_frames: set[str] = set()  # рамки вкладки задачи, чей щелчок сейчас скачивает
+        self._download_taken = ""  # guid уже принятого скачивания этого щелчка — второе отменяется
 
     # --- что это за браузер ------------------------------------------------------------------------------
     @property
@@ -274,13 +304,22 @@ class AgentBrowser(Browser):
 
     def _event(self, method: str, params: dict[str, Any], session: str) -> None:
         if method == "Browser.downloadWillBegin" and self.downloads_allowed:
-            name = Path(str(params.get("suggestedFilename") or "файл")).name or "файл"
-            self.download_events[str(params.get("guid") or "")] = {
-                "name": name,
+            guid = str(params.get("guid") or "")
+            frame = str(params.get("frameId") or "")
+            # своё — из вкладки задачи (или открытой ею новой); из вкладки другой задачи и второе подряд — нет
+            others = set(self.task_tabs.values()) - self._download_frames
+            mine = not self._download_taken and (not frame or frame not in others)
+            self.download_events[guid] = {
+                "name": safe_file_name(str(params.get("suggestedFilename") or "файл")),
                 "url": str(params.get("url") or ""),
                 "state": "inProgress",
                 "bytes": 0,
+                "mine": mine,
             }
+            if mine:
+                self._download_taken = guid
+            else:
+                self.ctx.spawn(self._cancel_download(guid), "agent-browser-download")
         elif method == "Browser.downloadProgress":
             item = self.download_events.get(str(params.get("guid") or ""))
             if item is not None:
@@ -289,40 +328,77 @@ class AgentBrowser(Browser):
         super()._event(method, params, session)
 
     async def download(
-        self, folder: Path, click: Callable[[], Awaitable[Any]], *, timeout: float = DOWNLOAD_WAIT_S
+        self,
+        folder: Path,
+        click: Callable[[], Awaitable[Any]],
+        *,
+        session: str = "",
+        timeout: float = DOWNLOAD_WAIT_S,
     ) -> dict[str, Any] | None:
-        """Скачать то, что начнёт click(), в folder: браузер скачивает только на время этого щелчка (в
-        остальное время — нет); ждёт конца загрузки до timeout. Итог — {name, url, state, bytes, path}; не
-        началось за DOWNLOAD_START_S — None."""
+        """Скачать то, что начнёт click() во вкладке session, в folder: браузер скачивает только на время
+        этого щелчка (в остальное время — нет) и только одно скачивание из этой вкладки (из вкладок других
+        задач и второе подряд — отменяет); ждёт конца загрузки до timeout. Файл получает имя с сайта, не
+        затирая уже лежащий в папке. Итог — {name, url, state, bytes, path}; не началось за
+        DOWNLOAD_START_S — None."""
         async with self._download_lock:
             folder.mkdir(parents=True, exist_ok=True)
             client = self._client()
             known = set(self.download_events)
+            self._download_frames = await self._frames(session) if session else set()
+            self._download_taken = ""
             await client.send(
                 "Browser.setDownloadBehavior",
-                {"behavior": "allow", "downloadPath": str(folder), "eventsEnabled": True},
+                {"behavior": "allowAndName", "downloadPath": str(folder), "eventsEnabled": True},
             )
             self.downloads_allowed = True
             try:
                 await click()
                 began = time.monotonic()
-                found: dict[str, Any] | None = None
+                guid = ""
                 while time.monotonic() - began < timeout:
-                    new = [g for g in self.download_events if g not in known]
-                    if new:
-                        found = self.download_events[new[0]]
-                        if found["state"] != "inProgress":
-                            break
-                    elif time.monotonic() - began > DOWNLOAD_START_S:
+                    guid = self._download_taken
+                    if guid and self.download_events[guid]["state"] != "inProgress":
+                        break
+                    if not guid and time.monotonic() - began > DOWNLOAD_START_S:
                         break
                     await asyncio.sleep(0.1)
-                return None if found is None else {**found, "path": str(folder / found["name"])}
+                if not guid:
+                    return None
+                found = self.download_events[guid]
+                if found["state"] == "inProgress":
+                    await self._cancel_download(guid)  # не уложилось в timeout — недокачанное не оставлять
+                    found["state"] = "canceled"
+                    return {**found, "path": ""}
+                path = await self.ctx.run_io(place_download, folder, guid, found["name"])
+                return {**found, "name": path.name, "path": str(path)}
             finally:
                 with contextlib.suppress(CdpError, TimeoutError, UserFacingError):
                     await client.send(
                         "Browser.setDownloadBehavior", {"behavior": "deny", "eventsEnabled": True}
                     )
                 self.downloads_allowed = False
+                self._download_frames, self._download_taken = set(), ""
+                for g in [g for g in self.download_events if g not in known]:
+                    if self.download_events[g]["state"] != "inProgress":
+                        self.download_events.pop(g, None)
+
+    async def _frames(self, session: str) -> set[str]:
+        """Рамки вкладки: сама вкладка и рамки внутри страницы (скачивание из них — тоже её)."""
+        ids = {self._targets.get(session, "")} - {""}
+        with contextlib.suppress(CdpError, TimeoutError, UserFacingError):
+            tree = await self.send("Page.getFrameTree", session=session, timeout=5.0)
+            stack = [tree.get("frameTree") or {}]
+            while stack:
+                node = stack.pop()
+                frame = str((node.get("frame") or {}).get("id") or "")
+                if frame:
+                    ids.add(frame)
+                stack.extend(node.get("childFrames") or [])
+        return ids
+
+    async def _cancel_download(self, guid: str) -> None:
+        with contextlib.suppress(CdpError, TimeoutError, UserFacingError):
+            await self._client().send("Browser.cancelDownload", {"guid": guid})
 
     def _closed(self) -> None:
         super()._closed()

@@ -271,13 +271,14 @@ class TaskBrowser(BrowserTools):
             run,
             f"Скачать файл с {site}: «{name}»?",
             f"В папку {folder} — без открытия и запуска",
-            f"download:{page.host}:{element.name}",
+            f"download:{page.host}:{element.url or element.name}",  # разрешение — на эту ссылку, не на все
         )
 
         async def click() -> None:
             await self._press_element(run, browser, page, session, element, double=False)
 
-        info = await browser.download(folder, click)
+        with run.untimed():  # большой файл качается дольше срока щелчка — у скачивания свой срок
+            info = await browser.download(folder, click, session=session)
         if info is None:
             return Outcome(
                 False, "Ошибка: скачивание не началось — возможно, нужна другая кнопка или вход на сайт"

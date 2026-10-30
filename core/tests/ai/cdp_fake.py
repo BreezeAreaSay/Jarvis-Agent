@@ -152,7 +152,9 @@ class FakeChrome:
         self.active = ""
         self.commands: list[tuple[str, dict[str, Any]]] = []
         self.download_behavior = "default"
+        self.download_path = ""
         self.downloads: list[dict[str, Any]] = []
+        self.canceled: set[str] = set()  # Browser.cancelDownload
         self.file_choosers: list[str] = []  # окна выбора файла, которые открылись у человека (не перехвачены)
         self.clicked: list[str] = []
         self.closed = False  # Browser.close
@@ -349,17 +351,33 @@ class FakeChrome:
         if node.tag == "A":
             href = node.attrs.get("href", "")
             if "download" in node.attrs or href.endswith(".zip") or "data-file" in node.attrs:
-                guid = self._id()
-                name = href.rsplit("/", 1)[-1]
-                state = "canceled" if self.download_behavior == "deny" else "completed"
-                self.downloads.append({"name": name, "state": state})
-                await self.emit(
-                    "Browser.downloadWillBegin", {"guid": guid, "url": href, "suggestedFilename": name}
-                )
-                await self.emit("Browser.downloadProgress", {"guid": guid, "state": state})
+                await self.start_download(tab, href)
                 return None
             await self.navigate(tab, urljoin(tab.url, href))
         return None
+
+    async def start_download(self, tab: FakePage, href: str, *, frame: str = "") -> str:
+        """Скачивание, начатое страницей (ссылкой или сама): allowAndName — файл <папка>/<guid>, как у
+        Chrome."""
+        guid = self._id()
+        name = href.rsplit("/", 1)[-1]
+        state = "canceled" if self.download_behavior == "deny" else "completed"
+        self.downloads.append({"name": name, "state": state})
+        await self.emit(
+            "Browser.downloadWillBegin",
+            {"guid": guid, "url": href, "suggestedFilename": name, "frameId": frame or tab.target},
+        )
+        for _ in range(10):  # Jarvis успевает отменить чужое скачивание до конца
+            if guid in self.canceled or self.download_behavior in ("deny", "default"):
+                break
+            await asyncio.sleep(0.005)
+        if guid in self.canceled:
+            state = "canceled"
+            self.downloads[-1]["state"] = state
+        if state == "completed" and self.download_behavior == "allowAndName" and self.download_path:
+            Path(self.download_path, guid).write_bytes(b"PK")
+        await self.emit("Browser.downloadProgress", {"guid": guid, "state": state})
+        return guid
 
     # --- команды --------------------------------------------------------------------------------------------
     async def _run(self, method: str, p: dict[str, Any], session: str, tab: FakePage | None) -> Any:
@@ -372,6 +390,10 @@ class FakeChrome:
             return {"processInfo": [{"type": "browser", "id": self.pid}, {"type": "renderer", "id": 1}]}
         if method == "Browser.setDownloadBehavior":
             self.download_behavior = p.get("behavior", "default")
+            self.download_path = str(p.get("downloadPath") or "")
+            return {}
+        if method == "Browser.cancelDownload":
+            self.canceled.add(str(p.get("guid") or ""))
             return {}
         if method in ("Target.setDiscoverTargets", "Page.enable", "Page.bringToFront"):
             return {}

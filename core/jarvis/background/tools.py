@@ -8,6 +8,7 @@
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -195,13 +196,22 @@ def plan_needs_approval(task: Any, steps: list[dict[str, Any]], mode: str) -> bo
     return mode == "always" or len(steps) >= BIG_PLAN or bool(task.repeat)
 
 
+_PLAN_YES = ("начина", "да", "ок", "окей", "давай", "утвержда", "соглас", "поехали", "годится", "go", "yes")
+_PLAN_NO = ("отмен", "нет", "не надо", "стоп", "не начина", "no")
+_PLAN_BUT = re.compile(r"\b(?:но|только|сначала|кроме|без|добавь|убери|замени|поменяй|лучше|а также)\b")
+
+
 def plan_approved(answer: str) -> bool | None:
-    """Ответ на «Утвердить план?»: True — начинать, False — отменить задачу, None — правка плана словами."""
-    low = " ".join(answer.casefold().split())
-    if low.startswith(("начина", "да", "ок", "давай", "утвержда", "соглас", "поехали", "go")):
-        return True
-    if low.startswith(("отмен", "нет", "не надо", "стоп", "не начина")):
+    """Ответ на «Утвердить план?»: True — начинать, False — отменить задачу, None — правка плана словами.
+    Да или нет — только короткий ответ без оговорок: «да, но сначала сравни цены» и «нет, лучше через
+    Яндекс» — правки, а не «начинай» и не «отмени задачу»."""
+    low = " ".join(re.sub(r"[^\w\s-]", " ", answer.casefold().replace("ё", "е")).split())
+    if not low or len(low.split()) > 3 or _PLAN_BUT.search(low):
+        return None
+    if low.startswith(_PLAN_NO):
         return False
+    if low.startswith(_PLAN_YES):
+        return True
     return None
 
 
@@ -215,7 +225,8 @@ async def _update_plan(s: "Session", args: dict[str, Any]) -> Outcome:
     mode = str(getattr(s.ctx.settings.value.background, "approve_plan", "big"))
     if not plan_needs_approval(s.task, steps, mode):
         return Outcome(True, f"План обновлён ({done} из {len(steps)}):\n{lines}", "")
-    numbered = "\n".join(f"{i}. {x['text']}" for i, x in enumerate(steps, 1))
+    numbered = "\n".join(f"{i}. {one_line(x['text'], 160)}" for i, x in enumerate(steps, 1))
+    s.service.supersede_plans(s.task)  # прежний неотвеченный план (до паузы) — уже не тот
     answer = await s.service.ask(
         s, f"Утвердить план?\n{numbered}", [PLAN_GO, PLAN_STOP], kind="plan", detail="Можно ответить правкой"
     )
@@ -223,13 +234,8 @@ async def _update_plan(s: "Session", args: dict[str, Any]) -> Outcome:
     if verdict:
         s.task.plan_ok = True
         return Outcome(True, f"Человек утвердил план — выполняй его:\n{lines}", "План утверждён")
-    if verdict is False:
-        return Outcome(
-            True,
-            "Человек отменил задачу. Ничего не делай — сразу finish со status=failed и итогом «Отменено "
-            "человеком».",
-            "Задача отменена",
-        )
+    if verdict is False:  # задачу отменяет сам ответ (Background.answer) — заход сейчас остановится
+        return Outcome(True, "Человек отменил задачу — ничего не делай.", "Задача отменена")
     return Outcome(
         True,
         f"Человек просит поправить план: «{one_line(answer, 600)}». Составь новый план с учётом этого и "

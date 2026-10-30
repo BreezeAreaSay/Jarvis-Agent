@@ -71,6 +71,12 @@ def allowed(answer: str) -> bool:
     return low.startswith(ALLOW) and not low.startswith(("не ", "нет", "отклон"))
 
 
+def _lines(text: str, limit: int) -> str:
+    """Текст по строкам (план — шаг в строке): пробелы в строке схлопнуты, пустые строки убраны."""
+    out = "\n".join(" ".join(line.split()) for line in str(text).splitlines() if line.strip())
+    return out if len(out) <= limit else out[: max(1, limit - 1)].rstrip() + "…"
+
+
 class Background(BaseService):
     def __init__(self, ctx: Any) -> None:
         super().__init__(ctx)
@@ -78,6 +84,7 @@ class Background(BaseService):
         self.vault = Vault(ctx)
         self._tasks: dict[str, Task] = {}
         self._runners: dict[str, asyncio.Task[None]] = {}
+        self._cancel_summary: dict[str, str] = {}  # задача → итог отмены («план не утверждён»)
         self._notes_busy: set[str] = set()  # заметка задачи пишется сейчас…
         self._notes_again: set[str] = set()  # …и за это время задача снова изменилась
         self._waiters: dict[str, asyncio.Future[str]] = {}  # вопрос → ответ (пока заход ждёт)
@@ -222,18 +229,21 @@ class Background(BaseService):
         self._schedule()
         return task
 
-    async def cancel(self, task_id: str) -> Task:
+    async def cancel(self, task_id: str, summary: str = "") -> Task:
         """Отменить: идущую — остановить; повторяющуюся — и больше не запускать."""
         task = self.get(task_id)
         if not task.active and not (task.recurring and task.status in ("scheduled", "paused")):
             return task
         runner = self._runners.get(task_id)
         if runner is not None and not runner.done():
+            if summary:
+                self._cancel_summary[task_id] = summary  # итог запишет сам остановленный заход
             runner.cancel()
             with contextlib.suppress(Exception):
                 await asyncio.wait({runner}, timeout=STOP_WAIT_S)
+        self._cancel_summary.pop(task_id, None)
         if task.active or task.status in ("scheduled", "paused"):  # ждала очереди, ответа или расписания
-            summary = "Повторы остановлены." if task.recurring else "Отменено."
+            summary = summary or ("Повторы остановлены." if task.recurring else "Отменено.")
             self._finish(task, "cancelled", summary=summary)
         return task
 
@@ -330,17 +340,27 @@ class Background(BaseService):
         question.answer, question.answered = text[:2000], time.time()
         if question.kind == "approval" and question.key and allowed(text):
             task.approved.append(question.key)
-        if question.kind == "plan" and plan_approved(text):
+        verdict = plan_approved(text) if question.kind == "plan" else None
+        if verdict:
             task.plan_ok = True  # утвердили, пока задача на паузе, — второй раз не спрашиваем
         task.add_log(f"Ответ: {one_line(text, 200)}", "note")
         waiter = self._waiters.get(question.id)
         if waiter is not None and not waiter.done():
             waiter.set_result(text)
-        elif task.status == "waiting" and task.id not in self._runners:
+        elif task.status == "waiting" and task.id not in self._runners and verdict is not False:
             task.status = "queued"  # заход закончился паузой — продолжить новым
             self._schedule()
         self._save_now(task)
+        if verdict is False:  # «Отмени задачу» на «Утвердить план?» — отменить, а не просить модель
+            self.ctx.spawn(self.cancel(task_id, "Отменено: план не утверждён."), "background-cancel")
         return task
+
+    def supersede_plans(self, task: Task) -> None:
+        """Новый план на утверждение: прежние неотвеченные «Утвердить план?» закрыть — ответ на них уже ни к
+        чему (задача составила план заново после паузы)."""
+        for q in task.questions:
+            if q.kind == "plan" and q.open:
+                q.answer, q.answered = "(заменён новым планом)", time.time()
 
     async def notebooklm(self, task_id: str) -> dict[str, Any]:
         """Итог и источники задачи — файлом для NotebookLM в хранилище: {path, link, urls}."""
@@ -379,9 +399,8 @@ class Background(BaseService):
     ) -> str:
         """Вопрос человеку: ждать ответа до session.live_wait, потом — Parked (задача на паузе)."""
         task = session.task
-        question = Question(
-            new_id(), one_line(text, 500), kind, list(options or []), one_line(detail, 300), key=key
-        )
+        shown = _lines(text, 1500) if kind == "plan" else one_line(text, 500)  # план — по шагу в строке
+        question = Question(new_id(), shown, kind, list(options or []), one_line(detail, 300), key=key)
         task.questions.append(question)
         task.status = "waiting"
         self._save_now(task)
@@ -389,6 +408,7 @@ class Background(BaseService):
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._waiters[question.id] = future
         began = time.monotonic()
+        session.held += 1  # ответа ждут дольше, чем срок самого инструмента
         try:
             self.ctx.bus.publish("background.question", {"task_id": task.id, "question": vars(question)})
             await self._notify("question", task, f"{task.title}: {question.text}", question)
@@ -396,6 +416,7 @@ class Background(BaseService):
         except TimeoutError:
             raise Parked from None
         finally:
+            session.held -= 1
             self._waiters.pop(question.id, None)
             session.waited += time.monotonic() - began
         task.status = "running"
@@ -482,7 +503,7 @@ class Background(BaseService):
                 task.status = "running"
                 self._dirty.add(task.id)
                 return
-            self._finish(task, "cancelled", summary="Отменено.")
+            self._finish(task, "cancelled", summary=self._cancel_summary.pop(task.id, "") or "Отменено.")
         except UserFacingError as e:
             log.info("фоновая задача %s: %s", task.id, e)
             self._finish(task, "failed", error=str(e))

@@ -4,13 +4,16 @@
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
 
+from jarvis.ai.agent import Outcome
 from jarvis.background import runner
-from jarvis.background.model import Task, TaskStore
+from jarvis.background.model import Question, Task, TaskStore
+from jarvis.background.tools import TaskTool, plan_approved
 from jarvis.context import AppContext
 from jarvis.services import UserFacingError
 from tests.ai.fakes import ScriptedLlm, calls, completion
@@ -345,8 +348,88 @@ async def test_plan_edit_and_cancel_answers(bg: Bg) -> None:
     )
     assert "просит поправить план: «Только DNS и Ozon" in _tool_texts(script, 1)[0]
     service(ctx).answer(task.id, "", "Отмени задачу")
-    await until(lambda: task.status == "failed")
-    assert not task.plan_ok and "Человек отменил задачу" in _tool_texts(script, 2)[-1]
+    await until(lambda: task.status == "cancelled")  # отменяет сам ответ, а не модель по просьбе
+    assert not task.plan_ok and task.summary == "Отменено: план не утверждён."
+
+
+@pytest.mark.parametrize(
+    ("answer", "verdict"),
+    [
+        ("Начинай", True),
+        ("да", True),
+        ("Ок, давай", True),
+        ("Отмени задачу", False),
+        ("нет", False),
+        ("да, но сначала сравни цены на Ozon", None),  # оговорка — правка, а не «начинай»
+        ("нет, лучше через Яндекс Маркет", None),  # и не «отмени задачу»
+        ("добавь ещё М.Видео", None),
+    ],
+)
+def test_plan_verdict_only_for_short_answers(answer: str, verdict: bool | None) -> None:
+    assert plan_approved(answer) is verdict
+
+
+async def test_plan_question_keeps_one_step_per_line(bg: Bg) -> None:
+    ctx, script, _ = bg
+    script.add(
+        calls(("update_plan", {"steps": BIG_PLAN})),
+        calls(("finish", {"status": "done", "summary": "Готово."})),
+    )
+    task = service(ctx).create("Сравни цены на RTX 5070 в трёх магазинах")
+    await until(lambda: task.open_question() is not None)
+    question = task.open_question()
+    assert question is not None
+    assert question.text.splitlines() == [
+        "Утвердить план?",
+        "1. Найти магазины",
+        "2. Собрать цены",
+        "3. Сравнить",
+        "4. Записать",
+    ]
+    service(ctx).answer(task.id, question.id, "да")
+    await until(lambda: task.status == "done")
+
+
+async def test_tool_timeout_does_not_count_the_wait_for_a_person(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner, "TIMEOUT_TICK_S", 0.01)
+    session: Any = SimpleNamespace(held=0)
+
+    async def asks(run: Any, args: dict[str, Any]) -> Outcome:
+        run.held += 1  # как Background.ask: ждём ответа человека
+        try:
+            await asyncio.sleep(0.2)
+        finally:
+            run.held -= 1
+        return Outcome(True, "ответ")
+
+    async def hangs(run: Any, args: dict[str, Any]) -> Outcome:
+        await asyncio.sleep(10)
+        return Outcome(True, "")
+
+    waited = TaskTool("asks", "", {}, [], asks, lambda a: "", timeout=0.05)
+    assert (await runner.run_tool(session, waited, {})).content == "ответ"  # ждали 0.2 с при сроке 0.05
+    with pytest.raises(TimeoutError):
+        await runner.run_tool(session, TaskTool("hangs", "", {}, [], hangs, lambda a: "", timeout=0.05), {})
+
+
+async def test_cancel_plan_while_parked(bg: Bg, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx, script, _ = bg
+    monkeypatch.setattr(runner, "LIVE_WAIT_S", 0.05)
+    script.add(calls(("update_plan", {"steps": BIG_PLAN})))
+    task = service(ctx).create("Сравни цены на RTX 5070 в трёх магазинах")
+    await until(lambda: task.status == "waiting" and task.id not in service(ctx)._runners)
+    service(ctx).answer(task.id, "", "Отмени задачу")
+    await until(lambda: task.status == "cancelled")
+    assert task.summary == "Отменено: план не утверждён." and len(script.requests) == 1  # нового захода нет
+
+
+async def test_new_plan_after_pause_supersedes_the_old_question(bg: Bg) -> None:
+    ctx, _, _ = bg
+    task = service(ctx).create("Сравни цены")
+    old = Question("q1", "Утвердить план?\n1. Старый план", "plan", ["Начинай", "Отмени задачу"])
+    task.questions.append(old)
+    service(ctx).supersede_plans(task)
+    assert not old.open and old.answer == "(заменён новым планом)"
 
 
 async def test_small_plan_or_never_setting_runs_without_question(bg: Bg) -> None:

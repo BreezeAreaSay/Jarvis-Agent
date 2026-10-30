@@ -1006,6 +1006,9 @@ class LlmClient:
             headers["Authorization"] = f"{scheme} {cfg.api_key}"
         if cfg.preset.folder and cfg.folder_id:
             headers["OpenAI-Project"] = cfg.folder_id  # каталог Yandex Cloud
+        host = (urlparse(cfg.base_url).hostname or "").lower()
+        if cfg.provider == "yandex" or host.endswith(".api.cloud.yandex.net"):
+            headers["x-data-logging-enabled"] = "false"  # Yandex не сохраняет у себя запросы и ответы
         if cfg.provider == "openrouter":
             headers["X-Title"] = "Jarvis"
         return headers

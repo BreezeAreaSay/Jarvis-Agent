@@ -34,10 +34,13 @@ from jarvis.ai.policy import (
     RISKY_KEYS,
     SEARCH_HOSTS,
     SEND_KEYS,
+    ascii_host,
     has_card_number,
     is_messenger,
     is_shell_window,
     jarvis_hotkeys,
+    link_note,
+    lookalike_host,
     normalize_combo,
 )
 from jarvis.ai.web import WebClient, check_public_url, site_name
@@ -419,14 +422,14 @@ async def _open_url(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
     parsed = urlparse(url)
     host = (parsed.hostname or "").casefold()
     known = bool(SEARCH_HOSTS.search(host)) or host in env.user_text.casefold()
-    if (
-        parsed.query
-        and not known
-        and not await confirm(
-            env, f"Открыть {site_name(url) or host}?", f"Адрес с данными: {one_line(url, 160)}"
-        )
-    ):
-        return ToolOutput("Пользователь не разрешил открыть ссылку.", ok=False, detail="Отклонено")
+    # имя сайта, похожее на подделку («gооgle.com» с русскими «о»), — спросить, даже если адрес без данных
+    fake = lookalike_host(host)
+    if (parsed.query and not known) or fake:
+        name = ascii_host(host) if fake else (site_name(url) or host)
+        label = "Адрес с данными" if parsed.query else "Адрес"
+        detail = f"{link_note(host)} {label}: {one_line(url, 160)}".strip()
+        if not await confirm(env, f"Открыть {name}?", detail):
+            return ToolOutput("Пользователь не разрешил открыть ссылку.", ok=False, detail="Отклонено")
     await env.ctx.run_platform(env.ctx.platform.open_url, url)
     return ToolOutput(
         f"Открыто в браузере: {url}", title=f"Открыть {site_name(url) or url}", detail="Выполнено"

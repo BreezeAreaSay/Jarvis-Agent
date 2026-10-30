@@ -54,11 +54,14 @@ from jarvis.ai.policy import (
     RISKY_KEYS,
     SEARCH_HOSTS,
     SEND_KEYS,
+    ascii_host,
     decision,
     has_card_number,
     is_messenger,
     is_shell_window,
     jarvis_hotkeys,
+    link_note,
+    lookalike_host,
     normalize_combo,
     tool_risk,
 )
@@ -2323,9 +2326,11 @@ class Agent(BaseService):
         # ссылка с данными на незнакомый сайт может унести их наружу (инструкция из чужого текста) — спросить
         carries_data = bool(parsed.query) and low.startswith(("http://", "https://"))
         known = not host or bool(SEARCH_HOSTS.search(host)) or host in run.task.casefold()
-        name = site_name(url) or url
-        if self._ask(run, carries_data and not known):
-            await self._approve(run, f"Открыть {name}?", f"Адрес: {one_line(url, 160)}")
+        fake = lookalike_host(host)  # «gооgle.com» с русскими «о» — спросить всегда
+        name = ascii_host(host) if fake else (site_name(url) or url)
+        if self._ask(run, (carries_data and not known) or fake):
+            detail = f"{link_note(host)} Адрес: {one_line(url, 160)}".strip()
+            await self._approve(run, f"Открыть {name}?", detail)
         front = await self._foreground()
         await self.ctx.run_platform(self.ctx.platform.open_url, url)
         await self._await_front(front)  # браузер или программа по ссылке выходит вперёд не сразу

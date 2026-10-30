@@ -325,3 +325,16 @@ async def test_repeating_without_effect_gets_hint_then_stops(
     assert result.status == "error" and "повторял одно и то же действие" in result.summary
     texts = [str(m["content"]) for r in llm.requests for m in r["messages"] if m.get("role") == "tool"]
     assert "уже 2 раза подряд дало тот же итог" in texts[-1] or any("уже 2 раза" in t for t in texts)
+
+
+async def test_agent_asks_before_a_lookalike_site(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi) -> None:
+    asked = _answer_confirmations(ctx, lambda title: False)
+    llm.add(
+        PLAN,
+        calls(("open_url", {"url": "https://gооgle.com/"})),  # русские «о», адрес без данных
+        calls(("finish", {"summary": "Не открыл"})),
+    )
+    await ctx.agent.wait(await ctx.agent.run("Открой gооgle.com"))  # type: ignore[attr-defined]
+    assert asked[0][0] == "Открыть xn--ggle-55da.com?"
+    assert asked[0][1].startswith("Осторожно: имя сайта «gооgle.com» похоже на подделку")
+    assert not any(name == "open_url" for name, _ in ctx.platform.calls)  # type: ignore[attr-defined]

@@ -5,7 +5,9 @@
 без выбора действует правило по риску — рискованное (отправка, удаление, оплата, запуск кода) спрашивается.
 """
 
+import contextlib
 import re
+import unicodedata
 from typing import Any, Literal
 
 Risk = Literal["read", "act", "risky"]
@@ -205,3 +207,79 @@ SEARCH_HOSTS = re.compile(
 # адреса программ, которые ИИ может открывать (кроме http и https): открывают нужное место в программе,
 # но сами ничего не отправляют и не запускают (tg://resolve — чат, whatsapp://send — чат с текстом в поле)
 APP_SCHEMES = ("tg://", "ms-settings:", "spotify:", "mailto:", "whatsapp://")
+
+
+# русские буквы, неотличимые от латинских (набор как в Chrome): «аррӏе.com» из них — подделка под apple.com
+_LATIN_ALIKE = frozenset("асԁеһіјӏорԛѕԝхуъьҽпгѵѡ")
+# алфавиты, буквы которых путаются с латинскими: их смесь в одном имени — признак подделки (японское или
+# китайское имя с латиницей — обычное дело)
+_ALIKE_SCRIPTS = frozenset({"LATIN", "CYRILLIC", "GREEK", "ARMENIAN"})
+# зоны, где имя сайта из одних русских букв — обычное дело
+_CYRILLIC_ZONES = frozenset({"ru", "su", "by", "kz", "ua", "bg", "rs", "mk", "mn", "kg", "tj", "uz"})
+
+
+def _script(ch: str) -> str:
+    return unicodedata.name(ch, "?").split(" ", 1)[0]
+
+
+def unicode_host(host: str) -> str:
+    """Имя сайта буквами: «xn--e1afmkfd.xn--p1ai» → «пример.рф» (то, что человек видит в адресе)."""
+    labels = []
+    for label in host.casefold().split("."):
+        if label.startswith("xn--"):
+            with contextlib.suppress(UnicodeError, ValueError):
+                label = label[4:].encode("ascii").decode("punycode")
+        labels.append(label)
+    return ".".join(labels)
+
+
+def ascii_host(host: str) -> str:
+    """Настоящее имя сайта, которое видит браузер: «пример.рф» → «xn--e1afmkfd.xn--p1ai» (punycode)."""
+    labels = []
+    for label in unicode_host(host).split("."):
+        if not label.isascii():
+            try:
+                label = label.encode("idna").decode("ascii")
+            except UnicodeError:
+                label = "xn--" + label.encode("punycode").decode("ascii")
+        labels.append(label)
+    return ".".join(labels)
+
+
+def lookalike_host(host: str) -> bool:
+    """Имя сайта похоже на подделку: в одной части буквы разных алфавитов («gооgle.com» с русскими «о») или
+    часть целиком из русских двойников латинских букв не в русской зоне («аррӏе.com»)."""
+    labels = [label for label in unicode_host(host).split(".") if label]
+    if not labels or all(label.isascii() for label in labels):
+        return False
+    zone = labels[-1]
+    for i, label in enumerate(labels):
+        letters = [ch for ch in label if ch.isalpha()]
+        scripts = {_script(ch) for ch in letters}
+        if len(scripts & _ALIKE_SCRIPTS) > 1:
+            return True
+        last = i == len(labels) - 1 and len(labels) > 1
+        if (
+            not last
+            and scripts == {"CYRILLIC"}
+            and zone.isascii()
+            and zone not in _CYRILLIC_ZONES
+            and all(ch in _LATIN_ALIKE for ch in letters)
+        ):
+            return True
+    return False
+
+
+def link_note(host: str) -> str:
+    """Что сказать об имени сайта в вопросе «Открыть …?»: для имён не латиницей — настоящее имя (punycode),
+    для похожих на подделку — предупреждение; обычное имя — ""."""
+    shown = unicode_host(host)
+    if shown.isascii():
+        return ""
+    real = ascii_host(shown)
+    if lookalike_host(shown):
+        return (
+            f"Осторожно: имя сайта «{shown}» похоже на подделку — в нём буквы другого алфавита, похожие "
+            f"на латинские. Настоящее имя — {real}."
+        )
+    return f"Настоящее имя сайта — {real}."

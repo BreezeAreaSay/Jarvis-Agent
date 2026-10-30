@@ -153,6 +153,8 @@ export interface Settings {
     approve_plan: "never" | "big" | "always";
     max_steps: number;
     max_hours: number;
+    /** Модель фоновых задач по ключу API; пусто — та же, что в чате. */
+    model?: string;
     /** Как сообщать о вопросе и об итоге: всплывающее окно, голос, Telegram; пусто — тихо. */
     notify_question: NotifyChannel[];
     notify_done: NotifyChannel[];

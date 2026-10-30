@@ -1200,7 +1200,9 @@ events, reminders, clipboard, summaries, screenshots, file_index, voice_cache, u
   страницу заново.
 
 Настройки `background`: `vault`, `folder`, `read_vault`, `inbox` (`true`), `parallel` (1–4, 2), `autonomy` (`careful | normal | bold`),
-`max_steps` (10–1000, 150), `max_hours` (0.25–48, 4), `notify_question`, `notify_done` (`["toast"]`).
+`max_steps` (10–1000, 150), `max_hours` (0.25–48, 4), `model` (`""` — та же модель, что в чате; иначе — модель
+фоновых задач по ключу API, например подешевле для долгих задач: `runner.task_model`; подписки и программы
+выбирают модель сами), `notify_question`, `notify_done` (`["toast"]`).
 
 | Маршрут | Тело | Ответ |
 |---|---|---|

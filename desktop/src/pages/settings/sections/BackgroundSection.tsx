@@ -7,7 +7,8 @@ import { onEvent } from "@/api/events";
 import type { NotifyChannel, Settings } from "@/api/types";
 import { navigate } from "@/lib/router";
 import { Button, Card, Check, cx, notifyError, Select, Setting, Slider, Tabs, TextInput, Toggle } from "@/ui";
-import { useApi, useSettingsPatch } from "../kit";
+import { isAccountProvider, useProviders } from "../ai";
+import { Combo, useApi, useSettingsPatch } from "../kit";
 
 interface VaultState {
   path: string;
@@ -141,8 +142,13 @@ function VaultCard() {
 
 function AgentCard() {
   const [settings, patch] = useSettingsPatch();
+  const providers = useProviders();
   const bg = settings?.background;
-  if (!bg) return null;
+  if (!settings || !bg) return null;
+  const provider = providers.items.find((p) => p.id === settings.ai.provider);
+  // своя модель задач — только по ключу API: подписки и программы выбирают модель сами
+  const keyed = provider && !provider.login && !isAccountProvider(provider.id);
+  const chatModel = settings.ai.model || provider?.default_model || "";
   return (
     <Card icon={<Telescope />} title="Как работает агент" sub="Большие задачи в фоне: поиск, сайты, отчёты — без вашего экрана">
       <Setting name="Самостоятельность" desc={AUTONOMY[bg.autonomy]} wide>
@@ -171,6 +177,20 @@ function AgentCard() {
           onChange={(v) => patch({ background: { approve_plan: v } })}
         />
       </Setting>
+      {keyed && (
+        <Setting
+          name="Модель для задач"
+          desc={`Подешевле — для долгих задач по ключу API. Пусто — та же, что в чате${chatModel ? ` (${chatModel})` : ""}`}
+        >
+          <Combo
+            value={bg.model ?? ""}
+            options={(provider?.models ?? []).map((m) => ({ value: m }))}
+            placeholder={chatModel}
+            width={260}
+            onCommit={(v) => patch({ background: { model: v.trim() } })}
+          />
+        </Setting>
+      )}
       <Setting name="Задач одновременно" desc="Остальные ждут очереди">
         <Slider value={bg.parallel} min={1} max={4} step={1} format={(v) => String(v)} onCommit={(v) => patch({ background: { parallel: v } })} />
       </Setting>

@@ -475,6 +475,11 @@ def first_message(service: "Background", task: Task) -> str:
 # --- заход ------------------------------------------------------------------------------------------------
 
 
+def task_model(ctx: Any) -> str | None:
+    """Своя модель фоновых задач (settings.background.model) или None — та же, что в чате."""
+    return str(getattr(ctx.settings.value.background, "model", "") or "").strip() or None
+
+
 async def run_session(service: "Background", task: Task) -> Session:
     """Один заход задачи — до итога, паузы или лимита."""
     ctx = service.ctx
@@ -482,7 +487,7 @@ async def run_session(service: "Background", task: Task) -> Session:
     host = Host(service)
     backend = getattr(ctx.ai, "account_backend", lambda: None)()
     # подписка на паузе — отвечает запасной по ключу: у него нет встроенного поиска, а зрение — своё
-    llm_cfg = ctx.ai.llm.config() if backend is None else None
+    llm_cfg = ctx.ai.llm.config(task_model(ctx)) if backend is None else None
     provider = llm_cfg.provider if llm_cfg is not None else ctx.settings.value.ai.provider
     native_search = provider in ("claude_code", "gemini_cli", "chatgpt")
     native_read = provider in ("claude_code", "gemini_cli", "qwen_code")
@@ -567,7 +572,9 @@ async def _api_loop(
     nudges = 0
     while not session.closing and not session.parked:
         _trim(messages)
-        response = await llm.chat(messages, tools=specs, temperature=TEMPERATURE, stream=False)
+        response = await llm.chat(
+            messages, tools=specs, temperature=TEMPERATURE, stream=False, model=task_model(session.ctx)
+        )
         session.usage.add(response.usage)
         if not response.tool_calls:
             text = (response.content or "").strip()

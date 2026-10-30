@@ -214,6 +214,8 @@ class BackgroundSettings(_Model):
     approve_plan: Literal["never", "big", "always"] = "big"
     max_steps: int = Field(150, ge=10, le=1000)  # действий на задачу
     max_hours: float = Field(4.0, ge=0.25, le=48.0)  # часов работы на задачу (без ожидания ответа)
+    # модель фоновых задач по ключу API (подешевле — для долгих задач); пусто — та же, что в чате
+    model: str = Field("", max_length=200)
     notify_question: list[NotifyChannel] = Field(default_factory=lambda: ["toast"])  # есть вопрос
     notify_done: list[NotifyChannel] = Field(default_factory=lambda: ["toast"])  # задача закончена
 

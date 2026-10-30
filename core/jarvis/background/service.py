@@ -30,7 +30,7 @@ from jarvis.ai.llm import weak_local_model
 from jarvis.background import inbox, measure
 from jarvis.background.model import Question, Task, TaskStore
 from jarvis.background.repeat import clean_repeat, describe, next_run, parse_repeat
-from jarvis.background.runner import Parked, Session, run_session
+from jarvis.background.runner import Parked, Session, run_session, task_model
 from jarvis.background.tools import plan_approved
 from jarvis.background.vault import STATUS_WORDS, Vault
 from jarvis.confirm import parse_yes_no
@@ -458,13 +458,14 @@ class Background(BaseService):
         if ai is None or ai.account_backend() is not None:
             return
         try:
-            warning = weak_local_model(ai.llm.config())
+            config = ai.llm.config(task_model(self.ctx))
+            warning = weak_local_model(config)
         except Exception:
             return
         if not warning:
             return
         task.add_log(warning, "note")
-        model = ai.llm.config().model
+        model = config.model
         if model in self._warned_models:
             return
         self._warned_models.add(model)

@@ -489,3 +489,12 @@ async def test_notebooklm_export(bg: Bg, vault_dir: Path) -> None:
     service(ctx)._tasks[empty.id] = empty
     with pytest.raises(UserFacingError, match="нет ни итога, ни источников"):
         await service(ctx).notebooklm(empty.id)
+
+
+async def test_own_model_for_background_tasks(bg: Bg) -> None:
+    ctx, script, _ = bg
+    ctx.settings.patch({"background": {"model": "gpt-5.4-mini"}})
+    script.add(calls(("finish", {"status": "done", "summary": "Готово."})))
+    task = service(ctx).create("Собери новости про ИИ")
+    await until(lambda: task.status == "done")
+    assert script.requests[0]["model"] == "gpt-5.4-mini"  # чат — на своей модели, долгая задача — на этой

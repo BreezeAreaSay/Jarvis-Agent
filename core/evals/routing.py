@@ -58,6 +58,8 @@ CASES: tuple[tuple[str, str, str], ...] = (
     ("напомни завтра в 9 позвонить маме", "builtin.timers.remind_at", "reminder when"),
     ("напомни позвонить маме завтра в 9", "builtin.timers.remind_at", "reminder when"),
     ("напомни мне в пятницу в 18:30 забрать посылку", "builtin.timers.remind_at", "reminder when"),
+    ("напомни созвон в следующую пятницу в 7 30 вечера", "builtin.timers.remind_at", "reminder when"),
+    ("напомни в 2 ночи выключить сервер", "builtin.timers.remind_at", "reminder when"),
     ("какие у меня напоминания", "builtin.timers.reminders", "reminder"),
     ("отмени напоминание про посылку", "builtin.timers.reminder_cancel_about", "reminder"),
     # --- система ----------------------------------------------------------------------------------------
@@ -125,6 +127,8 @@ CASES: tuple[tuple[str, str, str], ...] = (
     ("отмени подписку на нетфликс", "agent", "lookalike"),
     ("напомни мне что я обещал маме", "ai", "lookalike reminder"),
     ("напомни купить хлеб", "ai", "reminder no-time"),
+    ("напомни что у меня завтра в 9", "ai", "reminder question"),
+    ("напомни во сколько у меня встреча в пятницу", "ai", "reminder question"),
     ("удали из памяти что я люблю кофе", "ai", "lookalike"),
     ("расскажи анекдот про программистов", "ai", "chat"),
     ("переведи на английский я опаздываю", "ai", "chat"),

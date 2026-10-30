@@ -26,7 +26,8 @@ from jarvis.commands.model import Action, Entry
 from jarvis.commands.sites import looks_like_url, search_url, to_url
 from jarvis.commands.textutil import normalize
 from jarvis.commands.undo import UndoJournal
-from jarvis.commands.when import parse_text
+from jarvis.commands.when import moment as when_moment
+from jarvis.commands.when import parse_moment
 from jarvis.platform.base import PlatformError
 from jarvis.services import ExecResult, NeedsAgent, Source, UserFacingError
 
@@ -82,6 +83,7 @@ LAUNCH_WAIT_S = 15.0
 LAUNCH_POLL_S = 0.25
 LAUNCH_SETTLE_S = 1.5
 FOCUS_SETTLE_S = 0.3
+LAST_REMINDER_S = 600.0  # «удали напоминание» без слов — только что поставленное, не старое
 # Ui.Click / Ui.Type: элемент окна впереди ждём, пока окно догружается; после нажатия — мгновение окну
 UI_WAIT_S = 8.0
 UI_POLL_S = 0.3
@@ -198,6 +200,14 @@ class RunState:
         self.message = message
         if say:
             self.say = say
+
+
+def _reminder_text(text: str) -> str:
+    """«мне купить хлеб» → «купить хлеб»: «напомни мне …» со временем в конце фразы."""
+    words = text.split()
+    while len(words) > 1 and words[0].casefold() in ("мне", "нам"):
+        words.pop(0)
+    return " ".join(words)
 
 
 def substitute(value: str, slots: dict[str, Any]) -> str:
@@ -403,26 +413,30 @@ class Executor:
         platform = self.ctx.platform
         if _URI.match(value) and not _DRIVE.match(value):
             await self._platform(platform.open_url, value)
+            self.undo.forget_app()  # «закрой его» — уже не прежняя программа
             if _is_game("", value):  # steam://rungameid/730 — запуск игры ссылкой лаунчера
                 st.data["game"] = True
             return
         if _DRIVE.match(value) or "\\" in value or "/" in value:
             await self._platform(platform.launch, value, "")
+            self.undo.forget_app()
             return
         target, name, exe, key = value, value, "", ""
         if st.slots.get("app") == value and st.slots.get("app_id"):
             target = str(st.slots["app_id"])
+            exe = str(st.slots.get("exe") or "")
         else:
             found = self.service.apps.resolve(value)
             if found is not None:
                 target, name, exe, key = found.app_id, found.name, found.exe, found.key
+        running = await self._running(exe)
         before = await self._windows() if st.rest else []
         if _URI.match(target) and not _DRIVE.match(target):
             await self._platform(platform.open_url, target)
         else:
             await self._platform(platform.launch, target, "")
         st.data["app"] = name
-        self._remember_launch(value, name)
+        self._remember_launch(value, name, undo=not running)
         if key:
             st.data["app_key"] = key
         if _is_game(key, target):
@@ -467,6 +481,7 @@ class Executor:
         if not path:
             raise UserFacingError("Не указан файл")
         await self._platform(self.ctx.platform.launch, path, args)
+        self.undo.forget_app()
 
     async def _launch_url(self, value: str, st: RunState) -> None:
         if not value:
@@ -479,6 +494,7 @@ class Executor:
                 raise UserFacingError(f"Не знаю сайт «{value}»")
             url = found.site.url
         await self._platform(self.ctx.platform.open_url, url)
+        self.undo.forget_app()
         st.data["url"] = url
 
     async def _launch_folder(self, value: str, st: RunState) -> None:
@@ -486,6 +502,7 @@ class Executor:
             raise UserFacingError("Не указана папка")
         path = await self._folder_path(value)
         await self._platform(self.ctx.platform.open_path, path)
+        self.undo.forget_app()
 
     async def _folder_path(self, value: str) -> str:
         key = value.strip().casefold().replace("ё", "е")
@@ -558,24 +575,38 @@ class Executor:
             raise UserFacingError(f"Команда консоли завершилась с ошибкой (код {code}){detail}")
 
     # --- программы ----------------------------------------------------------------------------------
-    def _remember_launch(self, value: str, name: str) -> None:
-        """Открытую программу — для «закрой его» и «отмени» (закрыть её)."""
+    async def _running(self, exe: str) -> bool:
+        """Программа уже работает (её окно открыто до команды); процесс не известен — False."""
+        if not exe:
+            return False
+        try:
+            return bool(await self._platform(self.ctx.platform.is_running, exe))
+        except PlatformError:
+            return False
+
+    def _remember_launch(self, value: str, name: str, *, undo: bool = True) -> None:
+        """Открытую программу — для «закрой его» и «отмени» (закрыть её). Уже работавшую до команды «отмени»
+        не закрывает (undo=False): её открыли не сейчас."""
         self.undo.remember_app(value, name)
+        if not undo:
+            return
+        key = self.undo.app_key(value)
 
         async def close() -> None:
             found = self.service.apps.resolve(value)
             await self._platform(self.ctx.platform.close_app, found.target if found is not None else value)
             self.undo.forget_app()
 
-        self.undo.push(f"{name} закрыт", close)
+        self.undo.push(f"{name} закрыт", close, key)
 
     async def _app_close_last(self, value: str, st: RunState) -> None:
         app = self.undo.last_app()
         if app is None:
-            raise UserFacingError("Не знаю, что закрыть: за последние пять минут я ничего не открывал")
+            raise UserFacingError("Не знаю, какую программу закрыть — назовите её: «закрой Telegram»")
         target, _ = self._app_target(app.target, st)
         closed = await self._platform(self.ctx.platform.close_app, target)
         self.undo.forget_app()
+        self.undo.discard(self.undo.app_key(app.target))  # «отмени» не закроет её второй раз
         if not closed:
             raise UserFacingError(f"{app.name} уже закрыт")
         st.info(f"Закрыл {app.name}", "Закрыл")
@@ -1312,7 +1343,7 @@ class Executor:
 
     async def _reminder(self, value: str, st: RunState) -> None:
         delay, sep, text = value.partition("|")
-        text = text.strip()
+        text = _reminder_text(text)
         if not sep or not text:
             raise UserFacingError("Не понял, о чём напомнить")
         seconds = numbers.parse_duration(delay.strip(), default_unit="m")
@@ -1340,11 +1371,14 @@ class Executor:
     async def _reminder_at(self, value: str, st: RunState) -> None:
         """«завтра в 9 | Позвонить маме» — напоминание на время, сказанное словами (jarvis.commands.when)."""
         when_text, sep, text = value.partition("|")
-        text = text.strip()
+        text = _reminder_text(text)
         if not sep or not text:
             raise UserFacingError("Не понял, о чём напомнить")
-        moment = parse_text(normalize(when_text))
+        words = normalize(when_text).split()
+        moment = parse_moment(words)
         if moment is None:
+            if when_moment(words) is not None:
+                raise UserFacingError(f"Это время уже прошло: «{when_text.strip()}»")
             raise UserFacingError(f"Не понял, когда напомнить: «{when_text.strip()}»")
         at = moment.timestamp()
         item = self.ctx.notes.reminder_add(text[:1].upper() + text[1:], at)
@@ -1367,13 +1401,17 @@ class Executor:
         st.data["count"] = count
 
     async def _reminder_cancel(self, value: str, st: RunState) -> None:
-        """Пусто — последнее поставленное; «все» — все; иначе — то, в тексте которого есть эти слова."""
+        """Пусто — только что поставленное (не раньше LAST_REMINDER_S назад; иначе спросить, какое); «все» —
+        все (только своей командой с подтверждением, не словом «все» в «отмени напоминание про все»); иначе —
+        то, в тексте которого есть эти слова."""
         notes = self.ctx.notes
         pending = [r for r in notes.reminders_list(include_done=False) if not r.get("done")]
         if not pending:
             raise UserFacingError("Напоминаний нет")
         query = normalize(value or "")
         if query in ("все", "всё"):
+            if normalize(str(st.slots.get("text") or "")) == query:
+                raise UserFacingError("Чтобы удалить все напоминания, скажите «удали все напоминания»")
             for r in pending:
                 notes.reminder_delete(r["id"])
             count = len(pending)
@@ -1382,7 +1420,7 @@ class Executor:
         if query:
             words = [w for w in query.split() if len(w) > 2]
             scored = [
-                (sum(1 for w in words if w[: max(4, len(w) - 2)] in normalize(r["text"])), r) for r in pending
+                (sum(1 for w in words if w[: max(3, len(w) - 2)] in normalize(r["text"])), r) for r in pending
             ]
             best = max(scored, key=lambda pair: pair[0])
             if best[0] == 0:
@@ -1390,6 +1428,14 @@ class Executor:
             target = best[1]
         else:
             target = max(pending, key=lambda r: float(r.get("created") or 0))
+            now = float(getattr(notes, "clock", time.time)())
+            if now - float(target.get("created") or 0) > LAST_REMINDER_S:
+                pending.sort(key=lambda r: float(r.get("at") or 0))
+                names = "; ".join(f"«{r['text']}»" for r in pending[:3])
+                more = f" и ещё {len(pending) - 3}" if len(pending) > 3 else ""
+                raise UserFacingError(
+                    f"Какое напоминание удалить? Скажите «удали напоминание про …»: {names}{more}"
+                )
         notes.reminder_delete(target["id"])
         st.info(
             f"Удалил напоминание: {target['text']} ({human_time(float(target['at']))})", "Напоминание удалено"

@@ -393,6 +393,7 @@ def _timers() -> list[Builtin]:
             icon="note",
             chain=False,
             optional=("мне",),
+            no_question=True,
         ),
         cmd(
             "timers.remind_hours",
@@ -406,6 +407,7 @@ def _timers() -> list[Builtin]:
             icon="note",
             chain=False,
             optional=("мне",),
+            no_question=True,
         ),
         cmd(
             "timers.remind_hour",
@@ -416,6 +418,7 @@ def _timers() -> list[Builtin]:
             icon="note",
             chain=False,
             optional=("мне",),
+            no_question=True,
         ),
         cmd(
             "timers.remind_half_hour",
@@ -429,6 +432,7 @@ def _timers() -> list[Builtin]:
             icon="note",
             chain=False,
             optional=("мне",),
+            no_question=True,
         ),
         cmd(
             "timers.remind_minute",
@@ -442,6 +446,7 @@ def _timers() -> list[Builtin]:
             icon="note",
             chain=False,
             optional=("мне",),
+            no_question=True,
         ),
         cmd(
             "timers.remind_at",
@@ -452,6 +457,7 @@ def _timers() -> list[Builtin]:
             icon="note",
             chain=False,
             optional=("мне",),
+            no_question=True,
         ),
         cmd(
             "timers.reminders",

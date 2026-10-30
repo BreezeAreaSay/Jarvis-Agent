@@ -2,7 +2,9 @@
 утра», «послезавтра в полдень», «30 октября в 15:00», «в эту субботу», «в девять тридцать вечера».
 
 parse_moment(слова, сейчас) — момент не в прошлом или None, если слова не целиком время (тогда команда не
-подходит и фраза уходит дальше — к другим командам или ИИ). «Через N минут» сюда не входит — это свои команды.
+подходит и фраза уходит дальше — к другим командам или ИИ). moment() — то же, но и уже прошедший момент
+(«сегодня в 9 утра» в полдень): слот {when} берёт фразу времени целиком, а исполнитель отвечает «это время уже
+прошло». «Через N минут» сюда не входит — это свои команды.
 Час без «утра/вечера» — ближайший такой на часах: в 15:00 «в 7» — это 19:00, в 6:00 — 7:00.
 """
 
@@ -71,15 +73,17 @@ def _suffix(hour: int, suffix: str) -> int | None:
     return None
 
 
-def _clock(words: list[str], i: int) -> tuple[int, int, bool, int] | None:
-    """Время после «в»: (час, минуты, сказано ли «утра/вечера»…, следующее слово)."""
+def _clock(words: list[str], i: int) -> tuple[int, int, bool, int, bool] | None:
+    """Время после «в»: (час, минуты, сказано ли «утра/вечера»…, следующее слово, ночь).
+
+    Ночь — «в 2 ночи» или «в полночь»: сказанное поздно вечером значит следующие сутки."""
     if i >= len(words):
         return None
     word = words[i]
     if word == "полдень":
-        return 12, 0, True, i + 1
+        return 12, 0, True, i + 1, False
     if word == "полночь":
-        return 0, 0, True, i + 1
+        return 0, 0, True, i + 1, True
     m = _CLOCK.match(word)
     if m:
         hour, minute, end = int(m.group(1)), int(m.group(2)), i + 1
@@ -103,12 +107,14 @@ def _clock(words: list[str], i: int) -> tuple[int, int, bool, int] | None:
     if hour > 23 or minute > 59:
         return None
     exact = hour == 0 or hour >= 13
+    night = False
     if end < len(words) and words[end] in SUFFIXES:
         adjusted = _suffix(hour, words[end])
         if adjusted is None:
             return None
+        night = words[end] == "ночи" and adjusted < 6
         hour, exact, end = adjusted, True, end + 1
-    return hour, minute, exact, end
+    return hour, minute, exact, end, night
 
 
 def _weekday(today: date, weekday: int, *, next_week: bool) -> date:
@@ -120,8 +126,8 @@ def _weekday(today: date, weekday: int, *, next_week: bool) -> date:
     return today + timedelta(days=ahead)
 
 
-def parse_moment(words: list[str], now: datetime | None = None) -> datetime | None:
-    """Слова целиком — момент напоминания (не в прошлом); иначе None."""
+def moment(words: list[str], now: datetime | None = None) -> datetime | None:
+    """Слова целиком — момент напоминания (может быть и в прошлом); не время — None."""
     now = now or datetime.now()
     today = now.date()
     day: date | None = None
@@ -129,6 +135,7 @@ def parse_moment(words: list[str], now: datetime | None = None) -> datetime | No
     hour: int | None = None
     minute = 0
     exact = False
+    night = False
     part = 0
     i, n = 0, len(words)
     while i < n:
@@ -159,13 +166,13 @@ def parse_moment(words: list[str], now: datetime | None = None) -> datetime | No
             month = MONTHS[words[found[1]]]
             try:
                 day = date(today.year, month, found[0])
-            except ValueError:
+                if day < today:
+                    day = day.replace(year=today.year + 1)
+            except ValueError:  # 31 апреля; 29 февраля, когда в следующем году его нет
                 return None
-            if day < today:
-                day = day.replace(year=today.year + 1)
             i = found[1] + 1
         elif hour is None and w in ("в", "во", "к") and (clock := _clock(words, i + 1)) is not None:
-            hour, minute, exact, i = clock
+            hour, minute, exact, i, night = clock
         elif hour is None and not part and w in PARTS:
             part = PARTS[w]
             i += 1
@@ -178,15 +185,34 @@ def parse_moment(words: list[str], now: datetime | None = None) -> datetime | No
     elif part and not exact:
         adjusted = _suffix(hour, {9: "утра", 13: "дня", 19: "вечера", 22: "ночи"}[part])
         hour, exact = (adjusted, True) if adjusted is not None else (hour, exact)
-    moment = datetime.combine(day or today, datetime.min.time()).replace(hour=hour, minute=minute)
-    if not exact and moment <= now and moment + timedelta(hours=12) > now:
-        moment += timedelta(hours=12)  # «в 7» в три часа дня — это 19:00
-    if moment <= now:
-        if day is not None and weekday < 0:
-            return None  # «сегодня в 9 утра» в полдень — уже прошло
-        moment += timedelta(days=7 if weekday >= 0 else 1)
-    return moment
+    at = datetime.combine(day or today, datetime.min.time()).replace(hour=hour, minute=minute)
+    if not exact and at <= now and at + timedelta(hours=12) > now:
+        at += timedelta(hours=12)  # «в 7» в три часа дня — это 19:00
+    if night and at <= now and (day is None or day == today):
+        at += timedelta(days=1)  # «сегодня в 2 ночи», «в полночь» днём — ближайшая ночь
+    if at <= now and not (day is not None and weekday < 0):  # «сегодня в 9 утра» в полдень — прошло
+        at += timedelta(days=7 if weekday >= 0 else 1)
+    return at
+
+
+def parse_moment(words: list[str], now: datetime | None = None) -> datetime | None:
+    """Слова целиком — момент напоминания не в прошлом; иначе None."""
+    now = now or datetime.now()
+    found = moment(words, now)
+    return found if found is not None and found > now else None
 
 
 def parse_text(text: str, now: datetime | None = None) -> datetime | None:
     return parse_moment(text.split(), now)
+
+
+MAX_WORDS = 8  # «в следующую пятницу в девять тридцать вечера» — 7 слов
+
+
+def longest_at(words: list[str], start: int, now: datetime | None = None) -> int | None:
+    """Конец самой длинной фразы времени с слова start (до MAX_WORDS слов) или None: время — целиком, а не
+    его начало («в 7» из «в 7 вечера» было бы утром)."""
+    for end in range(min(len(words), start + MAX_WORDS), start, -1):
+        if moment(words[start:end], now) is not None:
+            return end
+    return None

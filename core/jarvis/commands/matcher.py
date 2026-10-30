@@ -22,7 +22,7 @@ from typing import Any
 from rapidfuzz import fuzz, process
 
 from jarvis.commands import keys as keyops
-from jarvis.commands import numbers
+from jarvis.commands import numbers, when
 from jarvis.commands.model import Entry
 from jarvis.commands.textutil import (
     ANYWHERE_FILLERS,
@@ -75,6 +75,20 @@ _TASK_TAIL = re.compile(
     r"забронируй|купи|закажи|оплати|переведи|открой|запусти|включи|выключи|закрой|скачай|установи|"
     r"прочитай|сравни|выбери|запиши|добавь)(?!\w)"
 )
+
+
+# «напомни, что у меня завтра в 9», «напомни, во сколько встреча в пятницу» — это вопрос, а не текст
+# напоминания: такие фразы решает ИИ
+def _asks(text: str) -> bool:
+    words = text.split()
+    while words and words[0] in ("мне", "нам", "ну", "пожалуйста"):
+        words.pop(0)
+    if not words:
+        return False
+    return words[0] in QUESTION_WORDS or (
+        words[0] in ("в", "во") and len(words) > 1 and words[1] in QUESTION_WORDS
+    )
+
 
 # слот → (значения слотов, похожесть 0..100) или None
 SlotResolver = Callable[[str], tuple[dict[str, Any], float] | None]
@@ -300,6 +314,8 @@ class Matcher:
             entry = index.entries[cand.entry_idx]
             if entry.exclude and any(w.startswith(ex) for w in words for ex in entry.exclude):
                 continue
+            if entry.no_question and _asks(str(cand.slots.get("text") or "")):
+                continue
             limit = need if cand.score < 100 else 0.0
             if long_phrase and not cand.free_slot and cand.score < 100:
                 limit = max(limit, LONG_THRESHOLD)
@@ -447,12 +463,22 @@ class Matcher:
                 if combo:
                     yield end, {"keys": combo}, 100.0
             return
+        if name == "when":
+            # время — только целиком: самая длинная фраза времени с этого слова («в 7 вечера», а не «в 7»)
+            key = ("when", wi, n)
+            if key not in cache:
+                end = when.longest_at(words, wi)
+                cache[key] = ({"when": " ".join(words[wi:end])}, float(end)) if end is not None else None
+            found = cache[key]
+            if found is not None:
+                end = int(found[1])
+                if not last or end == n:
+                    yield end, found[0], 100.0
+            return
         resolver = self.resolvers.get(name)
         if resolver is None:
             return
         ends = ([n] if n - wi <= 6 else []) if last else list(range(wi + 1, min(n - 1, wi + 5) + 1))
-        if name == "when":
-            ends.reverse()  # «завтра в 9 позвонить» — время целиком («завтра в 9»), а не «завтра»
         for end in ends:
             key = (name, wi, end)
             if key not in cache:

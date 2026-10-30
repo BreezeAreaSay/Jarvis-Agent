@@ -95,6 +95,7 @@ def _keyboard() -> list[Builtin]:
             [("Jarvis.Undo", "")],
             category=c,
             icon="keyboard",
+            chain=False,  # «сверни окна и отмени» отменило бы только что сделанное
         )
     )
     for n in range(1, 13):

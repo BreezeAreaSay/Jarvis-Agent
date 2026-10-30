@@ -1483,7 +1483,7 @@ class Agent(BaseService):
         """Человек двигает мышь или печатает (ввод был позже последнего ввода самого агента): подождать, пока
         он не затихнет на HUMAN_QUIET_S; не затих за HUMAN_WAIT_S — True (действие не выполнять)."""
         platform = self.ctx.platform
-        if getattr(platform, "name", "") == "fake" and not getattr(platform, "report_input", False):
+        if not getattr(platform, "report_input", True):
             return False  # заглушка не знает о вводе человека (тесты, демо, проверочные задачи) — не ждём
         previous, waited = run.text, False
         deadline = time.monotonic() + HUMAN_WAIT_S

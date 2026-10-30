@@ -27,7 +27,6 @@ from jarvis.commands.packs import PackStore
 from jarvis.commands.recorder import Recorder
 from jarvis.commands.sites import SiteResolver
 from jarvis.commands.textutil import normalize, slugify
-from jarvis.commands.when import parse_text
 from jarvis.db import dumps, loads, now
 from jarvis.platform.base import AppInfo
 from jarvis.service_base import BaseService
@@ -79,7 +78,6 @@ class Commands(BaseService):
                 "app": self._resolve_app,
                 "site": self._resolve_site,
                 "desk": self._resolve_desk,
-                "when": _resolve_when,
             },
             self._wake_words,
         )
@@ -130,7 +128,7 @@ class Commands(BaseService):
                 entries[e.id] = e
 
             for item in builtin_commands():
-                add(entry(item.command, "builtin", exclude=item.exclude))
+                add(entry(item.command, "builtin", exclude=item.exclude, no_question=item.no_question))
             for pack_id in settings.packs:
                 pack = self.packs.get(pack_id)
                 if pack is None:
@@ -661,8 +659,3 @@ INFO_ACTIONS = frozenset(
         "Speak",
     }
 )
-
-
-def _resolve_when(text: str) -> tuple[dict[str, Any], float] | None:
-    """Слот {when}: слова целиком — время напоминания («завтра в 9»), иначе не подходит."""
-    return ({"when": text}, 100.0) if parse_text(text) is not None else None

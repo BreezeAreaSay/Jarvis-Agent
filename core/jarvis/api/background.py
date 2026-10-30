@@ -17,6 +17,14 @@ class TaskIn(BaseModel):
     deliverable: str = ""
     title: str = ""
     source: str = "ui"
+    # повтор: {kind: daily, at, weekdays} | {kind: hours, hours}; null — найти в тексте («каждый вечер …»),
+    # {} — не повторять; run_now — первый запуск сразу
+    repeat: dict[str, Any] | None = None
+    run_now: bool = True
+
+
+class RepeatIn(BaseModel):
+    repeat: dict[str, Any] | None = None  # null или {} — снять повторы
 
 
 class AnswerIn(BaseModel):
@@ -44,7 +52,14 @@ async def background_list(ctx: Ctx) -> dict[str, Any]:
 @router.post("/api/background")
 async def background_create(body: TaskIn, ctx: Ctx) -> dict[str, Any]:
     source = body.source if body.source in ("ui", "text", "voice", "remote", "vault") else "ui"
-    task = _service(ctx).create(body.brief, deliverable=body.deliverable, title=body.title, source=source)
+    task = _service(ctx).create(
+        body.brief,
+        deliverable=body.deliverable,
+        title=body.title,
+        source=source,
+        repeat=body.repeat,
+        run_now=body.run_now,
+    )
     return {"task": task.card()}
 
 
@@ -90,6 +105,35 @@ async def background_retry(task_id: str, ctx: Ctx) -> dict[str, Any]:
     service = _service(ctx)
     _known(service, task_id)
     return {"task": service.retry(task_id).card()}
+
+
+@router.post("/api/background/{task_id}/pause")
+async def background_pause(task_id: str, ctx: Ctx) -> dict[str, Any]:
+    service = _service(ctx)
+    _known(service, task_id)
+    return {"task": service.pause(task_id).card()}
+
+
+@router.post("/api/background/{task_id}/resume")
+async def background_resume(task_id: str, ctx: Ctx) -> dict[str, Any]:
+    service = _service(ctx)
+    _known(service, task_id)
+    return {"task": service.resume(task_id).card()}
+
+
+@router.put("/api/background/{task_id}/repeat")
+async def background_repeat(task_id: str, body: RepeatIn, ctx: Ctx) -> dict[str, Any]:
+    service = _service(ctx)
+    _known(service, task_id)
+    return {"task": service.set_repeat(task_id, body.repeat).card()}
+
+
+@router.get("/api/background/{task_id}/tables")
+async def background_tables(task_id: str, ctx: Ctx) -> dict[str, Any]:
+    """Таблицы замеров задачи: [{path, name, columns, rows, total, numeric, link}]."""
+    service = _service(ctx)
+    _known(service, task_id)
+    return {"items": await service.tables(task_id)}
 
 
 @router.delete("/api/background/{task_id}")

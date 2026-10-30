@@ -191,6 +191,7 @@ class BackgroundSettings(_Model):
     vault: str = ""  # хранилище Obsidian (папка); пусто — найти самому, нет Obsidian — Документы\Jarvis
     folder: str = "Jarvis"  # своя папка агента в хранилище: пишет он только сюда
     read_vault: bool = True  # читать и искать всё хранилище (иначе — только свою папку)
+    inbox: bool = True  # строки в «Входящие.md» своей папки — новые задачи (jarvis.background.inbox)
     parallel: int = Field(2, ge=1, le=4)  # сколько задач идёт одновременно
     # самостоятельность: careful — спрашивать чаще, normal — неясное и необратимое, bold — деньги и вход
     autonomy: Literal["careful", "normal", "bold"] = "normal"

@@ -37,6 +37,7 @@ from jarvis.ai.prompts import system_prompt
 from jarvis.ai.providers import PRESETS
 from jarvis.ai.tools import Tool, ToolEnv, ToolOutput, ToolRegistry, args_detail, confirm
 from jarvis.ai.web import WebClient
+from jarvis.background.repeat import describe
 from jarvis.db import new_id
 from jarvis.mcp.server import JarvisMcpServer
 from jarvis.platform.base import PlatformError
@@ -402,11 +403,19 @@ class Ai(BaseService):
         else:
             meta["background"] = task.id
             address = self.ctx.settings.value.profile.address.strip()
-            reply = (
-                f"Принял — работаю в фоне: «{task.title}». Ход — на странице «Фоновые задачи», итог запишу "
-                "в заметки."
-            )
-            spoken = f"Принял{', ' + address if address else ''}. Работаю в фоне."
+            if task.recurring:
+                every = describe(task.repeat)
+                reply = (
+                    f"Принял — буду делать {every}: «{task.title}». Первый раз — сейчас. Итоги и замеры — "
+                    "в заметках, расписание — на странице «Фоновые задачи»."
+                )
+                spoken = f"Принял{', ' + address if address else ''}. Буду делать {every}."
+            else:
+                reply = (
+                    f"Принял — работаю в фоне: «{task.title}». Ход — на странице «Фоновые задачи», итог "
+                    "запишу в заметки."
+                )
+                spoken = f"Принял{', ' + address if address else ''}. Работаю в фоне."
         answer = self.chats.add_message(chat["id"], "assistant", reply, meta=meta)
         self.ctx.bus.publish("chat.message", {"chat_id": chat["id"], "message": ui_message(answer)})
         self.ctx.bus.publish(

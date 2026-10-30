@@ -22,7 +22,10 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from jarvis import paths
-from jarvis.ai.format import one_line
+from jarvis.ai.format import human_time, one_line
+from jarvis.background.inbox import INBOX
+from jarvis.background.inbox import TEMPLATE as INBOX_TEMPLATE
+from jarvis.background.repeat import describe
 from jarvis.services import UserFacingError
 
 if TYPE_CHECKING:
@@ -45,6 +48,8 @@ STATUS_WORDS = {
     "partial": "сделано не всё",
     "failed": "не получилось",
     "cancelled": "отменено",
+    "scheduled": "по расписанию",
+    "paused": "на паузе",
 }
 STATUS_ICON = {"done": "✅", "partial": "⚠️", "failed": "❌", "cancelled": "⏹️"}
 
@@ -56,9 +61,10 @@ README = """# Папка Jarvis
 
 - **Инструкции.md** — ваши постоянные указания агенту: как оформлять заметки, каким источникам доверять, о чём
   не писать. Он читает их перед каждой задачей.
+- **Входящие.md** — пишите сюда задачи строками (можно с телефона): Jarvis сам возьмёт их в работу и отметит.
 - **Задачи/** — заметка на каждую задачу: что просили, план, ход работы, вопросы, итог и источники.
 - **Исследования/** — собранные материалы со ссылками на источники.
-- **Замеры/** — таблицы замеров (цены, метрики и т. п.).
+- **Замеры/** — таблицы замеров (цены, курсы, метрики) по датам и графики к ним.
 - **Журнал/** — по дню: какие задачи шли и чем кончились.
 
 Заметки агента можно править, переносить и связывать со своими — это ваше хранилище.
@@ -193,7 +199,8 @@ class Vault:
             home.mkdir(parents=True, exist_ok=True)
             for folder in FOLDERS:
                 (home / folder).mkdir(exist_ok=True)
-            for name, text in (("README.md", README), ("Инструкции.md", INSTRUCTIONS)):
+            notes = (("README.md", README), ("Инструкции.md", INSTRUCTIONS), (INBOX, INBOX_TEMPLATE))
+            for name, text in notes:
                 path = home / name
                 if not path.exists():
                     path.write_text(text, encoding="utf-8")
@@ -202,6 +209,11 @@ class Vault:
                 f"Не получается писать в хранилище заметок «{self.root}»: {e}. Проверьте папку в настройках "
                 "(Фоновые задачи → Хранилище)"
             ) from e
+
+    @property
+    def inbox(self) -> Path:
+        """«Входящие.md» — задачи, записанные человеком строками."""
+        return self.home / INBOX
 
     def instructions(self) -> str:
         """Постоянные указания человека агенту (Инструкции.md) — без шаблонного текста."""
@@ -362,10 +374,10 @@ class Vault:
         os.replace(tmp, path)
         return self.rel(path)
 
-    def journal(self, task: "Task") -> None:
-        """Строка о законченной задаче — в журнал дня."""
+    def journal(self, task: "Task", status: str = "") -> None:
+        """Строка о законченной задаче (или запуске повторяющейся) — в журнал дня."""
         day = datetime.now().strftime("%Y-%m-%d")
-        icon = STATUS_ICON.get(task.status, "•")
+        icon = STATUS_ICON.get(status or task.status, "•")
         name = Path(task.note).stem if task.note else one_line(task.title, 80)
         line = f"- {datetime.now():%H:%M} {icon} [[{name}]] — {one_line(task.summary or task.error, 200)}"
         with contextlib.suppress(OSError, UserFacingError):
@@ -397,12 +409,32 @@ def render_task(task: "Task", vault: Vault) -> str:
     ]
     if task.finished:
         lines.append(f"finished: {_when(task.finished)}")
+    if task.repeat:
+        lines.append(f"repeat: {_yaml(describe(task.repeat))}")
     lines += [f"sources: {len(task.sources)}", f"steps: {task.steps}", "tags: [jarvis]", "---", ""]
     lines += [f"# {one_line(task.title or task.brief, 120)}", "", "> [!info] Задача"]
     lines += [f"> {row}" if row.strip() else ">" for row in task.brief.strip().splitlines()]
     if task.deliverable:
         lines += [">", f"> **Нужен результат:** {one_line(task.deliverable, 300)}"]
+    if task.repeat:
+        when = (
+            f" · следующий запуск — {human_time(task.next_run)}"
+            if task.next_run and task.status == "scheduled"
+            else ""
+        )
+        lines += [">", f"> **Повторяется:** {describe(task.repeat)}{when}"]
     lines.append("")
+    if task.tables:
+        lines += ["## Замеры", ""]
+        lines += [f"- [[{t.removesuffix('.md')}]]" for t in task.tables]
+        lines.append("")
+    if task.history:
+        lines += ["## Запуски", ""]
+        for run in reversed(task.history[-30:]):
+            icon = STATUS_ICON.get(str(run.get("status")), "•")
+            moment = _when(float(run.get("ts") or 0))
+            lines.append(f"- {moment} {icon} {one_line(str(run.get('summary') or ''), 300)}")
+        lines.append("")
     if task.summary or task.error:
         lines += ["## Итог", "", (task.summary or task.error).strip(), ""]
         if task.result:

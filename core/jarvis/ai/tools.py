@@ -41,6 +41,7 @@ from jarvis.ai.policy import (
     normalize_combo,
 )
 from jarvis.ai.web import WebClient, check_public_url, site_name
+from jarvis.background.repeat import describe
 from jarvis.platform.base import AppInfo, PlatformError, WindowInfo
 from jarvis.services import ExecResult, Source, UserFacingError
 
@@ -533,14 +534,23 @@ async def _start_background_task(env: ToolEnv, args: dict[str, Any]) -> ToolOutp
     if service is None:
         return ToolOutput.fail("фоновые задачи недоступны")
     source = {"voice": "voice", "telegram": "remote", "remote": "remote"}.get(str(env.source), "text")
-    task = service.create(brief, deliverable=_str(args, "result"), source=source)
-    return ToolOutput(
-        f"Фоновая задача поставлена: «{task.title}». Она идёт сама, в фоне, итог запишется в заметки "
-        "(хранилище Obsidian), ход виден на странице «Фоновые задачи». Коротко скажи пользователю, что "
-        "задача взята в работу; сам её не выполняй.",
-        title=f"Фоновая задача: {one_line(task.title, 60)}",
-        detail="Поставлена",
-    )
+    raw = args.get("repeat")
+    repeat = raw if isinstance(raw, dict) and raw.get("kind") else None  # нет — повтор найдётся в тексте
+    task = service.create(brief, deliverable=_str(args, "result"), source=source, repeat=repeat)
+    if task.recurring:
+        text = (
+            f"Повторяющаяся фоновая задача поставлена: «{task.title}», {describe(task.repeat)}; первый "
+            "запуск — сейчас. Каждый запуск идёт сам, в фоне, итоги и замеры записываются в заметки, ход и "
+            "расписание — на странице «Фоновые задачи». Коротко скажи пользователю, как часто задача будет "
+            "работать; сам её не выполняй."
+        )
+    else:
+        text = (
+            f"Фоновая задача поставлена: «{task.title}». Она идёт сама, в фоне, итог запишется в заметки "
+            "(хранилище Obsidian), ход виден на странице «Фоновые задачи». Коротко скажи пользователю, что "
+            "задача взята в работу; сам её не выполняй."
+        )
+    return ToolOutput(text, title=f"Фоновая задача: {one_line(task.title, 60)}", detail="Поставлена")
 
 
 # --- обработчики: интернет ------------------------------------------------------------------------------
@@ -1106,11 +1116,26 @@ def builtin_tools() -> list[Tool]:
             "Поставить большую задачу в фон: агент сам, без экрана пользователя, ищет и читает сайты, "
             "работает в своём браузере и записывает результат в заметки (Obsidian) — исследование, "
             "сравнение, обзор, сбор данных, подборка, мониторинг. Для того, что займёт больше пары минут и "
-            "не требует окон программ на экране; ответ «прямо сейчас» в чате — не сюда.",
+            "не требует окон программ на экране; ответ «прямо сейчас» в чате — не сюда. Регулярное дело "
+            "(«каждый вечер записывай курс доллара», «по будням собирай вакансии») — с repeat: задача будет "
+            "запускаться сама, замеры — таблицей с графиком.",
             _obj(
                 {
                     "task": _s("Задача целиком, со всеми подробностями: что найти, сравнить, собрать"),
                     "result": _s("Какой нужен результат: отчёт, таблица, список… (необязательно)"),
+                    "repeat": {
+                        "type": "object",
+                        "description": (
+                            "Только если задачу нужно повторять: kind=daily — в at (ЧЧ:ММ) по дням weekdays "
+                            "(0 — понедельник; пусто — каждый день), kind=hours — каждые hours часов"
+                        ),
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["daily", "hours"]},
+                            "at": _s("Время ЧЧ:ММ (для daily)"),
+                            "weekdays": {"type": "array", "items": {"type": "integer"}},
+                            "hours": {"type": "integer", "description": "Каждые сколько часов (для hours)"},
+                        },
+                    },
                 },
                 ["task"],
             ),

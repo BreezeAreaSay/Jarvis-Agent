@@ -17,16 +17,20 @@ from typing import Any
 
 from jarvis import paths
 from jarvis.ai.format import one_line
+from jarvis.background.repeat import describe
 
 log = logging.getLogger(__name__)
 
 # queued — ждёт очереди; running — работает; waiting — ждёт ответа человека; done / partial / failed — итог
-# (как оценил его агент или ошибка); cancelled — отменил человек
-STATUSES = ("queued", "running", "waiting", "done", "partial", "failed", "cancelled")
+# (как оценил его агент или ошибка); cancelled — отменил человек. Повторяющаяся задача между запусками —
+# scheduled (ждёт следующего по расписанию) или paused (повторы на паузе: человек или три неудачи подряд)
+STATUSES = ("queued", "running", "waiting", "done", "partial", "failed", "cancelled", "scheduled", "paused")
 ACTIVE = frozenset({"queued", "running", "waiting"})
 TASK_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_LOG = 400  # записей хода работы в состоянии (в заметке — все, что были)
 MAX_SOURCES = 200
+MAX_HISTORY = 60  # запусков повторяющейся задачи в состоянии
+MAX_TABLES = 20
 CARD_LOG = 3  # последних записей хода работы — в краткой карточке
 
 
@@ -88,11 +92,43 @@ class Task:
     usage: dict[str, Any] = field(default_factory=dict)
     provider: str = ""
     model: str = ""
+    # повторяющаяся задача (jarvis.background.repeat): расписание, следующий запуск, номер запуска и с чего
+    # он начался (лимиты действий и времени — на запуск), итоги прошлых запусков, неудачи подряд
+    repeat: dict[str, Any] = field(default_factory=dict)
+    next_run: float = 0.0
+    cycle: int = 0
+    cycle_started: float = 0.0
+    cycle_steps: int = 0
+    cycle_worked: float = 0.0
+    history: list[dict[str, Any]] = field(default_factory=list)  # [{cycle, ts, status, summary, steps}]
+    fails: int = 0
+    tables: list[str] = field(default_factory=list)  # таблицы замеров задачи — пути внутри хранилища
 
     # --- состояние ---------------------------------------------------------------------------------------
     @property
     def active(self) -> bool:
         return self.status in ACTIVE
+
+    @property
+    def recurring(self) -> bool:
+        return bool(self.repeat)
+
+    def add_table(self, rel: str) -> None:
+        if rel and rel not in self.tables:
+            self.tables = [*self.tables, rel][-MAX_TABLES:]
+
+    def add_history(self, status: str, summary: str) -> None:
+        self.history.append(
+            {
+                "cycle": self.cycle,
+                "ts": time.time(),
+                "status": status,
+                "summary": one_line(summary, 400),
+                "steps": self.steps - self.cycle_steps,
+            }
+        )
+        if len(self.history) > MAX_HISTORY:
+            self.history = self.history[-MAX_HISTORY:]
 
     def open_question(self) -> Question | None:
         return next((q for q in self.questions if q.open), None)
@@ -143,6 +179,12 @@ class Task:
             "note": self.note,
             "result": self.result,
             "sources": len(self.sources),
+            "repeat": self.repeat,
+            "repeat_text": describe(self.repeat),
+            "next_run": self.next_run,
+            "cycle": self.cycle,
+            "last_run": self.history[-1] if self.history else None,
+            "tables": list(self.tables),
         }
 
     @classmethod

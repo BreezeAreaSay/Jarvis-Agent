@@ -6,6 +6,12 @@
 Вопрос человеку ждёт ответа в заходе до LIVE_WAIT_S; дольше — задача встаёт на паузу (waiting) и продолжится
 новым заходом, когда человек ответит (кнопкой, текстом).
 
+Повторяющаяся задача (Task.repeat, jarvis.background.repeat) между запусками ждёт в scheduled: раз в TICK_S
+сервис запускает те, чьё время пришло (пропущенное, пока Jarvis был закрыт, — один раз). Итог запуска — в
+историю задачи, следующий запуск — по расписанию; MAX_FAILS неудач подряд — повторы на паузе (paused).
+Там же, раз в TICK_S, — «Входящие.md» в папке агента: новые строки становятся задачами
+(jarvis.background.inbox).
+
 Состояние задачи — файлом (TaskStore), заметка задачи в хранилище — следом за ним; события background.* —
 сразу. Частые изменения по ходу работы пишутся раз в FLUSH_S.
 """
@@ -13,13 +19,16 @@
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import time
 from collections.abc import Callable
 from typing import Any
 
-from jarvis.ai.format import one_line, speech_text
+from jarvis.ai.format import human_time, one_line, speech_text
+from jarvis.background import inbox, measure
 from jarvis.background.model import Question, Task, TaskStore
+from jarvis.background.repeat import clean_repeat, describe, next_run, parse_repeat
 from jarvis.background.runner import Parked, Session, run_session
 from jarvis.background.vault import STATUS_WORDS, Vault
 from jarvis.confirm import parse_yes_no
@@ -34,6 +43,10 @@ MAX_BRIEF = 8000
 MAX_TASKS = 300  # законченных задач в списке (старые удаляются из Jarvis; заметки в хранилище остаются)
 STOP_WAIT_S = 5.0
 ALLOW = ("разреш", "да", "ок", "ok", "можно", "давай")
+TICK_S = 15.0  # как часто смотреть расписание и «Входящие»
+MAX_FAILS = 3  # неудачных запусков подряд — повторы на паузу
+INBOX_BATCH = 5  # задач из «Входящих» за раз (вставили длинный список — разберётся за несколько раз)
+INBOX_REMEMBER_S = 24 * 3600.0  # взятую строку не брать снова, даже если отметить её не вышло
 
 
 def title_of(brief: str) -> str:
@@ -67,6 +80,10 @@ class Background(BaseService):
         self._started = False
         self._shutting = False
         self._unsubscribe: list[Callable[[], None]] = []
+        self._ticker: asyncio.Task[None] | None = None
+        self._inbox_seen: tuple[int, int] | None = None  # «Входящие» уже разобраны в таком виде (mtime, size)
+        self._inbox_taken: dict[str, float] = {}  # текст взятой строки → когда
+        self._inbox_warned = ""
 
     # --- жизнь сервиса --------------------------------------------------------------------------------
     async def start(self) -> None:
@@ -82,9 +99,15 @@ class Background(BaseService):
         self._schedule()
         if self._dirty:
             self._later()
+        self._ticker = self.ctx.spawn(self._tick_loop(), "background-tick")
 
     async def stop(self) -> None:
         self._shutting = True
+        ticker, self._ticker = self._ticker, None
+        if ticker is not None:
+            ticker.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await ticker
         for off in self._unsubscribe:
             with contextlib.suppress(Exception):
                 off()
@@ -108,11 +131,23 @@ class Background(BaseService):
     def _settings_changed(self, old: Any, new: Any) -> None:
         if old.background.parallel != new.background.parallel and self.ctx.loop is not None:
             self.ctx.loop.call_soon_threadsafe(self._schedule)
+        was, now = old.background, new.background
+        if (was.vault, was.folder, was.inbox) != (now.vault, now.folder, now.inbox):
+            self._inbox_seen = None  # другое хранилище или папка — «Входящие» разобрать заново
 
     # --- для API ------------------------------------------------------------------------------------------
     def cards(self) -> list[dict[str, Any]]:
-        tasks = sorted(self._tasks.values(), key=lambda t: (not t.active, -t.created))
-        return [t.card() for t in tasks]
+        """Сначала идущие, потом повторяющиеся (ближайший запуск первым), потом законченные (новые
+        первыми)."""
+
+        def order(t: Task) -> tuple[int, float]:
+            if t.active:
+                return 0, -t.created
+            if t.status in ("scheduled", "paused"):
+                return 1, t.next_run or float("inf")
+            return 2, -t.created
+
+        return [t.card() for t in sorted(self._tasks.values(), key=order)]
 
     def get(self, task_id: str) -> Task:
         task = self._tasks.get(task_id)
@@ -128,51 +163,137 @@ class Background(BaseService):
         data["result_link"] = self.vault.link(task.result) if task.result else ""
         return data
 
-    def create(self, brief: str, *, deliverable: str = "", source: str = "ui", title: str = "") -> Task:
+    def create(
+        self,
+        brief: str,
+        *,
+        deliverable: str = "",
+        source: str = "ui",
+        title: str = "",
+        repeat: dict[str, Any] | None = None,
+        run_now: bool = True,
+    ) -> Task:
+        """Новая задача. repeat=None — повтор ищется в начале текста («каждый вечер записывай …»), {} — не
+        повторять; повторяющаяся с run_now запускается сразу, без — в своё время."""
         brief = (brief or "").strip()
         if not brief:
             raise UserFacingError("Опишите задачу")
         if len(brief) > MAX_BRIEF:
             raise UserFacingError(f"Слишком длинное описание задачи — не больше {MAX_BRIEF} знаков")
+        rest = brief
+        if repeat is None:
+            repeat, rest = parse_repeat(brief)
+        repeat = clean_repeat(repeat)
         problem = self._ai_problem()
         if problem:
             raise UserFacingError(problem)
         task = Task(
             id=new_id(),
             brief=brief,
-            title=one_line(title, 90) if title.strip() else title_of(brief),
+            title=one_line(title, 90) if title.strip() else title_of(rest),
             deliverable=one_line(deliverable, 500),
             source=source,
+            repeat=repeat,
         )
+        if repeat and run_now:
+            self._begin_cycle(task, "сразу")
+        elif repeat:
+            task.status, task.next_run = "scheduled", next_run(repeat, time.time())
+            first = human_time(task.next_run)
+            task.add_log(f"Повторяется {describe(repeat)}; первый запуск — {first}", "note")
         self._tasks[task.id] = task
         self._trim()
         self._save_now(task)
-        log.info("фоновая задача %s: «%s»", task.id, task.title)
+        log.info("фоновая задача %s: «%s»%s", task.id, task.title, f" ({describe(repeat)})" if repeat else "")
         self._schedule()
         return task
 
     async def cancel(self, task_id: str) -> Task:
+        """Отменить: идущую — остановить; повторяющуюся — и больше не запускать."""
         task = self.get(task_id)
-        if not task.active:
+        if not task.active and not (task.recurring and task.status in ("scheduled", "paused")):
             return task
         runner = self._runners.get(task_id)
         if runner is not None and not runner.done():
             runner.cancel()
             with contextlib.suppress(Exception):
                 await asyncio.wait({runner}, timeout=STOP_WAIT_S)
-        if task.active:  # ждала очереди или ответа без захода
-            self._finish(task, "cancelled", summary="Отменено.")
+        if task.active or task.status in ("scheduled", "paused"):  # ждала очереди, ответа или расписания
+            summary = "Повторы остановлены." if task.recurring else "Отменено."
+            self._finish(task, "cancelled", summary=summary)
         return task
 
     def retry(self, task_id: str) -> Task:
+        """«Ещё раз» и «Запустить сейчас»: повторяющаяся — новым запуском, дальше снова по расписанию."""
         task = self.get(task_id)
         if task.active:
             raise UserFacingError("Задача и так идёт")
-        task.status, task.error, task.finished = "queued", "", 0.0
-        task.add_log("Запущена снова", "note")
+        if task.recurring:
+            task.fails = 0
+            self._begin_cycle(task, "вручную")
+        else:
+            task.status, task.error, task.finished = "queued", "", 0.0
+            task.add_log("Запущена снова", "note")
         self._save_now(task)
         self._schedule()
         return task
+
+    def pause(self, task_id: str) -> Task:
+        """Повторы на паузу (задача остаётся, запусков нет, пока не продолжить)."""
+        task = self.get(task_id)
+        if not task.recurring:
+            raise UserFacingError("Эта задача не повторяется")
+        if task.active:
+            raise UserFacingError("Задача сейчас работает — поставить повторы на паузу можно после запуска")
+        if task.status != "paused":
+            task.status, task.next_run = "paused", 0.0
+            task.add_log("Повторы на паузе", "note")
+            self._save_now(task)
+        return task
+
+    def resume(self, task_id: str) -> Task:
+        """Повторы снова по расписанию (после паузы или остановки)."""
+        task = self.get(task_id)
+        if not task.recurring:
+            raise UserFacingError("Эта задача не повторяется")
+        if task.active:
+            return task
+        task.status, task.fails, task.error = "scheduled", 0, ""
+        task.next_run = next_run(task.repeat, time.time())
+        task.add_log(f"Повторы продолжаются: следующий запуск — {human_time(task.next_run)}", "note")
+        self._save_now(task)
+        return task
+
+    def set_repeat(self, task_id: str, raw: Any) -> Task:
+        """Сменить расписание. Обычная законченная задача с расписанием становится повторяющейся; пустое
+        расписание — повторы снимаются (задача остаётся с итогом последнего запуска)."""
+        task = self.get(task_id)
+        if task.active:
+            raise UserFacingError("Задача сейчас работает — расписание можно сменить после запуска")
+        repeat = clean_repeat(raw)
+        if repeat:
+            task.repeat, task.fails = repeat, 0
+            if task.status != "paused":
+                task.status = "scheduled"
+                task.next_run = next_run(repeat, time.time())
+            task.add_log(f"Расписание: {describe(repeat)}", "note")
+        elif task.recurring:
+            task.repeat, task.next_run = {}, 0.0
+            last = task.history[-1]["status"] if task.history else "done"
+            task.status = last if last in ("done", "partial", "failed", "cancelled") else "done"
+            task.add_log("Повторы сняты", "note")
+        self._save_now(task)
+        return task
+
+    async def tables(self, task_id: str) -> list[dict[str, Any]]:
+        """Таблицы замеров задачи (для вкладки «Замеры»)."""
+        task = self.get(task_id)
+        out = []
+        for rel in task.tables:
+            table = await self.ctx.run_io(measure.load, self.vault, rel)
+            if table is not None:
+                out.append(table)
+        return out
 
     async def delete(self, task_id: str) -> None:
         task = self.get(task_id)
@@ -239,7 +360,7 @@ class Background(BaseService):
         task.status = "waiting"
         self._save_now(task)
         self.ctx.bus.publish("background.question", {"task_id": task.id, "question": vars(question)})
-        await self._notify("question", task, f"{task.title}: {question.text}")
+        await self._notify("question", task, f"{task.title}: {question.text}", question)
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._waiters[question.id] = future
         began = time.monotonic()
@@ -335,20 +456,51 @@ class Background(BaseService):
             self._runners.pop(task.id, None)
             self._schedule()
 
+    def _begin_cycle(self, task: Task, reason: str) -> None:
+        """Новый запуск повторяющейся задачи: свой план, лимиты действий и времени — с нуля."""
+        task.cycle += 1
+        task.cycle_started = time.time()
+        task.cycle_steps, task.cycle_worked = task.steps, task.worked_s
+        task.plan = []
+        task.status, task.error, task.finished, task.next_run = "queued", "", 0.0, 0.0
+        task.add_log(f"Запуск №{task.cycle} — {reason}", "note")
+
     def _finish(self, task: Task, status: str, *, summary: str = "", error: str = "") -> None:
-        task.status = status
+        """Итог захода. Повторяющаяся задача (кроме отмены) после итога ждёт следующего запуска: итог — в
+        историю, MAX_FAILS неудач подряд — повторы на паузу."""
+        ran = task.active
+        now = time.time()
         task.summary = summary or task.summary
         task.error = error
-        task.finished = time.time()
+        task.finished = now
         for question in task.questions:
             if question.open:
-                question.answer, question.answered = "(без ответа)", time.time()
+                question.answer, question.answered = "(без ответа)", now
         task.add_log(
             f"{STATUS_WORDS.get(status, status).capitalize()}: {one_line(summary or error, 300)}", "note"
         )
+        final = status
+        if task.recurring:
+            if ran:
+                task.add_history(status, summary or error)
+            if status == "cancelled":
+                task.next_run = 0.0
+            else:
+                task.fails = task.fails + 1 if status == "failed" else 0
+                if task.fails >= MAX_FAILS:
+                    final, task.next_run = "paused", 0.0
+                    task.add_log(
+                        f"Запуски не получились {task.fails} раза подряд — повторы на паузе: поправьте "
+                        "задачу или подключение и нажмите «Продолжить»",
+                        "error",
+                    )
+                else:
+                    final, task.next_run = "scheduled", next_run(task.repeat, now)
+                    task.add_log(f"Следующий запуск — {human_time(task.next_run)}", "note")
+        task.status = final
         self._save_now(task)
         with contextlib.suppress(Exception):
-            self.vault.journal(task)
+            self.vault.journal(task, status)
         self.ctx.bus.publish(
             "background.done",
             {
@@ -358,18 +510,137 @@ class Background(BaseService):
                 "error": task.error,
                 "note": task.note,
                 "result": task.result,
+                "next_run": task.next_run,
+                "paused": final == "paused",
             },
         )
         if status != "cancelled":
             text = f"Задача «{task.title}»: {one_line(summary or error, 200)}"
+            if final == "paused":
+                text += " Повторы на паузе: запуски не получаются."
             self.ctx.spawn(self._notify("done", task, text), f"task-notify-{task.id}")
 
     def _trim(self) -> None:
-        old = sorted((t for t in self._tasks.values() if not t.active), key=lambda t: t.created)
+        old = sorted(
+            (t for t in self._tasks.values() if not t.active and t.status not in ("scheduled", "paused")),
+            key=lambda t: t.created,
+        )
         for task in old[: max(0, len(self._tasks) - MAX_TASKS)]:
             self._tasks.pop(task.id, None)
             with contextlib.suppress(Exception):
                 self.store.delete(task.id)
+
+    # --- расписание и «Входящие» ---------------------------------------------------------------------------
+    async def _tick_loop(self) -> None:
+        while True:
+            await asyncio.sleep(TICK_S)
+            try:
+                await self.tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("фоновые задачи: проверка расписания и «Входящих» не удалась")
+
+    async def tick(self, now: float | None = None) -> None:
+        """Запуски, чьё время пришло, и новые строки во «Входящих» (раз в TICK_S; тесты зовут сами)."""
+        if not self._started or self._shutting:
+            return
+        self._due(time.time() if now is None else now)
+        await self._check_inbox()
+
+    def _due(self, now: float) -> None:
+        due = [t for t in self._tasks.values() if t.status == "scheduled" and 0 < t.next_run <= now]
+        for task in sorted(due, key=lambda t: t.next_run):
+            self._begin_cycle(task, "по расписанию")
+            self._save_now(task)
+        if due:
+            self._schedule()
+
+    async def _check_inbox(self) -> None:
+        if not self.ctx.settings.value.background.inbox:
+            return
+        try:
+            found = await self.ctx.run_io(self._read_inbox)
+        except Exception as e:
+            log.debug("«Входящие» не прочитались: %s", e)
+            return
+        if found is None:
+            return
+        text, stamp = found
+        now = time.time()
+        self._inbox_taken = {k: v for k, v in self._inbox_taken.items() if now - v < INBOX_REMEMBER_S}
+        fresh = [i for i in inbox.parse(text) if i.text not in self._inbox_taken]
+        if not fresh:
+            self._inbox_seen = stamp
+            return
+        problem = self._ai_problem()
+        if problem:  # без модели задачи не поставить — строки ждут, пока её подключат
+            if self._inbox_warned != problem:
+                log.info("«Входящие»: задачи ждут — %s", problem)
+                self._inbox_warned = problem
+            return
+        self._inbox_warned = ""
+        taken: dict[str, list[str]] = {}
+        for item in fresh[:INBOX_BATCH]:
+            self._inbox_taken[item.text] = now
+            try:
+                task = self.create(item.brief, source="vault")
+            except UserFacingError as e:
+                log.info("«Входящие»: «%s» не взята: %s", one_line(item.text, 60), e)
+                taken.setdefault(item.text, []).append(f"!{e}")
+                continue
+            taken.setdefault(item.text, []).append(self.vault.task_note(task))
+            self.ctx.bus.publish(
+                "toast",
+                {
+                    "title": "Задача из «Входящих»",
+                    "message": one_line(task.title, 200),
+                    "status": "info",
+                    "icon": "task",
+                    "ts": time.time(),
+                    "task_id": task.id,
+                },
+            )
+        try:
+            written = await self.ctx.run_io(self._mark_inbox, taken)
+        except Exception as e:
+            log.info("«Входящие»: отметить взятые не вышло: %s", e)
+            written = None
+        if len(fresh) <= INBOX_BATCH:  # остались ещё — разобрать на следующей проверке
+            self._inbox_seen = written or stamp
+
+    def _read_inbox(self) -> tuple[str, tuple[int, int]] | None:
+        """Текст «Входящих», если они изменились с прошлой проверки (нет файла, а папка агента есть —
+        создать)."""
+        path = self.vault.inbox
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            if self.vault.home.is_dir():
+                self.vault.ensure()
+            return None
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        if stamp == self._inbox_seen:
+            return None
+        return path.read_text("utf-8", errors="replace"), stamp
+
+    def _mark_inbox(self, taken: dict[str, list[str]]) -> tuple[int, int] | None:
+        """Отметить взятые строки — в свежем тексте файла (его могли править, пока ставились задачи)."""
+        path = self.vault.inbox
+        text = path.read_text("utf-8", errors="replace")
+        marks: dict[int, str] = {}
+        left = {k: list(v) for k, v in taken.items()}
+        for item in inbox.parse(text):
+            notes = left.get(item.text)
+            if notes:
+                marks[item.line] = notes.pop(0)
+        if not marks:
+            return None
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(inbox.mark(text, marks), encoding="utf-8")
+        os.replace(tmp, path)
+        stat = path.stat()
+        return stat.st_mtime_ns, stat.st_size
 
     # --- запись и события --------------------------------------------------------------------------------
     def _save_now(self, task: Task) -> None:
@@ -428,7 +699,7 @@ class Background(BaseService):
         finally:
             self._notes_busy.discard(task.id)
 
-    async def _notify(self, kind: str, task: Task, text: str) -> None:
+    async def _notify(self, kind: str, task: Task, text: str, question: Question | None = None) -> None:
         settings = self.ctx.settings.value
         channels = (
             settings.background.notify_question if kind == "question" else settings.background.notify_done
@@ -451,7 +722,10 @@ class Background(BaseService):
                 await asyncio.wait_for(self.ctx.tts.say(speech_text(text)), 15.0)
         if "telegram" in channels:
             telegram = getattr(getattr(self.ctx, "remote", None), "telegram", None)
+            ask = getattr(telegram, "ask_owner", None)
             notify = getattr(telegram, "notify_owner", None)
-            if callable(notify):
-                with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception):
+                if question is not None and callable(ask):  # с кнопками ответа: ответить можно из Telegram
+                    await ask(task.id, question, text)
+                elif callable(notify):
                     await notify(text)

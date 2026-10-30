@@ -17,6 +17,7 @@ from jarvis.ai.format import one_line
 from jarvis.ai.policy import decision, tool_risk
 from jarvis.ai.tools import mcp_tool, untrusted
 from jarvis.ai.web import check_public_url, site_name
+from jarvis.background import measure
 from jarvis.services import UserFacingError
 
 if TYPE_CHECKING:
@@ -139,6 +140,24 @@ async def _vault_write(s: "Session", args: dict[str, Any]) -> Outcome:
     s.written.append(written)
     verb = {"append": "Дописал", "create": "Создал"}.get(mode, "Записал")
     return Outcome(True, f"{verb} заметку {written}", f"{verb} [[{written.removesuffix('.md')}]]")
+
+
+async def _measure_add(s: "Session", args: dict[str, Any]) -> Outcome:
+    table = _arg(args, "table")
+    if not table:
+        return Outcome(False, "Ошибка: нужно название таблицы замеров (table), например «Курс доллара»")
+    hourly = s.task.repeat.get("kind") == "hours"
+    result = await s.ctx.run_io(lambda: measure.add_row(s.vault, table, args.get("values"), hourly=hourly))
+    s.task.add_table(result["path"])
+    s.written.append(result["path"])
+    row = "; ".join(f"{k}: {v}" for k, v in result["row"].items() if v)
+    verb = "Обновил" if result["replaced"] else "Записал"
+    chart = " График обновлён." if result["chart"] else ""
+    return Outcome(
+        True,
+        f"{verb} замер в {result['path']}: {row}. Строк в таблице: {result['rows']}.{chart}",
+        f"{verb} замер: {one_line(row, 160)} → [[{result['path'].removesuffix('.md')}]]",
+    )
 
 
 # --- план, ход работы, вопрос ---------------------------------------------------------------------------
@@ -350,6 +369,29 @@ def base_tools(*, web_search: bool = True, web_read: bool = True) -> list[TaskTo
             ["path", "content"],
             _vault_write,
             lambda a: f"Пишу заметку {one_line(_arg(a, 'path'), 60)}",
+            risk="act",
+        ),
+        TaskTool(
+            "measure_add",
+            "Записать замер — числа на дату (цена, курс, подписчики, метрика) — строкой в таблицу замеров "
+            "Замеры/<table> своей папки. Дата ставится сама (замер за прошлый день — колонка «Дата», "
+            "например 28.10.2026); за ту же дату строка заменяется. От раза к разу — та же таблица и те же "
+            "колонки (с единицами: «Курс ЦБ, ₽»); новая колонка добавится сама. График Jarvis рисует сам.",
+            {
+                "table": _s("Название таблицы, например «Курс доллара»"),
+                "values": {
+                    "type": "array",
+                    "description": "Значения: колонка и значение (числа — как пишут люди: 81,42)",
+                    "items": {
+                        "type": "object",
+                        "properties": {"column": {"type": "string"}, "value": {"type": "string"}},
+                        "required": ["column", "value"],
+                    },
+                },
+            },
+            ["table", "values"],
+            _measure_add,
+            lambda a: f"Записываю замер: {one_line(_arg(a, 'table'), 60)}",
             risk="act",
         ),
         TaskTool(

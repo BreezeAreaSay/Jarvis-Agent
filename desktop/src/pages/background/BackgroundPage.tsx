@@ -129,25 +129,54 @@ function NewTask({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [brief, setBrief] = useState("");
   const [deliverable, setDeliverable] = useState("");
   const [repeat, setRepeat] = useState<TaskRepeat>({});
+  const [found, setFound] = useState(""); // повтор, найденный в тексте («каждый вечер …»)
+  const [touched, setTouched] = useState(false); // человек сам выбрал «Повторять» — текст больше не подсказывает
   const [runNow, setRunNow] = useState(true);
   const [busy, setBusy] = useState(false);
   const repeating = "kind" in repeat;
+  // повтор в начале текста — сразу в «Повторять» (видно до создания, можно убрать: «Не повторять»)
+  useEffect(() => {
+    if (touched || !open) return;
+    const text = brief.trim();
+    if (!text) {
+      setFound("");
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      api
+        .post<{ repeat: TaskRepeat; repeat_text: string }>("/api/background/parse", { text })
+        .then((r) => {
+          setRepeat(r.repeat ?? {});
+          setFound(r.repeat_text);
+        })
+        .catch(() => undefined);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [brief, touched, open]);
+  const pick = (r: TaskRepeat) => {
+    setTouched(true);
+    setFound("");
+    setRepeat(r);
+  };
   const create = async () => {
     if (!brief.trim()) return;
     setBusy(true);
     try {
-      // «Не повторять» — null: ядро само найдёт повтор в тексте («каждый вечер записывай …»)
+      // выбран в форме сам — как выбран («Не повторять» — {}); не трогали — ядро найдёт повтор в тексте, как и
+      // показала подсказка (null: и если её ещё не успели показать)
       const r = await api.post<{ task: TaskCard }>("/api/background", {
         brief,
         deliverable,
         source: "ui",
-        repeat: repeating ? repeat : null,
+        repeat: touched ? repeat : null,
         run_now: runNow,
       });
       useBackground.getState().upsert(r.task);
       setBrief("");
       setDeliverable("");
       setRepeat({});
+      setFound("");
+      setTouched(false);
       setRunNow(true);
       onClose();
       navigate("background", r.task.id);
@@ -199,13 +228,18 @@ function NewTask({ open, onClose }: { open: boolean; onClose: () => void }) {
       />
       <div className="bg-new-repeat">
         <span className="small muted">Повторять</span>
-        <RepeatPicker value={repeat} onChange={setRepeat} />
+        <RepeatPicker value={repeat} onChange={pick} />
         {repeating && (
           <CheckBox checked={runNow} onChange={setRunNow}>
             Первый раз — сразу
           </CheckBox>
         )}
       </div>
+      {found && repeating && (
+        <p className="faint tiny" style={{ margin: "6px 0 0" }}>
+          Повтор из текста: {found}. Не нужен — выберите «Не повторять».
+        </p>
+      )}
       <div className="bg-examples">
         <span className="faint tiny">Например:</span>
         {EXAMPLES.map((ex) => (
@@ -216,6 +250,8 @@ function NewTask({ open, onClose }: { open: boolean; onClose: () => void }) {
             onClick={() => {
               setBrief(ex.text);
               setRepeat(ex.repeat ?? {});
+              setTouched(true);
+              setFound("");
             }}
           >
             {ex.repeat && <Repeat />}

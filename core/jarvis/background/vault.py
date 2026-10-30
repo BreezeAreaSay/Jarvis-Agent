@@ -54,6 +54,7 @@ STATUS_WORDS = {
 STATUS_ICON = {"done": "✅", "partial": "⚠️", "failed": "❌", "cancelled": "⏹️"}
 
 FOLDERS = ("Задачи", "Исследования", "Замеры", "Журнал")
+HUMAN_NOTES = frozenset({INBOX.casefold(), "инструкции.md"})  # пишет только человек (и Jarvis — отметки)
 README = """# Папка Jarvis
 
 Здесь работает агент Jarvis: в фоне, пока вы заняты своим, он ищет, читает сайты и записывает сюда итоги.
@@ -336,6 +337,10 @@ class Vault:
             raise UserFacingError("Ошибка: слишком длинный текст — раздели на несколько заметок")
         self.ensure()
         path = self.resolve(rel, write=True)
+        if path.parent == self.home.resolve() and path.name.casefold() in HUMAN_NOTES:
+            # «Входящие» и «Инструкции» ведёт человек: запись агента туда — это задачи и указания самому себе
+            # (например, подсказанные текстом чужой страницы)
+            raise UserFacingError(f"Ошибка: «{path.stem}» ведёт человек — агент в эту заметку не пишет")
         path.parent.mkdir(parents=True, exist_ok=True)
         if mode == "create" and path.exists():
             for n in range(2, 100):

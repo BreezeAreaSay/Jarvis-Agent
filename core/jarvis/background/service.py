@@ -46,7 +46,11 @@ ALLOW = ("разреш", "да", "ок", "ok", "можно", "давай")
 TICK_S = 15.0  # как часто смотреть расписание и «Входящие»
 MAX_FAILS = 3  # неудачных запусков подряд — повторы на паузу
 INBOX_BATCH = 5  # задач из «Входящих» за раз (вставили длинный список — разберётся за несколько раз)
-INBOX_REMEMBER_S = 24 * 3600.0  # взятую строку не брать снова, даже если отметить её не вышло
+# «Входящие» правили недавно — подождать: человек может ещё печатать (Obsidian сохраняет на ходу), а строка,
+# взятая на полуслове, стала бы задачей с обрывком текста
+INBOX_SETTLE_S = 30.0
+INBOX_REMEMBER_S = 24 * 3600.0  # задача по строке поставлена, а отметить строку не вышло — столько помнить
+INBOX_KEY = "background:inbox_pending"
 
 
 def title_of(brief: str) -> str:
@@ -82,7 +86,9 @@ class Background(BaseService):
         self._unsubscribe: list[Callable[[], None]] = []
         self._ticker: asyncio.Task[None] | None = None
         self._inbox_seen: tuple[int, int] | None = None  # «Входящие» уже разобраны в таком виде (mtime, size)
-        self._inbox_taken: dict[str, float] = {}  # текст взятой строки → когда
+        # строки, по которым задача поставлена, а отметить их в файле не вышло (файл был занят): текст → {note
+        # (заметка задачи или «!причина»), ts}; помнится в базе — после перезапуска не будет второй задачи
+        self._inbox_pending: dict[str, dict[str, Any]] = {}
         self._inbox_warned = ""
 
     # --- жизнь сервиса --------------------------------------------------------------------------------
@@ -95,6 +101,11 @@ class Background(BaseService):
                 self._dirty.add(task.id)
             self._tasks[task.id] = task
         self._started, self._shutting = True, False
+        with contextlib.suppress(Exception):
+            saved = self.ctx.db.kv_get(INBOX_KEY, {}) or {}
+            self._inbox_pending = {
+                str(k): v for k, v in saved.items() if isinstance(v, dict) and isinstance(v.get("note"), str)
+            }
         self._unsubscribe.append(self.ctx.settings.on_change(self._settings_changed))
         self._schedule()
         if self._dirty:
@@ -359,12 +370,13 @@ class Background(BaseService):
         task.questions.append(question)
         task.status = "waiting"
         self._save_now(task)
-        self.ctx.bus.publish("background.question", {"task_id": task.id, "question": vars(question)})
-        await self._notify("question", task, f"{task.title}: {question.text}", question)
+        # ждать ответа — раньше уведомлений: ответ, данный, пока они уходят (Telegram, голос), не теряется
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._waiters[question.id] = future
         began = time.monotonic()
         try:
+            self.ctx.bus.publish("background.question", {"task_id": task.id, "question": vars(question)})
+            await self._notify("question", task, f"{task.title}: {question.text}", question)
             answer = await asyncio.wait_for(asyncio.shield(future), session.live_wait)
         except TimeoutError:
             raise Parked from None
@@ -443,6 +455,12 @@ class Background(BaseService):
                 task.status = "waiting"
                 task.add_log("Жду ответа на вопрос — продолжу после него", "note")
                 self._save_now(task)
+            elif session.outcome == "waiting" and any(
+                q.answered and q.asked >= session.opened for q in task.questions
+            ):  # ответили, когда заход уже уходил на паузу — продолжить, а не закончить «сделано не всё»
+                task.status = "queued"
+                task.add_log("Ответ пришёл — продолжаю", "note")
+                self._save_now(task)
             else:
                 outcome = session.outcome if session.outcome in ("done", "partial", "failed") else "partial"
                 summary = (
@@ -462,6 +480,7 @@ class Background(BaseService):
         task.cycle_started = time.time()
         task.cycle_steps, task.cycle_worked = task.steps, task.worked_s
         task.plan = []
+        task.approved = []  # разрешение прошлого запуска («Купить») — не разрешение на каждый следующий
         task.status, task.error, task.finished, task.next_run = "queued", "", 0.0, 0.0
         task.add_log(f"Запуск №{task.cycle} — {reason}", "note")
 
@@ -495,7 +514,7 @@ class Background(BaseService):
                         "error",
                     )
                 else:
-                    final, task.next_run = "scheduled", next_run(task.repeat, now)
+                    final, task.next_run = "scheduled", self._next_after(task, now)
                     task.add_log(f"Следующий запуск — {human_time(task.next_run)}", "note")
         task.status = final
         self._save_now(task)
@@ -519,6 +538,16 @@ class Background(BaseService):
             if final == "paused":
                 text += " Повторы на паузе: запуски не получаются."
             self.ctx.spawn(self._notify("done", task, text), f"task-notify-{task.id}")
+
+    @staticmethod
+    def _next_after(task: Task, now: float) -> float:
+        """Следующий запуск после этого: «каждые N часов» — от начала запуска (без сдвига на время работы),
+        по времени дня — следующее такое время."""
+        anchor = task.cycle_started if task.repeat.get("kind") == "hours" and task.cycle_started else now
+        upcoming = next_run(task.repeat, anchor)
+        while upcoming <= now:
+            upcoming = next_run(task.repeat, upcoming)
+        return upcoming
 
     def _trim(self) -> None:
         old = sorted(
@@ -568,50 +597,78 @@ class Background(BaseService):
             return
         text, stamp = found
         now = time.time()
-        self._inbox_taken = {k: v for k, v in self._inbox_taken.items() if now - v < INBOX_REMEMBER_S}
-        fresh = [i for i in inbox.parse(text) if i.text not in self._inbox_taken]
-        if not fresh:
-            self._inbox_seen = stamp
-            return
-        problem = self._ai_problem()
-        if problem:  # без модели задачи не поставить — строки ждут, пока её подключат
-            if self._inbox_warned != problem:
-                log.info("«Входящие»: задачи ждут — %s", problem)
-                self._inbox_warned = problem
-            return
-        self._inbox_warned = ""
-        taken: dict[str, list[str]] = {}
-        for item in fresh[:INBOX_BATCH]:
-            self._inbox_taken[item.text] = now
+        items = inbox.parse(text)
+        present = {i.text for i in items}
+        # своя строка, которую не вышло отметить, — помнить, пока она в файле (и не дольше суток)
+        pending = {
+            k: v
+            for k, v in self._inbox_pending.items()
+            if k in present and now - float(v.get("ts") or 0) < INBOX_REMEMBER_S
+        }
+        marks: dict[str, list[str]] = {}
+        fresh = []
+        for item in items:
+            if item.text in pending:  # задача уже поставлена — только отметить строку
+                marks.setdefault(item.text, []).append(str(pending[item.text]["note"]))
+            else:
+                fresh.append(item)
+        waiting = False
+        if fresh:
+            problem = self._ai_problem()
+            if problem:  # без модели задачи не поставить — строки ждут, пока её подключат
+                waiting = True
+                if self._inbox_warned != problem:
+                    log.info("«Входящие»: задачи ждут — %s", problem)
+                    self._inbox_warned = problem
+            else:
+                self._inbox_warned = ""
+                for item in fresh[:INBOX_BATCH]:
+                    note = self._take_inbox_item(item)
+                    pending[item.text] = {"note": note, "ts": now}
+                    marks.setdefault(item.text, []).append(note)
+                waiting = len(fresh) > INBOX_BATCH  # остались ещё — разобрать на следующей проверке
+        written = None
+        if marks:
             try:
-                task = self.create(item.brief, source="vault")
-            except UserFacingError as e:
-                log.info("«Входящие»: «%s» не взята: %s", one_line(item.text, 60), e)
-                taken.setdefault(item.text, []).append(f"!{e}")
-                continue
-            taken.setdefault(item.text, []).append(self.vault.task_note(task))
-            self.ctx.bus.publish(
-                "toast",
-                {
-                    "title": "Задача из «Входящих»",
-                    "message": one_line(task.title, 200),
-                    "status": "info",
-                    "icon": "task",
-                    "ts": time.time(),
-                    "task_id": task.id,
-                },
-            )
-        try:
-            written = await self.ctx.run_io(self._mark_inbox, taken)
-        except Exception as e:
-            log.info("«Входящие»: отметить взятые не вышло: %s", e)
-            written = None
-        if len(fresh) <= INBOX_BATCH:  # остались ещё — разобрать на следующей проверке
+                result = await self.ctx.run_io(self._mark_inbox, marks)
+            except Exception as e:
+                log.info("«Входящие»: отметить взятые не вышло: %s", e)
+                result = None
+            if result is not None:
+                written, done = result
+                for marked in done:
+                    pending.pop(marked, None)
+        if pending != self._inbox_pending:
+            self._inbox_pending = pending
+            with contextlib.suppress(Exception):
+                self.ctx.db.kv_set(INBOX_KEY, pending)
+        if not pending and not waiting:
             self._inbox_seen = written or stamp
 
+    def _take_inbox_item(self, item: inbox.Item) -> str:
+        """Строка «Входящих» → задача; вернёт её заметку (для ссылки в строке) или «!причина», если не
+        взялась."""
+        try:
+            task = self.create(item.brief, source="vault")
+        except UserFacingError as e:
+            log.info("«Входящие»: «%s» не взята: %s", one_line(item.text, 60), e)
+            return f"!{e}"
+        self.ctx.bus.publish(
+            "toast",
+            {
+                "title": "Задача из «Входящих»",
+                "message": one_line(task.title, 200),
+                "status": "info",
+                "icon": "task",
+                "ts": time.time(),
+                "task_id": task.id,
+            },
+        )
+        return self.vault.task_note(task)
+
     def _read_inbox(self) -> tuple[str, tuple[int, int]] | None:
-        """Текст «Входящих», если они изменились с прошлой проверки (нет файла, а папка агента есть —
-        создать)."""
+        """Текст «Входящих», если они изменились с прошлой проверки и их не правят прямо сейчас (нет файла, а
+        папка агента есть — создать). Не UTF-8 — не трогать: перезапись испортила бы текст."""
         path = self.vault.inbox
         try:
             stat = path.stat()
@@ -620,27 +677,36 @@ class Background(BaseService):
                 self.vault.ensure()
             return None
         stamp = (stat.st_mtime_ns, stat.st_size)
-        if stamp == self._inbox_seen:
+        if stamp == self._inbox_seen or time.time() - stat.st_mtime < INBOX_SETTLE_S:
             return None
-        return path.read_text("utf-8", errors="replace"), stamp
+        try:
+            return path.read_bytes().decode("utf-8"), stamp
+        except UnicodeDecodeError:
+            if self._inbox_warned != "encoding":
+                log.warning("«Входящие» не в UTF-8 — пропускаю: %s", path)
+                self._inbox_warned = "encoding"
+            return None
 
-    def _mark_inbox(self, taken: dict[str, list[str]]) -> tuple[int, int] | None:
-        """Отметить взятые строки — в свежем тексте файла (его могли править, пока ставились задачи)."""
+    def _mark_inbox(self, marks: dict[str, list[str]]) -> tuple[tuple[int, int], set[str]] | None:
+        """Отметить взятые строки — в свежем тексте файла (его могли править, пока ставились задачи). Вернёт
+        (вид файла после записи, тексты отмеченных строк); отмечать нечего — None."""
         path = self.vault.inbox
-        text = path.read_text("utf-8", errors="replace")
-        marks: dict[int, str] = {}
-        left = {k: list(v) for k, v in taken.items()}
+        text = path.read_bytes().decode("utf-8")
+        lines: dict[int, str] = {}
+        left = {k: list(v) for k, v in marks.items()}
+        done: set[str] = set()
         for item in inbox.parse(text):
             notes = left.get(item.text)
             if notes:
-                marks[item.line] = notes.pop(0)
-        if not marks:
+                lines[item.line] = notes.pop(0)
+                done.add(item.text)
+        if not lines:
             return None
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(inbox.mark(text, marks), encoding="utf-8")
+        tmp.write_text(inbox.mark(text, lines), encoding="utf-8")
         os.replace(tmp, path)
         stat = path.stat()
-        return stat.st_mtime_ns, stat.st_size
+        return (stat.st_mtime_ns, stat.st_size), done
 
     # --- запись и события --------------------------------------------------------------------------------
     def _save_now(self, task: Task) -> None:

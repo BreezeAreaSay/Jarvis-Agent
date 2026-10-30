@@ -132,3 +132,14 @@ def test_parse_repeat_weekly_uses_today() -> None:
 )
 def test_parse_repeat_ignores(text: str) -> None:
     assert parse_repeat(text) == ({}, text)
+
+
+def test_review_fixes_overflow_and_stories() -> None:
+    with pytest.raises(UserFacingError):
+        clean_repeat({"kind": "hours", "hours": "inf"})
+    for text in (
+        "Каждый день я трачу 2 часа на дорогу — найди способ быстрее",
+        "По будням я езжу на метро, посоветуй подкаст",
+        "Каждое утро у меня болит голова — что это может быть",
+    ):
+        assert parse_repeat(text) == ({}, text)

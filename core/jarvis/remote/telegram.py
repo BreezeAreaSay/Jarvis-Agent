@@ -43,6 +43,7 @@ MAX_BACKOFF = 60.0
 STALE_MESSAGE_S = 120.0  # сообщения старше — из очереди, пока компьютер был выключен
 MAX_QUESTIONS = 100  # сообщений с вопросами задач, на которые можно ответить (сообщение → задача, вопрос)
 QUESTIONS_KEY = "telegram:task_questions"
+STALE_APPROVAL = "Jarvis только что запустился — ответьте ещё раз, чтобы разрешить."
 CONFIRM_TTL_S = 60.0
 STRANGER_REPLY_S = 600.0  # чужим отвечаем не чаще раза в 10 минут
 MAX_MESSAGE = 4000
@@ -451,7 +452,7 @@ class TelegramBot:
 
         replied = (message.get("reply_to_message") or {}).get("message_id")
         if text and not command and replied is not None and self._question_of(int(replied)) is not None:
-            await self._task_reply(chat_id, int(replied), text)
+            await self._task_reply(chat_id, int(replied), text, backlog=backlog)
             return
         if command in ("start", "menu"):
             await self._send_menu(chat_id)
@@ -754,12 +755,20 @@ class TelegramBot:
         await self._answer(query_id, "Ответ передан задаче")
         await self._close_question(chat_id, message_id, message, f"ответ: {choice}")
 
-    async def _task_reply(self, chat_id: int, replied: int, text: str) -> None:
-        """Текст ответом на сообщение с вопросом задачи — ответ этой задаче."""
+    async def _task_reply(self, chat_id: int, replied: int, text: str, *, backlog: bool = False) -> None:
+        """Текст ответом на сообщение с вопросом задачи — ответ этой задаче (разрешение, написанное, пока
+        Jarvis был выключен, — как и кнопка: только заново)."""
         found = self._question_of(replied)
         background = self._background()
         if found is None or background is None:
             return
+        if backlog:
+            with contextlib.suppress(UserFacingError):
+                task = background.get(found[0])
+                question = next((q for q in task.questions if q.id == found[1]), None)
+                if question is not None and question.kind == "approval" and question.open:
+                    await self._send(chat_id, STALE_APPROVAL)
+                    return
         try:
             background.answer(found[0], found[1], text)
         except UserFacingError as e:

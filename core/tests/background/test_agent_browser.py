@@ -2,6 +2,7 @@
 разрешения, пароли — только человеку, живая картинка и «Взять управление» в панели."""
 
 import asyncio
+import contextlib
 import json
 import re
 import subprocess
@@ -301,3 +302,31 @@ def test_window_api_and_panel_state(client: TestClient) -> None:
         panel = json.loads(ws.receive_text())
         assert panel["type"] == "state" and panel["data"]["windowed"] and panel["data"]["target"] == ""
     assert client.post("/api/agent-browser/window/close").json()["windowed"] is False
+
+
+async def test_window_waits_for_starting_browser_and_task_never_gets_the_window(
+    bg: Bg, chrome: FakeChrome
+) -> None:
+    ctx, _, _ = bg
+    browser: AgentBrowser = ctx.agent_browser  # type: ignore[assignment]
+    browser.find = lambda choice: APP
+
+    async def slow_launcher(app: launch.BrowserApp, args: list[str]) -> None:
+        await asyncio.sleep(0.3)  # браузер без окна ещё запускается…
+        await chrome.start(browser.profile)
+
+    browser.launcher = slow_launcher
+    window = FakeChrome(shop(), pid=5300)
+    use_window(ctx, window)
+    starting = asyncio.ensure_future(browser.task_tab("t1"))
+    await asyncio.sleep(0.05)
+    await browser.open_window(url="https://accounts.google.com/")  # …а человек уже нажал «Открыть окном»
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(starting, 5)
+    assert browser.windowed and not browser.connected
+    assert window.download_behavior == "default"  # задача не подключилась к окну человека
+    assert not any(m == "Target.createTarget" for m, _ in window.commands)
+    with pytest.raises(UserFacingError, match="открыт отдельным окном"):
+        await browser.task_tab("t2")
+    await browser.close_window()
+    await window.stop()

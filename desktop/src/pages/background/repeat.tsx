@@ -3,11 +3,12 @@
 import type { TaskRepeat } from "@/store/background";
 import { Select } from "@/ui";
 
-type Mode = "none" | "daily" | "workdays" | "weekend" | "weekly" | "hours";
+type Mode = "none" | "daily" | "workdays" | "weekend" | "weekly" | "custom" | "hours";
 
 const WORKDAYS = [0, 1, 2, 3, 4];
 const WEEKEND = [5, 6];
 const DAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"];
+const SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 
 const MODES: { value: Mode; label: string }[] = [
   { value: "none", label: "Не повторять" },
@@ -29,12 +30,15 @@ function modeOf(repeat: TaskRepeat): Mode {
   if (!days.length) return "daily";
   if (same(days, WORKDAYS)) return "workdays";
   if (same(days, WEEKEND)) return "weekend";
-  return "weekly";
+  return days.length === 1 ? "weekly" : "custom";
 }
 
 /** Выбор расписания: что повторять, во сколько, в какой день, раз в сколько часов. */
 export function RepeatPicker({ value, onChange }: { value: TaskRepeat; onChange: (r: TaskRepeat) => void }) {
   const mode = modeOf(value);
+  // свой набор дней (задан моделью или в API: «по Пн, Ср, Пт») — свой пункт, чтобы смена времени его не сбрасывала
+  const custom = "kind" in value && value.kind === "daily" && mode === "custom" ? [...value.weekdays].sort() : [];
+  const modes = custom.length ? [...MODES.slice(0, 5), { value: "custom" as Mode, label: `По ${custom.map((d) => SHORT[d]).join(", ")}` }, MODES[5]] : MODES;
   const at = "kind" in value && value.kind === "daily" ? value.at : "09:00";
   const day = "kind" in value && value.kind === "daily" && value.weekdays.length === 1 ? value.weekdays[0] : new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
   const hours = "kind" in value && value.kind === "hours" ? value.hours : 3;
@@ -43,13 +47,14 @@ export function RepeatPicker({ value, onChange }: { value: TaskRepeat; onChange:
     if (next === "none") onChange({});
     else if (next === "hours") onChange({ kind: "hours", hours: Math.max(1, Math.min(168, Math.round(patch.hours ?? hours) || 1)) });
     else {
-      const weekdays = next === "daily" ? [] : next === "workdays" ? WORKDAYS : next === "weekend" ? WEEKEND : [patch.day ?? day];
+      const weekdays =
+        next === "daily" ? [] : next === "workdays" ? WORKDAYS : next === "weekend" ? WEEKEND : next === "custom" ? custom : [patch.day ?? day];
       onChange({ kind: "daily", at: time, weekdays });
     }
   };
   return (
     <div className="bg-repeat">
-      <Select<Mode> value={mode} options={MODES} onChange={(v) => set(v)} width={190} />
+      <Select<Mode> value={mode} options={modes} onChange={(v) => set(v)} width={190} />
       {mode === "weekly" && (
         <Select<string>
           value={String(day)}

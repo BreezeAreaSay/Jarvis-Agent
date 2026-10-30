@@ -93,3 +93,27 @@ def test_load_for_ui(vault: Vault) -> None:
     assert table["total"] == 3 and table["rows"][-1] == ["2026-10-29", "81,4", "cbr.ru"]
     assert table["link"].startswith("obsidian://open?")
     assert measure.load(vault, "Jarvis/Замеры/Нет такой.md") is None
+
+
+def test_review_fixes_names_hours_and_pipes(vault: Vault) -> None:
+    # «/» в названии — не папка: USD/RUB и EUR/RUB — разные таблицы
+    usd = measure.add_row(vault, "Курс USD/RUB", {"Курс ЦБ, ₽": "81,4"}, now=at(30))
+    eur = measure.add_row(vault, "Курс EUR/RUB", {"Курс ЦБ, ₽": "94,6"}, now=at(30))
+    assert usd["path"] == "Jarvis/Замеры/Курс USD-RUB.md" and eur["path"] == "Jarvis/Замеры/Курс EUR-RUB.md"
+    # частый замер с датой без часа: сегодня — текущий час, а не 00:00 (иначе все замеры дня — одна строка)
+    measure.add_row(vault, "Биткоин", {"Дата": "30.10.2026", "Цена, $": "68 000"}, hourly=True, now=at(30, 9))
+    measure.add_row(
+        vault, "Биткоин", {"Дата": "2026-10-30", "Цена, $": "68 500"}, hourly=True, now=at(30, 12)
+    )
+    rows = measure.read_table((vault.root / "Jarvis/Замеры/Биткоин.md").read_text("utf-8"))[1]
+    assert [r[0] for r in rows] == ["2026-10-30 09:00", "2026-10-30 12:00"]
+    assert measure.normalize_date("29.10.2026", hourly=True, now=at(30, 12)) == "2026-10-29 00:00"
+    # ссылка с подписью в ячейке человека ([[заметка\|подпись]]) — не граница ячейки
+    path = vault.root / "Jarvis" / "Замеры" / "Вес.md"
+    path.write_text(
+        "| Дата | Вес, кг | Где |\n|---|---|---|\n| 2026-10-28 | 80,5 | [[Спорт\\|зал]] |\n", "utf-8"
+    )
+    measure.add_row(vault, "Вес", {"Вес, кг": "80,1"}, now=at(29))
+    columns, rows = measure.read_table(path.read_text("utf-8"))
+    assert columns == ["Дата", "Вес, кг", "Где"] and rows[0] == ["2026-10-28", "80,5", "[[Спорт\\|зал]]"]
+    assert "[[Спорт\\|зал]]" in path.read_text("utf-8")

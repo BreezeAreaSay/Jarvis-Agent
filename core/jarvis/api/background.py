@@ -6,7 +6,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from jarvis.api.deps import Ctx
-from jarvis.background.service import Background
+from jarvis.background.repeat import describe, parse_repeat
+from jarvis.background.service import MAX_BRIEF, Background, title_of
 from jarvis.context import AppContext
 
 router = APIRouter()
@@ -25,6 +26,10 @@ class TaskIn(BaseModel):
 
 class RepeatIn(BaseModel):
     repeat: dict[str, Any] | None = None  # null или {} — снять повторы
+
+
+class ParseIn(BaseModel):
+    text: str
 
 
 class AnswerIn(BaseModel):
@@ -61,6 +66,14 @@ async def background_create(body: TaskIn, ctx: Ctx) -> dict[str, Any]:
         run_now=body.run_now,
     )
     return {"task": task.card()}
+
+
+@router.post("/api/background/parse")
+async def background_parse(body: ParseIn) -> dict[str, Any]:
+    """Повтор в начале текста задачи («каждый вечер …») — показать в форме новой задачи до её создания."""
+    repeat, rest = parse_repeat(body.text[:MAX_BRIEF])
+    title = title_of(rest) if rest.strip() else ""
+    return {"repeat": repeat, "repeat_text": describe(repeat), "title": title}
 
 
 @router.get("/api/background/vault")

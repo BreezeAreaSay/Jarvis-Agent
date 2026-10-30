@@ -164,6 +164,12 @@ class AgentBrowser(Browser):
             raise UserFacingError(WINDOW_OPEN)
         return await super().connect(launch)
 
+    async def _running(self, profile: Path) -> CdpClient | None:
+        # под замком подключения: пока открыто окно, порт отладки в профиле — его, задаче к нему нельзя
+        if self.windowed:
+            raise UserFacingError(WINDOW_OPEN)
+        return await super()._running(profile)
+
     async def close(self) -> None:
         """Закрыть браузер совсем (окна у него нет — иначе процесс остался бы висеть)."""
         client = self.client
@@ -285,6 +291,14 @@ class AgentBrowser(Browser):
         app = self.find(self._choice())
         if app is None:
             raise UserFacingError("Не нашёл Google Chrome или Microsoft Edge — установите один из них")
+        # под замком подключения: идущий запуск браузера без окна сначала закончится (и будет закрыт), а новый
+        # не начнётся, пока окно открыто
+        async with self._lock:
+            if self.windowed:
+                return
+            await self._open_window(app, url)
+
+    async def _open_window(self, app: launch.BrowserApp, url: str) -> None:
         self.windowed = True
         self.ctx.bus.publish("agent_browser.state", self.state())
         try:
@@ -301,7 +315,7 @@ class AgentBrowser(Browser):
             deadline = time.monotonic() + self.port_wait_s
             client = None
             while time.monotonic() < deadline:
-                client = await self._running(profile)
+                client = await super()._running(profile)
                 if client is not None or proc.poll() is not None:
                     break
                 await asyncio.sleep(0.2)
@@ -316,7 +330,14 @@ class AgentBrowser(Browser):
         self._set("closed")
 
     async def close_window(self) -> None:
-        """Закрыть окно бережно (браузер сам сохранит вход); не закрылось — остановить процесс."""
+        """Закрыть окно бережно (браузер сам сохранит вход); не закрылось — остановить процесс. Окно ещё
+        открывается — дождаться этого (замок подключения) и закрыть уже открытое."""
+        if not self.windowed:
+            return
+        async with self._lock:
+            await self._close_window()
+
+    async def _close_window(self) -> None:
         if not self.windowed:
             return
         client, proc = self._window_client, self._window_proc

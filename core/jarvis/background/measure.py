@@ -54,24 +54,30 @@ def cell(text: Any) -> str:
     return one_line(str(text if text is not None else ""), 200).replace("|", "/")
 
 
-def normalize_date(text: str, *, hourly: bool) -> str:
+def normalize_date(text: str, *, hourly: bool, now: datetime | None = None) -> str:
     """«28.10.2026», «2026-10-28T21:05» → «2026-10-28» (частые замеры — «2026-10-28 21:00»); не дата — как
-    есть."""
+    есть. Частый замер с датой без часа: сегодня — текущий час (иначе все замеры дня легли бы в одну строку),
+    прошлый день — 00:00."""
     raw = str(text or "").strip()
     m = _DMY.match(raw)
     if m:
         day, month, year = int(m[1]), int(m[2]), int(m[3])
-        hour, minute = (int(m[4]), int(m[5])) if m[4] else (0, 0)
+        timed = bool(m[4])
+        hour, minute = (int(m[4]), int(m[5])) if timed else (0, 0)
     else:
         m = _ISO.match(raw)
         if not m:
             return cell(raw)
         year, month, day = int(m[1]), int(m[2]), int(m[3])
-        hour, minute = (int(m[4]), int(m[5])) if m[4] else (0, 0)
+        timed = bool(m[4])
+        hour, minute = (int(m[4]), int(m[5])) if timed else (0, 0)
     try:
         moment = datetime(year, month, day, hour, minute)
     except ValueError:
         return cell(raw)
+    current = now or datetime.now()
+    if hourly and not timed and moment.date() == current.date():
+        moment = moment.replace(hour=current.hour)
     return moment.strftime("%Y-%m-%d %H:00" if hourly else "%Y-%m-%d")
 
 
@@ -83,10 +89,11 @@ def stamp(moment: datetime, *, hourly: bool) -> str:
 
 
 def _row(line: str) -> list[str]:
+    """Ячейки строки таблицы; «\\|» внутри ячейки ([[заметка\\|подпись]]) — не граница."""
     inner = line.strip()
     inner = inner[1:] if inner.startswith("|") else inner
-    inner = inner[:-1] if inner.endswith("|") else inner
-    return [c.strip() for c in inner.split("|")]
+    inner = inner[:-1] if inner.endswith("|") and not inner.endswith("\\|") else inner
+    return [c.strip() for c in re.split(r"(?<!\\)\|", inner)]
 
 
 def _is_separator(line: str) -> bool:
@@ -256,10 +263,11 @@ def _values(raw: Any) -> list[tuple[str, str]]:
 
 
 def table_rel(vault: "Vault", table: str) -> str:
-    name = one_line(table, 80).strip(" ./\\") or "Замеры"
-    name = name.split("/")[-1].split("\\")[-1]
+    """Название таблицы → «Замеры/<название>»: «Курс USD/RUB» — «Курс USD-RUB» (не папка «Курс USD»)."""
+    name = one_line(table, 80)
     if name.lower().endswith(".md"):
         name = name[:-3]
+    name = re.sub(r"[\\/]+", "-", name).strip(" .-") or "Замеры"
     return f"{FOLDER}/{name}"
 
 
@@ -274,7 +282,10 @@ def add_row(
     if not values:
         raise UserFacingError("Ошибка: нет значений замера — values: {колонка: значение}")
     moment = now or datetime.now()
-    key = normalize_date(given_date, hourly=hourly) if given_date else stamp(moment, hourly=hourly)
+    if given_date:
+        key = normalize_date(given_date, hourly=hourly, now=moment)
+    else:
+        key = stamp(moment, hourly=hourly)
     path = vault.resolve(table_rel(vault, table), write=True)
     vault.ensure()
     path.parent.mkdir(parents=True, exist_ok=True)

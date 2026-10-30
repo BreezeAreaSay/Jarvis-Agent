@@ -48,7 +48,7 @@ def clean_repeat(raw: Any) -> dict[str, Any]:
     if kind == "hours":
         try:
             hours = int(float(str(raw.get("hours") or "").replace(",", ".")))
-        except ValueError:
+        except (ValueError, OverflowError):
             raise UserFacingError("Повтор раз в несколько часов: hours — число от 1 до 168") from None
         if not 1 <= hours <= MAX_HOURS:
             raise UserFacingError("Повтор раз в несколько часов: от 1 до 168 часов")
@@ -133,6 +133,10 @@ _ON_DAY = re.compile(
     re.I,
 )
 _LEAD = re.compile(r"^[\s,:;—–-]+")
+# после «каждый день …» — рассказ о себе, а не просьба: «каждый день я трачу…», «по будням мы ездим…»
+NOT_TASK_START = frozenset(
+    {"я", "мы", "ты", "вы", "он", "она", "оно", "они", "мне", "меня", "нам", "нас", "у", "это", "всё", "все"}
+)
 
 
 def _part_time(word: str) -> str:
@@ -203,5 +207,8 @@ def parse_repeat(text: str, now: float | None = None) -> tuple[dict[str, Any], s
         repeat["at"] = at or repeat["at"] or DEFAULT_AT
     rest = _LEAD.sub("", rest).strip()
     if len(rest) < 3:  # «каждый день» и всё — это не задача
+        return {}, source
+    first = rest.split(maxsplit=1)[0].casefold().strip(",.:;!?")
+    if first in NOT_TASK_START:  # «Каждый день я трачу 2 часа на дорогу — найди…» — рассказ, а не расписание
         return {}, source
     return clean_repeat(repeat), rest[:1].upper() + rest[1:]

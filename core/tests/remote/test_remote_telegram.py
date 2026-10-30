@@ -600,3 +600,16 @@ def test_chunks_and_format_reply() -> None:
     assert format_reply({"kind": "stop", "ok": True}) == "⏹ Остановлено"
     assert format_reply({"kind": "empty"}) == ""
     assert format_reply({"kind": "ai", "ok": False, "message": "Нет ключа"}) == "❌ Нет ключа"
+
+
+async def test_stale_text_approval_needs_fresh_answer(
+    ctx: AppContext, owned: None, bot: TelegramBot, fake: FakeTelegram
+) -> None:
+    task = _waiting_task(ctx, kind="approval", options=["Разрешить", "Отклонить"])
+    await bot.ask_owner(task.id, task.questions[0], "Оплатить заказ?")
+    asked = fake.message_id
+    stale = message("да, разрешаю", reply_to_message={"message_id": asked})
+    await bot.handle_update(stale, backlog=True)  # написали, пока Jarvis был выключен
+    assert task.questions[0].open and fake.texts()[-1] == telegram.STALE_APPROVAL
+    await bot.handle_update(message("да, разрешаю", reply_to_message={"message_id": asked}))
+    assert task.questions[0].answer == "да, разрешаю"

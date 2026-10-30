@@ -167,6 +167,7 @@ class Session:
     )  # действие → (ответ, сколько раз подряд)
     over: int = 0  # вызовов после лимита
     started: float = field(default_factory=time.monotonic)
+    opened: float = field(default_factory=time.time)  # когда заход начался (часы — как у вопросов)
     waited: float = 0.0  # секунд ожидания ответа человека — не в счёт времени работы
     written: list[str] = field(default_factory=list)  # заметки, записанные в этом заходе
     live_wait: float = field(default_factory=lambda: LIVE_WAIT_S)

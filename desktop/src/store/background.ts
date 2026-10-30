@@ -42,7 +42,7 @@ export interface MeasureTable {
 export interface TaskQuestion {
   id: string;
   text: string;
-  kind: "question" | "approval";
+  kind: "question" | "approval" | "plan";
   options: string[];
   detail: string;
   asked: number;

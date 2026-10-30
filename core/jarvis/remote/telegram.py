@@ -668,7 +668,8 @@ class TelegramBot:
         options = [str(o) for o in getattr(question, "options", []) or []][:6]
         rows = [[_button(o[:40], f"bq:{task_id}:{question.id}:{i}")] for i, o in enumerate(options)]
         detail = str(getattr(question, "detail", "") or "")
-        lines = [f"{'🔐' if approval else '❓'} <b>{html.escape(text)}</b>"]
+        mark = "🔐" if approval else ("📋" if getattr(question, "kind", "") == "plan" else "❓")
+        lines = [f"{mark} <b>{html.escape(text)}</b>"]
         if detail:
             lines.append(html.escape(detail))
         lines.append(

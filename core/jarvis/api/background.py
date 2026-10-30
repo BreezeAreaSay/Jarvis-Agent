@@ -141,6 +141,14 @@ async def background_repeat(task_id: str, body: RepeatIn, ctx: Ctx) -> dict[str,
     return {"task": service.set_repeat(task_id, body.repeat).card()}
 
 
+@router.post("/api/background/{task_id}/notebooklm")
+async def background_notebooklm(task_id: str, ctx: Ctx) -> dict[str, Any]:
+    """Итог и источники задачи — файлом для NotebookLM: {path, link, urls}."""
+    service = _service(ctx)
+    _known(service, task_id)
+    return await service.notebooklm(task_id)
+
+
 @router.get("/api/background/{task_id}/tables")
 async def background_tables(task_id: str, ctx: Ctx) -> dict[str, Any]:
     """Таблицы замеров задачи: [{path, name, columns, rows, total, numeric, link}]."""

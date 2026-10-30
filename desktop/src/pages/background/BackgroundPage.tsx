@@ -22,6 +22,7 @@ import {
   ListChecks,
   Loader2,
   MessageCircleQuestion,
+  NotebookText,
   Pause,
   Play,
   Plus,
@@ -53,6 +54,7 @@ import {
 import { Button, Check as CheckBox, cx, Empty, IconButton, Modal, notify, notifyError, Tabs, timeAgo } from "@/ui";
 import { AgentBrowserView } from "./AgentBrowserView";
 import { MeasureView } from "./MeasureView";
+import { copyText } from "../settings/kit";
 import { fmtWhen, RepeatPicker } from "./repeat";
 import "@/styles/background.css";
 
@@ -293,15 +295,18 @@ function QuestionCard({ taskId, question, site }: { taskId: string; question: Ta
     }
   };
   const approval = question.kind === "approval";
+  const plan = question.kind === "plan";
   return (
     <section className={cx("card", "bg-question", approval && "approval")}>
       <div className="row">
         <MessageCircleQuestion />
-        <strong>{approval ? "Агент просит разрешения" : "Агент спрашивает"}</strong>
+        <strong>{approval ? "Агент просит разрешения" : plan ? "Агент предлагает план" : "Агент спрашивает"}</strong>
         <span className="spacer" />
         <span className="faint tiny">{timeAgo(question.asked)}</span>
       </div>
-      <p className="bg-question-text">{question.text}</p>
+      <p className="bg-question-text" style={plan ? { whiteSpace: "pre-line" } : undefined}>
+        {question.text}
+      </p>
       {question.detail && <p className="muted small">{question.detail}</p>}
       {question.options.length > 0 && (
         <div className="row wrap">
@@ -309,7 +314,7 @@ function QuestionCard({ taskId, question, site }: { taskId: string; question: Ta
             <Button
               key={o}
               size="sm"
-              variant={approval && /^разреш/i.test(o) ? "primary" : "soft"}
+              variant={(approval && /^разреш/i.test(o)) || (plan && /^начина/i.test(o)) ? "primary" : "soft"}
               disabled={busy}
               onClick={() => void answer(o)}
             >
@@ -322,7 +327,9 @@ function QuestionCard({ taskId, question, site }: { taskId: string; question: Ta
         <input
           className="input grow"
           value={text}
-          placeholder={approval ? "Или напишите, что сделать вместо этого…" : "Ваш ответ…"}
+          placeholder={
+            approval ? "Или напишите, что сделать вместо этого…" : plan ? "Или напишите, что поправить в плане…" : "Ваш ответ…"
+          }
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void answer(text)}
         />
@@ -458,6 +465,19 @@ function Detail({ id }: { id: string }) {
       setBusy(false);
     }
   };
+  // NotebookLM открытого API не даёт: файл в хранилище (загрузить в «Добавить источник») и ссылки — в буфер
+  const notebooklm = async () => {
+    try {
+      const r = await api.post<{ path: string; link: string; urls: string[] }>(`/api/background/${id}/notebooklm`, {});
+      if (r.urls.length) await copyText(r.urls.join("\n")).catch(() => undefined);
+      notify(
+        `Файл для NotebookLM: ${r.path}${r.urls.length ? ` · ссылки (${r.urls.length}) скопированы` : ""} — «Добавить источник» в NotebookLM`,
+      );
+      bridge.openExternal(r.link);
+    } catch (e) {
+      notifyError(e);
+    }
+  };
   const progress = task.log.filter((e) => e.kind !== "action");
   const lastRun = task.history[task.history.length - 1];
   const tabs: { value: DetailTab; label: string; icon: ReactNode }[] = [{ value: "progress", label: "Ход работы", icon: <ListChecks /> }];
@@ -540,6 +560,9 @@ function Detail({ id }: { id: string }) {
               </Button>
               <IconButton icon={<Repeat />} label="Повторять по расписанию" size="sm" variant="ghost" onClick={() => setScheduling(true)} />
             </>
+          )}
+          {!active && (task.sources.length > 0 || Boolean(task.result)) && (
+            <IconButton icon={<NotebookText />} label="Для NotebookLM — итог и источники одним файлом" size="sm" variant="ghost" onClick={() => void notebooklm()} />
           )}
           {!active && (
             <IconButton icon={<Trash2 />} label="Удалить из списка (заметки останутся)" size="sm" variant="ghost" onClick={() => void act("delete")} />

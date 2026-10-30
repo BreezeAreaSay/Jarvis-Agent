@@ -210,6 +210,8 @@ class BackgroundSettings(_Model):
     parallel: int = Field(2, ge=1, le=4)  # сколько задач идёт одновременно
     # самостоятельность: careful — спрашивать чаще, normal — неясное и необратимое, bold — деньги и вход
     autonomy: Literal["careful", "normal", "bold"] = "normal"
+    # первый план задачи — человеку на утверждение: big — план из 4+ шагов или повторяющаяся задача
+    approve_plan: Literal["never", "big", "always"] = "big"
     max_steps: int = Field(150, ge=10, le=1000)  # действий на задачу
     max_hours: float = Field(4.0, ge=0.25, le=48.0)  # часов работы на задачу (без ожидания ответа)
     notify_question: list[NotifyChannel] = Field(default_factory=lambda: ["toast"])  # есть вопрос

@@ -358,6 +358,29 @@ class Vault:
             os.replace(tmp, path)
         return self.rel(path)
 
+    # --- источники для NotebookLM -------------------------------------------------------------------------
+    def notebooklm(self, task: "Task") -> tuple[str, list[str]]:
+        """«Для NotebookLM»: итог задачи и все её источники одним Markdown-файлом в NotebookLM/ своей папки
+        (NotebookLM принимает такие файлы: «Добавить источник» → «Загрузить»); ссылки — ещё и списком, чтобы
+        добавить их как сайты. Открытого API у NotebookLM для обычных аккаунтов нет — загружает человек.
+        Вернёт (путь файла, ссылки)."""
+        urls = [s["url"] for s in task.sources if str(s.get("url", "")).startswith(("http://", "https://"))]
+        title = task.title or one_line(task.brief, 80)
+        lines = [f"# {title}", "", f"Задача: {one_line(task.brief, 600)}", ""]
+        if task.summary:
+            lines += ["## Итог", "", task.summary, ""]
+        if task.result:
+            with contextlib.suppress(UserFacingError, OSError):
+                _, text, cut = self.read(task.result)
+                body = re.sub(r"^---\n.*?\n---\n", "", text, flags=re.S).strip()
+                lines += ["## Материалы", "", body + ("\n\n…" if cut else ""), ""]
+        if task.sources:
+            lines += ["## Источники", ""]
+            lines += [f"- [{s.get('title') or s['url']}]({s['url']})" for s in task.sources]
+            lines += ["", "Ссылки списком (в NotebookLM: «Добавить источник» → «Сайт»):", "", *urls, ""]
+        rel = self.write(f"{self.folder}/NotebookLM/{safe_name(title)}.md", "\n".join(lines))
+        return rel, urls
+
     # --- заметка задачи и журнал -------------------------------------------------------------------------
     def task_note(self, task: "Task") -> str:
         """Путь заметки задачи (выбирается один раз, при первой записи)."""

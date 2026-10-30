@@ -31,6 +31,7 @@ from jarvis.background import inbox, measure
 from jarvis.background.model import Question, Task, TaskStore
 from jarvis.background.repeat import clean_repeat, describe, next_run, parse_repeat
 from jarvis.background.runner import Parked, Session, run_session
+from jarvis.background.tools import plan_approved
 from jarvis.background.vault import STATUS_WORDS, Vault
 from jarvis.confirm import parse_yes_no
 from jarvis.db import new_id
@@ -329,6 +330,8 @@ class Background(BaseService):
         question.answer, question.answered = text[:2000], time.time()
         if question.kind == "approval" and question.key and allowed(text):
             task.approved.append(question.key)
+        if question.kind == "plan" and plan_approved(text):
+            task.plan_ok = True  # утвердили, пока задача на паузе, — второй раз не спрашиваем
         task.add_log(f"Ответ: {one_line(text, 200)}", "note")
         waiter = self._waiters.get(question.id)
         if waiter is not None and not waiter.done():
@@ -338,6 +341,16 @@ class Background(BaseService):
             self._schedule()
         self._save_now(task)
         return task
+
+    async def notebooklm(self, task_id: str) -> dict[str, Any]:
+        """Итог и источники задачи — файлом для NotebookLM в хранилище: {path, link, urls}."""
+        task = self.get(task_id)
+        if not task.sources and not task.result and not task.summary:
+            raise UserFacingError("У задачи пока нет ни итога, ни источников")
+        rel, urls = await self.ctx.run_io(self.vault.notebooklm, task)
+        task.add_log(f"Для NotebookLM: {rel}", "note")
+        self.changed(task)
+        return {"path": rel, "link": self.vault.link(rel), "urls": urls}
 
     def open_questions(self) -> list[tuple[Task, Question]]:
         """Вопросы задач, которые ждут ответа (старые первыми)."""

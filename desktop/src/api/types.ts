@@ -149,6 +149,8 @@ export interface Settings {
     parallel: number;
     /** careful — спрашивать чаще, normal — неясное и необратимое, bold — только деньги и вход. */
     autonomy: "careful" | "normal" | "bold";
+    /** Первый план задачи — на утверждение: big — план из 4+ шагов или повторяющаяся задача. */
+    approve_plan: "never" | "big" | "always";
     max_steps: number;
     max_hours: number;
     /** Как сообщать о вопросе и об итоге: всплывающее окно, голос, Telegram; пусто — тихо. */
@@ -226,6 +228,8 @@ export interface HistoryItem {
   detail: string;
   icon: string;
   command_id: string;
+  /** Сколько длилось от фразы до итога, мс (0 — сразу). */
+  ms?: number;
 }
 
 export interface ExecResult {

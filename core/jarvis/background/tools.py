@@ -181,6 +181,30 @@ def _steps(raw: Any) -> list[dict[str, Any]]:
     return out[:20]
 
 
+PLAN_GO, PLAN_STOP = "Начинай", "Отмени задачу"
+BIG_PLAN = 4  # шагов: такой план — человеку на утверждение (settings.background.approve_plan = big)
+
+
+def plan_needs_approval(task: Any, steps: list[dict[str, Any]], mode: str) -> bool:
+    """Первый план задачи — человеку: always — всегда, big — план из BIG_PLAN+ шагов или повторяющаяся
+    задача."""
+    if task.plan_ok or mode == "never":
+        return False
+    if any(q.kind == "plan" for q in task.questions):
+        return True  # человек просил поправить план — новый тоже на утверждение, какого бы размера ни был
+    return mode == "always" or len(steps) >= BIG_PLAN or bool(task.repeat)
+
+
+def plan_approved(answer: str) -> bool | None:
+    """Ответ на «Утвердить план?»: True — начинать, False — отменить задачу, None — правка плана словами."""
+    low = " ".join(answer.casefold().split())
+    if low.startswith(("начина", "да", "ок", "давай", "утвержда", "соглас", "поехали", "go")):
+        return True
+    if low.startswith(("отмен", "нет", "не надо", "стоп", "не начина")):
+        return False
+    return None
+
+
 async def _update_plan(s: "Session", args: dict[str, Any]) -> Outcome:
     steps = _steps(args.get("steps"))
     if not steps:
@@ -188,7 +212,30 @@ async def _update_plan(s: "Session", args: dict[str, Any]) -> Outcome:
     s.task.plan = steps
     done = sum(1 for x in steps if x["done"])
     lines = "\n".join(f"{'[x]' if x['done'] else '[ ]'} {x['text']}" for x in steps)
-    return Outcome(True, f"План обновлён ({done} из {len(steps)}):\n{lines}", "")
+    mode = str(getattr(s.ctx.settings.value.background, "approve_plan", "big"))
+    if not plan_needs_approval(s.task, steps, mode):
+        return Outcome(True, f"План обновлён ({done} из {len(steps)}):\n{lines}", "")
+    numbered = "\n".join(f"{i}. {x['text']}" for i, x in enumerate(steps, 1))
+    answer = await s.service.ask(
+        s, f"Утвердить план?\n{numbered}", [PLAN_GO, PLAN_STOP], kind="plan", detail="Можно ответить правкой"
+    )
+    verdict = plan_approved(answer)
+    if verdict:
+        s.task.plan_ok = True
+        return Outcome(True, f"Человек утвердил план — выполняй его:\n{lines}", "План утверждён")
+    if verdict is False:
+        return Outcome(
+            True,
+            "Человек отменил задачу. Ничего не делай — сразу finish со status=failed и итогом «Отменено "
+            "человеком».",
+            "Задача отменена",
+        )
+    return Outcome(
+        True,
+        f"Человек просит поправить план: «{one_line(answer, 600)}». Составь новый план с учётом этого и "
+        "снова вызови update_plan — человек утвердит его.",
+        "План — на доработку",
+    )
 
 
 async def _report(s: "Session", args: dict[str, Any]) -> Outcome:

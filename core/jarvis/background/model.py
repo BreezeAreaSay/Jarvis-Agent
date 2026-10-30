@@ -89,6 +89,7 @@ class Task:
     worked_s: float = 0.0  # секунд работы (без ожидания ответа)
     runs: int = 0  # сколько раз задача запускалась (продолжение после перезапуска или ответа)
     approved: list[str] = field(default_factory=list)  # разрешённые человеком действия (ключи вопросов)
+    plan_ok: bool = False  # план большой задачи человек утвердил (settings.background.approve_plan)
     usage: dict[str, Any] = field(default_factory=dict)
     provider: str = ""
     model: str = ""

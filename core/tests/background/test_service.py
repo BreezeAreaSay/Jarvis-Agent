@@ -12,6 +12,7 @@ import pytest
 from jarvis.background import runner
 from jarvis.background.model import Task, TaskStore
 from jarvis.context import AppContext
+from jarvis.services import UserFacingError
 from tests.ai.fakes import ScriptedLlm, calls, completion
 from tests.background.conftest import service, until
 from tests.conftest import EventLog
@@ -304,3 +305,104 @@ async def test_weak_local_model_warns_once(bg: Bg) -> None:
     assert any("слабовата" in str(item) for item in first.log)
     warned = [t for t in events.of("toast") if "слабовата" in str(t.get("message"))]
     assert len(warned) == 1  # тост — раз на модель, в ход каждой задачи — да
+
+
+BIG_PLAN = [{"text": "Найти магазины"}, {"text": "Собрать цены"}, {"text": "Сравнить"}, {"text": "Записать"}]
+
+
+async def test_big_plan_waits_for_approval(bg: Bg) -> None:
+    ctx, script, _ = bg
+    script.add(
+        calls(("update_plan", {"steps": BIG_PLAN})),
+        calls(("update_plan", {"steps": [{**BIG_PLAN[0], "done": True}, *BIG_PLAN[1:]]})),
+        calls(("finish", {"status": "done", "summary": "Готово."})),
+    )
+    task = service(ctx).create("Сравни цены на RTX 5070 в трёх магазинах")
+    await until(lambda: task.status == "waiting" and task.open_question() is not None)
+    question = task.open_question()
+    assert (
+        question is not None and question.kind == "plan" and question.options == ["Начинай", "Отмени задачу"]
+    )
+    assert question.text.startswith("Утвердить план?") and "4. Записать" in question.text
+    service(ctx).answer(task.id, question.id, "Начинай")
+    await until(lambda: task.status == "done")
+    assert task.plan_ok and "Человек утвердил план" in _tool_texts(script, 1)[0]
+    assert sum(1 for q in task.questions if q.kind == "plan") == 1  # отметки по ходу — без вопроса
+
+
+async def test_plan_edit_and_cancel_answers(bg: Bg) -> None:
+    ctx, script, _ = bg
+    script.add(
+        calls(("update_plan", {"steps": BIG_PLAN})),
+        calls(("update_plan", {"steps": BIG_PLAN[:3]})),
+        calls(("finish", {"status": "failed", "summary": "Отменено человеком"})),
+    )
+    task = service(ctx).create("Сравни цены на RTX 5070 в трёх магазинах")
+    await until(lambda: task.open_question() is not None)
+    service(ctx).answer(task.id, "", "Только DNS и Ozon, без записи в таблицу")
+    await until(
+        lambda: len([q for q in task.questions if q.kind == "plan"]) == 2 and task.open_question() is not None
+    )
+    assert "просит поправить план: «Только DNS и Ozon" in _tool_texts(script, 1)[0]
+    service(ctx).answer(task.id, "", "Отмени задачу")
+    await until(lambda: task.status == "failed")
+    assert not task.plan_ok and "Человек отменил задачу" in _tool_texts(script, 2)[-1]
+
+
+async def test_small_plan_or_never_setting_runs_without_question(bg: Bg) -> None:
+    ctx, script, _ = bg
+    ctx.settings.patch({"background": {"approve_plan": "never"}})
+    script.add(
+        calls(("update_plan", {"steps": BIG_PLAN})),
+        calls(("finish", {"status": "done", "summary": "Готово."})),
+    )
+    task = service(ctx).create("Сравни цены")
+    await until(lambda: task.status == "done")
+    assert not task.questions
+
+
+async def test_pure_read_batch_runs_in_parallel(bg: Bg) -> None:
+    ctx, script, _ = bg
+    running: list[int] = []
+    peak: list[int] = [0]
+
+    async def search(query: str, max_results: int = 5) -> list[dict[str, Any]]:
+        running.append(1)
+        peak[0] = max(peak[0], len(running))
+        await asyncio.sleep(0.05)
+        running.pop()
+        return RESULTS
+
+    ctx.ai.web.search = search  # type: ignore[method-assign]
+    script.add(
+        calls(("web_search", {"query": "цены DNS"}), ("web_search", {"query": "цены Ozon"})),
+        calls(("finish", {"status": "done", "summary": "Готово."})),
+    )
+    task = service(ctx).create("Найди цены")
+    await until(lambda: task.status == "done")
+    assert peak[0] == 2  # оба поиска шли одновременно
+    assert len(_tool_texts(script, 1)) == 2
+
+
+async def test_notebooklm_export(bg: Bg, vault_dir: Path) -> None:
+    ctx, script, _ = bg
+    _search(ctx)
+    script.add(
+        calls(("web_search", {"query": "цены ноутбуки"})),
+        calls(("vault_write", {"path": "Исследования/Ноутбуки", "content": "# Ноутбуки\n\nот 40 000 ₽"})),
+        calls(("finish", {"status": "done", "summary": "Отчёт готов.", "result": "Исследования/Ноутбуки"})),
+    )
+    task = service(ctx).create("Собери цены на ноутбуки")
+    await until(lambda: task.status == "done")
+    task.add_source("Ноутбуки в DNS", "https://dns-shop.ru/laptops")
+    out = await service(ctx).notebooklm(task.id)
+    assert out["path"].startswith("Jarvis/NotebookLM/") and out["path"].endswith(".md")
+    assert out["link"].startswith("obsidian://open?") and "https://dns-shop.ru/laptops" in out["urls"]
+    text = (vault_dir / out["path"]).read_text("utf-8")
+    assert "## Итог\n\nОтчёт готов." in text and "от 40 000 ₽" in text
+    assert "- [Ноутбуки в DNS](https://dns-shop.ru/laptops)" in text
+    assert text.rstrip().endswith("https://dns-shop.ru/laptops")  # ссылки списком — для «Добавить источник»
+    empty = Task("empty1", "Новая задача")
+    service(ctx)._tasks[empty.id] = empty
+    with pytest.raises(UserFacingError, match="нет ни итога, ни источников"):
+        await service(ctx).notebooklm(empty.id)

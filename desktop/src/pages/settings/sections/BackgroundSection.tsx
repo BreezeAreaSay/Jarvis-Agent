@@ -156,6 +156,21 @@ function AgentCard() {
           onChange={(v) => patch({ background: { autonomy: v } })}
         />
       </Setting>
+      <Setting
+        name="Утверждать план"
+        desc="Агент показывает план до начала работы: «Начинай», «Отмени задачу» или правка словами — на странице задачи или в Telegram"
+        wide
+      >
+        <Tabs
+          value={bg.approve_plan ?? "big"}
+          items={[
+            { value: "never", label: "Не спрашивать" },
+            { value: "big", label: "Большие задачи" },
+            { value: "always", label: "Всегда" },
+          ]}
+          onChange={(v) => patch({ background: { approve_plan: v } })}
+        />
+      </Setting>
       <Setting name="Задач одновременно" desc="Остальные ждут очереди">
         <Slider value={bg.parallel} min={1} max={4} step={1} format={(v) => String(v)} onCommit={(v) => patch({ background: { parallel: v } })} />
       </Setting>

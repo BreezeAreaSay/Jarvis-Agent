@@ -146,6 +146,7 @@ async def test_dispatcher_runs_command_and_records_history(ctx: AppContext, even
         return CommandMatch(text, [part]) if "музык" in text else None
 
     async def execute(m: CommandMatch, source: str) -> ExecResult:
+        await asyncio.sleep(0.05)
         return ExecResult(True, "Включить музыку", "Выполнено", icon="spotify")
 
     ctx.commands.match = match  # type: ignore[method-assign]
@@ -156,6 +157,8 @@ async def test_dispatcher_runs_command_and_records_history(ctx: AppContext, even
     assert result["result"]["ok"] is True
     rows = ctx.db.query("SELECT * FROM history")
     assert rows[0]["status"] == "ok" and rows[0]["title"] == "Включить музыку"
+    assert 40 <= rows[0]["ms"] < 5000  # сколько длилось — в истории
+    assert events.of("history.updated")[-1]["item"]["ms"] == rows[0]["ms"]
     assert events.of("toast")[-1]["title"] == "Включить музыку"
 
     unknown = await ctx.dispatcher.handle("спой песню", "text")

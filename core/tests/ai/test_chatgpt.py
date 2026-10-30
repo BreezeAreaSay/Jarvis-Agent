@@ -83,7 +83,7 @@ async def test_install_then_existing_login_is_picked_up(ctx: AppContext, events:
         assert events.of("ai.configured")[-1] == {"configured": True}
         status = await gpt.status()
         assert status["installed"] and status["logged_in"] and status["version"] == "0.163.0"
-        assert status["account"] == "tony@stark.com (ChatGPT Plus)" and status["error"] == ""
+        assert status["account"] == "tony@stark.example (ChatGPT Plus)" and status["error"] == ""
         assert await gpt.install() == {"ok": True, "installed": True}
         config = world.runtime.config
         assert config.env["CODEX_HOME"].endswith("codex-home") and config.cwd.endswith("chatgpt")
@@ -133,7 +133,7 @@ async def test_login_in_browser_then_logout(ctx: AppContext, codex: Codexes, eve
 
     codex.login_result.put({"success": True, "loginId": "login-1"})
     await until(lambda: events.of("ai.chatgpt")[-1]["state"] == "logged_in")
-    assert events.of("ai.chatgpt")[-1]["account"] == "tony@stark.com (ChatGPT Plus)"
+    assert events.of("ai.chatgpt")[-1]["account"] == "tony@stark.example (ChatGPT Plus)"
     assert ctx.ai.configured is True
     status = await gpt.status()
     assert status["logged_in"] and "login_pending" not in status
@@ -704,7 +704,7 @@ def test_chatgpt_api_routes(client: TestClient) -> None:
     assert client.post("/api/ai/chatgpt/login/cancel").json() == {"ok": True}
     world.account = dict(ACCOUNT)
     status = client.get("/api/ai/chatgpt").json()
-    assert status["logged_in"] is True and status["account"] == "tony@stark.com (ChatGPT Plus)"
+    assert status["logged_in"] is True and status["account"] == "tony@stark.example (ChatGPT Plus)"
     assert client.get("/api/status").json()["ai"]["configured"] is True
 
     providers = {p["id"]: p for p in client.get("/api/ai/providers").json()["items"]}

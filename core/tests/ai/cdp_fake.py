@@ -367,7 +367,7 @@ class FakeChrome:
             "Browser.downloadWillBegin",
             {"guid": guid, "url": href, "suggestedFilename": name, "frameId": frame or tab.target},
         )
-        for _ in range(10):  # Jarvis успевает отменить чужое скачивание до конца
+        for _ in range(40):  # Jarvis успевает отменить чужое скачивание до конца (и на медленной машине CI)
             if guid in self.canceled or self.download_behavior in ("deny", "default"):
                 break
             await asyncio.sleep(0.005)

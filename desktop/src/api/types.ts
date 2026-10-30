@@ -118,6 +118,8 @@ export interface Settings {
     agent_journal: boolean;
     /** Пароли, ключи API, номера карт — маской, прежде чем текст уйдёт облачной модели. */
     mask_secrets: boolean;
+    /** Окна, которые ИИ не видит (кроме менеджеров паролей — они скрыты всегда): программа или слово заголовка. */
+    private_apps: string[];
     /** Браузер Jarvis: свой профиль Chrome или Edge, агент работает со страницами по CDP. */
     browser: boolean;
     browser_app: "auto" | "chrome" | "edge";

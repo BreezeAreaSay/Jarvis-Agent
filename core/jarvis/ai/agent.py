@@ -43,7 +43,7 @@ from urllib.parse import urlparse
 
 from rapidfuzz import fuzz, process
 
-from jarvis.ai import apphints, journal, lessons, playbooks, vision
+from jarvis.ai import apphints, journal, lessons, playbooks, private_windows, vision
 from jarvis.ai.catalog import AGENT_ACTIONS
 from jarvis.ai.chats import ChatStore, ui_message
 from jarvis.ai.format import chat_title, now_text, one_line, speech_text
@@ -1553,6 +1553,9 @@ class Agent(BaseService):
                 f"активное окно сменилось: было «{target.title}», сейчас «{fg.title}» — ничего не сделано. "
                 f"Работать здесь — сделай ui_snapshot; вернуться — focus_window «{target.title}»"
             )
+        hidden = private_windows.private_reason(fg, private_windows.settings_list(self.ctx))
+        if hidden:  # менеджер паролей и окна из «Не показывать ИИ» — ни ввода, ни нажатий
+            raise UserFacingError(private_windows.hidden_text(fg, hidden))
         if not fg.foreground:  # впереди окно Jarvis (из него и дали задачу): вперёд — окно задачи
             await self.ctx.run_platform(self.ctx.platform.window_action, "focus", fg.hwnd)
             if self.settle_s:
@@ -1568,6 +1571,8 @@ class Agent(BaseService):
     async def _shot(self, run: AgentRun, fg: WindowInfo, snapshot: UiSnapshot | None) -> vision.Shot | None:
         rect = fg.rect
         if fg.minimized or rect[2] - rect[0] < 20 or rect[3] - rect[1] < 20:
+            return None
+        if private_windows.private_reason(fg, private_windows.settings_list(self.ctx)):
             return None
         try:
             png = await self.ctx.run_platform(self.ctx.platform.screenshot, fg.hwnd)
@@ -1648,8 +1653,17 @@ class Agent(BaseService):
             if hint:
                 parts.append(hint)  # до снимка: устаревшие снимки скрываются, подсказка остаётся
         parts.extend(change for change in changes if change)
+        hidden = private_windows.private_reason(fg, private_windows.settings_list(self.ctx))
+        if fg is not None and hidden:  # скрытое от ИИ окно: ни элементов, ни снимка
+            run.snapshot, run.shot = None, None
+            parts.append(f"{SNAPSHOT_HEADER}\n{private_windows.hidden_text(fg, hidden)}")
+            return "\n\n".join(parts), []
+        whole = run.vision and not force_shot
+        if whole and await self._private_on_screen():
+            whole = False  # на экране видно скрытое от ИИ окно — весь экран не снимать, только окно задачи
+            parts.append(private_windows.SCREEN_NOTE)
         # картинка экрана снимается (пул ввода-вывода), пока поток платформы читает элементы окна
-        area = await self._screen_area(fg) if run.vision and not force_shot else None
+        area = await self._screen_area(fg) if whole else None
         grab = asyncio.ensure_future(self._grab(area)) if area is not None else None
         snapshot: UiSnapshot | None = None
         try:
@@ -1695,6 +1709,14 @@ class Agent(BaseService):
             )
         except Exception:
             log.exception("шаг не записан в журнал агента")
+
+    async def _private_on_screen(self, area: tuple[int, int, int, int] | None = None) -> bool:
+        """Видно ли на экране (или на его части area) окно, скрытое от ИИ."""
+        try:
+            windows = await self.ctx.run_platform(self.ctx.platform.list_windows)
+        except Exception:
+            return False
+        return bool(private_windows.visible_private(windows, private_windows.settings_list(self.ctx), area))
 
     async def _look_safely(self, run: AgentRun) -> tuple[str, list[dict[str, Any]]] | None:
         """Снимок вдобавок к ответу действия (оно сорвалось, человек ответил на вопрос); окно задачи —
@@ -2369,6 +2391,8 @@ class Agent(BaseService):
         pixels = getattr(self.ctx.platform, "screen_pixels", None)
         if not callable(pixels):
             return Outcome(False, "Ошибка: лупа на этой платформе недоступна", "Недоступно")
+        if await self._private_on_screen(area):
+            return Outcome(False, "Ошибка: в этом месте экрана — окно, скрытое от ИИ; лупа его не показывает")
         bgra, width, height = await self.ctx.run_io(pixels, area)
         elements = run.snapshot.elements if run.snapshot is not None else []
         zoomed = await self.ctx.run_io(

@@ -158,6 +158,9 @@ class AiSettings(_Model):
     # пароли, ключи API, номера карт и закрытые ключи в тексте — маской, прежде чем он уйдёт облачной модели
     # (ChatGPT, Claude, ключ API не на этом ПК); модели на этом ПК (Ollama, LM Studio) видят как есть
     mask_secrets: bool = True
+    # окна, которые ИИ не видит и где агент не работает (кроме менеджеров паролей — они скрыты всегда):
+    # программа («keepass», «telegram.exe») или слово из заголовка окна (jarvis/ai/private_windows.py)
+    private_apps: list[str] = Field(default_factory=list)
     agent_journal: bool = True  # шаги агента и снимки экрана — в журнал на этом компьютере (ai/journal.py)
     # браузер Jarvis: свой профиль Chrome или Edge, агент работает со страницами по CDP (ai/browser)
     browser: bool = False

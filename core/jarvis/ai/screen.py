@@ -15,7 +15,7 @@ import logging
 import re
 from typing import Any
 
-from jarvis.ai import vision
+from jarvis.ai import private_windows, vision
 from jarvis.platform.base import PlatformError, WindowInfo
 
 log = logging.getLogger(__name__)
@@ -82,12 +82,23 @@ async def capture(ctx: Any) -> tuple[list[str], str]:
         fg: WindowInfo | None = await ctx.run_platform(platform.foreground_window)
     except PlatformError:
         fg = None
+    private = private_windows.settings_list(ctx)
+    hidden = private_windows.private_reason(fg, private)
+    if fg is not None and hidden:  # впереди менеджер паролей или окно из «Не показывать ИИ» — без снимка
+        return [], (
+            f"Снимок экрана не сделан: впереди окно, скрытое от ИИ ({hidden}). Скажи человеку, что это окно "
+            "ты не видишь и не смотришь."
+        )
+    try:
+        whole = not private_windows.visible_private(await ctx.run_platform(platform.list_windows), private)
+    except Exception:
+        whole = False
     shots: list[vision.Shot] = []
     covered = fg is not None and not fg.foreground  # впереди окно Jarvis (спросили из чата) — оно поверх
     try:
         area = await ctx.run_platform(_area, platform, fg)
         pixels = getattr(platform, "screen_pixels", None)
-        if callable(pixels):
+        if callable(pixels) and whole:  # видно скрытое окно — весь экран не снимать, только окно впереди
             bgra, width, height = await ctx.run_io(pixels, area)
             focus, title = (fg.rect, fg.title) if fg is not None else (None, "")
 

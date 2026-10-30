@@ -33,7 +33,7 @@ import { api } from "@/api/client";
 import { onEvent } from "@/api/events";
 import type { Settings } from "@/api/types";
 import { bridge, isElectron } from "@/lib/bridge";
-import { Button, Card, Check, Modal, notify, notifyError, type Option, Select, Setting, timeAgo, Toggle } from "@/ui";
+import { Button, Card, Check, Modal, notify, notifyError, type Option, Select, Setting, TextInput, timeAgo, Toggle } from "@/ui";
 import { FALLBACK_PROVIDERS, providerTitle } from "../ai";
 import { Note, useApi, useSettingsPatch } from "../kit";
 import { fileUrl } from "./SystemSection";
@@ -207,7 +207,17 @@ function FlowCard({ settings }: { settings: Settings }) {
 
 function ProtectCard() {
   const [settings, patch] = useSettingsPatch();
+  const [apps, setApps] = useState("");
+  const saved = settings?.ai.private_apps.join(", ") ?? "";
+  useEffect(() => setApps(saved), [saved]);
   if (!settings) return null;
+  const commit = (value: string) => {
+    const list = value
+      .split(/[,;\n]/)
+      .map((v) => v.trim())
+      .filter(Boolean);
+    if (list.join(", ") !== saved) patch({ ai: { private_apps: list } });
+  };
   return (
     <Card icon={<KeyRound />} title="Защита от утечек" sub="Что Jarvis не отдаёт облачному ИИ, даже если это попало в текст">
       <Setting
@@ -215,6 +225,13 @@ function ProtectCard() {
         desc="Пароли, ключи API, токены, номера карт и закрытые ключи в сообщениях, заметках, окнах и страницах заменяются на «•••», прежде чем уйти облачному ИИ. Модели на этом ПК видят текст как есть"
       >
         <Toggle checked={settings.ai.mask_secrets} onChange={(v) => patch({ ai: { mask_secrets: v } })} label="Скрывать пароли и ключи" />
+      </Setting>
+      <Setting
+        name="Не показывать ИИ"
+        desc="Программы или слова из заголовка окна через запятую (например: telegram, Сбербанк). Такие окна ИИ не видит на снимках, а агент в них не работает. Менеджеры паролей (KeePass, 1Password, Bitwarden…) и окна ввода пароля Windows скрыты всегда"
+        wide
+      >
+        <TextInput value={apps} onChange={setApps} onCommit={commit} placeholder="telegram, Сбербанк" />
       </Setting>
     </Card>
   );

@@ -451,7 +451,9 @@ class Ai(BaseService):
         except Exception:
             log.exception("снимок экрана к вопросу не сделан")
             return images, ""
-        return (pictures, note) if pictures else (images, "")
+        if pictures:
+            return pictures, note
+        return images, note  # снимка нет; пометка (скрытое от ИИ окно) — модели, чтобы так и сказала
 
     def _mode_of(self, chat_id: str | None, source: Source, mode: str | None) -> str:
         """Режим, в котором пойдёт ход (как в _begin, но без создания чата)."""

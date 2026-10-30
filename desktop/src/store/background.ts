@@ -4,7 +4,40 @@ import { create } from "zustand";
 import { api } from "@/api/client";
 import { onConnection, onEvent } from "@/api/events";
 
-export type TaskStatus = "queued" | "running" | "waiting" | "done" | "partial" | "failed" | "cancelled";
+export type TaskStatus =
+  | "queued"
+  | "running"
+  | "waiting"
+  | "done"
+  | "partial"
+  | "failed"
+  | "cancelled"
+  | "scheduled"
+  | "paused";
+
+/** Повтор: в at по дням weekdays (0 — понедельник; пусто — каждый день) или каждые hours часов; {} — нет. */
+export type TaskRepeat =
+  | { kind: "daily"; at: string; weekdays: number[] }
+  | { kind: "hours"; hours: number }
+  | Record<string, never>;
+
+export interface TaskRun {
+  cycle: number;
+  ts: number;
+  status: TaskStatus;
+  summary: string;
+  steps: number;
+}
+
+export interface MeasureTable {
+  path: string;
+  name: string;
+  columns: string[];
+  rows: string[][];
+  total: number;
+  numeric: number[];
+  link: string;
+}
 
 export interface TaskQuestion {
   id: string;
@@ -42,6 +75,12 @@ export interface TaskCard {
   note: string;
   result: string;
   sources: number;
+  repeat: TaskRepeat;
+  repeat_text: string;
+  next_run: number;
+  cycle: number;
+  last_run: TaskRun | null;
+  tables: string[];
 }
 
 export interface TaskFull {
@@ -67,9 +106,16 @@ export interface TaskFull {
   card: TaskCard;
   note_link: string;
   result_link: string;
+  repeat: TaskRepeat;
+  next_run: number;
+  cycle: number;
+  history: TaskRun[];
+  fails: number;
+  tables: string[];
 }
 
 export const ACTIVE: TaskStatus[] = ["queued", "running", "waiting"];
+export const REPEATING: TaskStatus[] = ["scheduled", "paused"];
 
 interface BackgroundState {
   tasks: TaskCard[];
@@ -79,10 +125,15 @@ interface BackgroundState {
   upsert: (card: TaskCard) => void;
 }
 
+/** Как в ядре: идущие, потом повторяющиеся (ближайший запуск первым), потом законченные (новые первыми). */
 function sorted(tasks: TaskCard[]): TaskCard[] {
-  return [...tasks].sort(
-    (a, b) => Number(!ACTIVE.includes(a.status)) - Number(!ACTIVE.includes(b.status)) || b.created - a.created,
-  );
+  const rank = (t: TaskCard) => (ACTIVE.includes(t.status) ? 0 : REPEATING.includes(t.status) ? 1 : 2);
+  return [...tasks].sort((a, b) => {
+    const order = rank(a) - rank(b);
+    if (order) return order;
+    if (rank(a) === 1) return (a.next_run || Infinity) - (b.next_run || Infinity);
+    return b.created - a.created;
+  });
 }
 
 export const useBackground = create<BackgroundState>((set, get) => ({

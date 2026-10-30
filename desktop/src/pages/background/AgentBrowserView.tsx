@@ -1,11 +1,13 @@
 // Панель «Браузер агента» (как браузер в приложении Codex): живая картинка вкладки, где работает фоновая задача,
 // — по WebSocket /ws/agent-browser (docs/CONTRACTS.md §8). Смотреть можно всегда; щёлкать, листать и печатать —
 // когда вкладка своя («Войти на сайты», без задачи) или управление взято у агента («Взять управление»: задача
-// ждёт). Закрыли панель — управление само возвращается агенту.
-import { ArrowLeft, ArrowRight, Globe, Hand, Loader2, RotateCw, Sparkles } from "lucide-react";
+// ждёт). Закрыли панель — управление само возвращается агенту. «Открыть окном» — тот же браузер обычным окном
+// (вход Google и сайты, которые не пускают браузер без окна); пока окно открыто, картинки здесь нет.
+import { AppWindow, ArrowLeft, ArrowRight, Globe, Hand, Loader2, RotateCw, Sparkles } from "lucide-react";
 import { type KeyboardEvent, type MouseEvent, useCallback, useEffect, useRef, useState, type WheelEvent } from "react";
-import { coreToken, coreUrl } from "@/api/client";
-import { Button, cx, IconButton } from "@/ui";
+import { api, coreToken, coreUrl } from "@/api/client";
+import { onEvent } from "@/api/events";
+import { Button, cx, IconButton, notifyError } from "@/ui";
 
 interface ViewState {
   target: string;
@@ -15,6 +17,7 @@ interface ViewState {
   held: boolean;
   status: string;
   error: string;
+  windowed?: boolean;
 }
 
 interface Frame {
@@ -83,6 +86,38 @@ export function AgentBrowserView({ task, onClose }: { task?: string; onClose?: (
   useEffect(() => {
     if (!editing) setAddress(state?.url && !/^(about|data):/.test(state.url) ? state.url : "");
   }, [state?.url, editing]);
+
+  // окно браузера агента закрыли — снова смотреть его вкладку здесь
+  const windowed = Boolean(state?.windowed);
+  useEffect(
+    () =>
+      onEvent<{ windowed?: boolean }>("agent_browser.state", (e) => {
+        const ws = socket.current;
+        if (windowed && !e.data.windowed && ws && ws.readyState === WebSocket.OPEN) {
+          setFrame(null);
+          ws.send(JSON.stringify({ type: "watch", task: task ?? "" }));
+        } else if (!windowed && e.data.windowed) {
+          setState((s) => (s ? { ...s, windowed: true, target: "" } : s));
+        }
+      }),
+    [windowed, task],
+  );
+
+  const openWindow = async () => {
+    try {
+      const url = state?.url && /^https?:/.test(state.url) ? state.url : "";
+      await api.post("/api/agent-browser/window", { url, task: task ?? "" });
+    } catch (e) {
+      notifyError(e);
+    }
+  };
+  const closeWindow = async () => {
+    try {
+      await api.post("/api/agent-browser/window/close", {});
+    } catch (e) {
+      notifyError(e);
+    }
+  };
 
   const send = useCallback((message: Record<string, unknown>) => {
     const ws = socket.current;
@@ -153,7 +188,8 @@ export function AgentBrowserView({ task, onClose }: { task?: string; onClose?: (
   };
 
   let note = "";
-  if (error) note = error;
+  if (windowed) note = "";
+  else if (error) note = error;
   else if (!state) note = "Подключаюсь к браузеру агента…";
   else if (!state.target) note = "Задача ещё не открывала сайты — её браузер появится здесь, когда понадобится.";
   else if (state.status === "error") note = state.error || "Браузер агента не запустился";
@@ -180,6 +216,15 @@ export function AgentBrowserView({ task, onClose }: { task?: string; onClose?: (
             }}
           />
         </div>
+        {!windowed && (
+          <IconButton
+            icon={<AppWindow />}
+            label="Открыть окном — войти на сайт, который не пускает браузер без окна"
+            size="sm"
+            variant="ghost"
+            onClick={() => void openWindow()}
+          />
+        )}
         {!manual && state?.target && (
           <Button
             size="sm"
@@ -208,7 +253,17 @@ export function AgentBrowserView({ task, onClose }: { task?: string; onClose?: (
           if (text) send({ type: "text", text });
         }}
       >
-        {frame && !note ? (
+        {windowed ? (
+          <div className="abv-note">
+            <AppWindow />
+            <span>
+              Браузер агента открыт отдельным окном. Войдите там на сайт и закройте окно — задачи продолжат с вашим входом.
+            </span>
+            <Button size="sm" variant="soft" onClick={() => void closeWindow()}>
+              Закрыть окно
+            </Button>
+          </div>
+        ) : frame && !note ? (
           <img
             ref={image}
             src={frame.src}

@@ -1,6 +1,6 @@
 // «Фоновые задачи» в настройках: хранилище заметок (Obsidian), как самостоятельно работает агент, уведомления
 // о вопросе и итоге, браузер агента. Ядро — settings.background, /api/background/vault, /api/agent-browser.
-import { Bell, BookOpen, FolderOpen, Globe, Telescope } from "lucide-react";
+import { AppWindow, Bell, BookOpen, FolderOpen, Globe, Telescope } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "@/api/client";
 import { onEvent } from "@/api/events";
@@ -25,6 +25,7 @@ interface AgentBrowserState {
   version: string;
   error: string;
   tasks: Record<string, string>;
+  windowed?: boolean;
 }
 
 const AUTONOMY: Record<Settings["background"]["autonomy"], string> = {
@@ -128,6 +129,12 @@ function VaultCard() {
       <Setting name="Читать все заметки" desc="Агент ищет и читает ваши заметки, чтобы пользоваться ими в задачах (писать — только в свою папку)">
         <Toggle checked={bg.read_vault} onChange={(v) => patch({ background: { read_vault: v } })} label="Читать все заметки" />
       </Setting>
+      <Setting
+        name="Задачи из «Входящих»"
+        desc={`Строки, которые вы запишете в ${bg.folder || "Jarvis"}/Входящие.md (можно с телефона, через синхронизацию Obsidian), Jarvis возьмёт в работу и отметит галочкой`}
+      >
+        <Toggle checked={bg.inbox} onChange={(v) => patch({ background: { inbox: v } })} label="Задачи из «Входящих»" />
+      </Setting>
     </Card>
   );
 }
@@ -168,7 +175,7 @@ function NotifyCard() {
   if (!bg) return null;
   return (
     <Card icon={<Bell />} title="Уведомления" sub="Как сообщать, что агенту нужен ваш ответ и что задача закончена">
-      <Setting name="Агент спрашивает" desc="Ничего не выбрано — тихо: вопрос ждёт на странице «Фоновые задачи»">
+      <Setting name="Агент спрашивает" desc="В Telegram — с кнопками ответа: ответить можно прямо оттуда. Ничего не выбрано — тихо: вопрос ждёт на странице «Фоновые задачи»">
         <Channels value={bg.notify_question} onChange={(v) => patch({ background: { notify_question: v } })} />
       </Setting>
       <Setting name="Задача готова" desc="Telegram — через бота «Пульт в телефоне», если он подключён">
@@ -191,8 +198,16 @@ function AgentBrowserCard() {
       notifyError(e);
     }
   };
+  const openWindow = async () => {
+    try {
+      setData(await api.post<AgentBrowserState>("/api/agent-browser/window", {}));
+    } catch (e) {
+      notifyError(e);
+    }
+  };
   let hint: string;
   if (data && !data.found) hint = "Не нашёл Google Chrome или Microsoft Edge — установите один из них, и у агента будет свой браузер";
+  else if (data?.windowed) hint = "Открыт отдельным окном: войдите там на сайты и закройте окно — задачи продолжат с вашим входом";
   else if (running)
     hint = `${data?.app ?? "Браузер"}${data?.version ? ` ${data.version}` : ""} работает без окна — его видно на странице «Фоновые задачи»`;
   else hint = "Запускается сам, когда задаче понадобится сайт. Войдите в нём в нужные сайты — один раз";
@@ -211,6 +226,11 @@ function AgentBrowserCard() {
           <Button size="sm" variant="primary" icon={<Globe />} onClick={() => navigate("background", "browser")}>
             Войти на сайты
           </Button>
+          {!data?.windowed && data?.found && (
+            <Button size="sm" variant="soft" icon={<AppWindow />} onClick={() => void openWindow()} title="Для сайтов, которые не пускают браузер без окна (например, вход Google)">
+              Открыть окном
+            </Button>
+          )}
           {running && (
             <Button size="sm" variant="ghost" onClick={close}>
               Закрыть

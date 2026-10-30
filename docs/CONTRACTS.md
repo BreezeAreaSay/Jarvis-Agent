@@ -1000,7 +1000,7 @@ events, reminders, clipboard, summaries, screenshots, file_index, voice_cache, u
   Qwen Code — запуск программы с её веб-поиском и чтением страниц (оболочка и файлы — выключены), инструменты
   Jarvis — с сервера MCP ядра; ключ API — цикл Jarvis (`temperature` 0.2) с поиском DuckDuckGo/Bing.
 - **Инструменты задачи**: `web_search`, `web_read` (если у провайдера нет своих), `vault_search`, `vault_read`,
-  `vault_list`, `vault_write`, `update_plan`, `report`, `ask_user`, `finish`, инструменты серверов MCP
+  `vault_list`, `vault_write`, `measure_add`, `update_plan`, `report`, `ask_user`, `finish`, инструменты серверов MCP
   (рискованные — с разрешения, см. ниже). Сорвалось действие — остальные действия того же хода модели не
   выполняются (ответ «Не выполнено: предыдущее действие этого хода не удалось…»); одно и то же действие с тем же
   ответом дважды подряд — подсказка сменить путь, пять раз — заход останавливается (`partial`); за 10, 5, 3, 2 и 1
@@ -1010,19 +1010,39 @@ events, reminders, clipboard, summaries, screenshots, file_index, voice_cache, u
   ставит задачу в `waiting` и ждёт ответа до 9 минут; дольше — заход заканчивается, задача ждёт, а ответ
   (`POST …/answer`) запускает новый заход. Разрешение, данное после паузы, запоминается (`approved`) — то же
   действие не спрашивается снова.
+- **Повторы** (`jarvis/background/repeat.py`): `repeat = {kind: "daily", at: "ЧЧ:ММ", weekdays: [0…6]}` (пусто —
+  каждый день) или `{kind: "hours", hours: 1…168}`; `{}` — не повторяется. При создании `repeat: null` — повтор
+  ищется в начале текста («каждый вечер …», «по будням в 10 …», «каждые 3 часа …»: остаток — название задачи).
+  Повторяющаяся задача между запусками — `scheduled` (`next_run` — когда следующий) или `paused`; раз в 15 с
+  ядро запускает те, чьё время пришло (пропущенное, пока Jarvis был закрыт, — один раз), запуск — новый `cycle`:
+  план и лимиты действий и времени — заново, итог — в `history` (`{cycle, ts, status, summary, steps}`, до 60),
+  потом снова `scheduled`. Три неудачи подряд (`fails`) — `paused`. Отмена — повторы останавливаются
+  (`cancelled`); «Ещё раз» (`retry`) — запуск сейчас, дальше по расписанию; `resume` — снова по расписанию.
+- **Замеры** (`jarvis/background/measure.py`): `measure_add {table, values: [{column, value}]}` — строка в
+  `Замеры/<table>.md` своей папки (Markdown-таблица, первая колонка «Дата»: `ГГГГ-ММ-ДД`, у задачи «каждые N
+  часов» — `ГГГГ-ММ-ДД ЧЧ:00`; та же дата — строка заменяется; новая колонка — сама) и график
+  `Замеры/<table>.svg` рядом (числовые колонки, до трёх; в заметке — `![[…svg]]`). Таблицы задачи — `tables`.
+- **«Входящие»** (`jarvis/background/inbox.py`, `settings.background.inbox`): строки в `<папка агента>/Входящие.md`
+  (пункты «- …», «- [ ] …», «1. …» или просто строки; с отступом под пунктом — его подробности) раз в 15 с
+  становятся задачами (`source: "vault"`, до 5 за раз) и отмечаются «- [x] … — [[заметка задачи|задача]]»
+  (не взялась — «- [x] … — ⚠️ не взято: причина»). ИИ не настроен — строки ждут.
 - **Хранилище** — `settings.background.vault`; пусто — открытое хранилище Obsidian из его списка (`obsidian.json`),
   нет — `Документы\Jarvis`. Агент пишет только в свою папку (`settings.background.folder`, «Jarvis»): `README.md`,
-  `Инструкции.md` (указания человека — в промпт каждой задачи, если отличаются от шаблона), `Задачи/` (заметка
+  `Инструкции.md` (указания человека — в промпт каждой задачи, если отличаются от шаблона), `Входящие.md`, `Задачи/` (заметка
   задачи — её ведёт Jarvis: свойства `type: jarvis-task, status, created, updated, finished, sources, steps`, бриф,
   итог, план, вопросы, ход работы, источники), `Исследования/`, `Замеры/`, `Журнал/<дата>.md` (строка на
   законченную задачу). Читать и искать — всё хранилище (`read_vault`), кроме служебных папок (`.obsidian` и
   других с точкой).
 - **Уведомления** — `settings.background.notify_question` / `notify_done`: список из `toast` (тост с `task_id`),
-  `voice` (вслух, кроме тихого режима), `telegram` (сообщение владельцу бота); пусто — тихо.
+  `voice` (вслух, кроме тихого режима), `telegram` (сообщение владельцу бота); пусто — тихо. Вопрос в Telegram —
+  с кнопками вариантов (`callback_data: "bq:<задача>:<вопрос>:<номер>"`; разрешение — «Разрешить» / «Отклонить»):
+  ответ — кнопкой или ответом на сообщение текстом (сообщение → задача и вопрос — `kv telegram:task_questions`,
+  последние 100); разрешение, нажатое, пока Jarvis был выключен, нужно нажать заново.
 - **Запуск из чата и голосом**: «в фоне: …», «фоном …», «поставь задачу: …», «фоновая задача: …» (`ai.ask`, без
   картинок) — сразу задача, в чат — просьба и «Принял — работаю в фоне: «…»» (`meta.background` — id задачи,
   голосом — «Принял, сэр. Работаю в фоне.»); модель в режиме «Всё вместе» сама ставит большое дело в фон
-  инструментом `start_background_task {task, result?}` (риск `act`).
+  инструментом `start_background_task {task, result?, repeat?}` (риск `act`); повторяющаяся — «Принял — буду
+  делать каждый день в 20:00: «…». Первый раз — сейчас…».
 - **Браузер агента** (`jarvis/ai/browser/agent_browser.py`, `ctx.agent_browser`): Chrome или Edge без окна
   (`--headless=new`, подпись — как у обычного Chrome, флаг автоматизации снят), профиль `<данные>/agent-browser`,
   своя вкладка у каждой задачи (`task_tabs`), скачивания запрещены. Запускается при первом сайте задачи или
@@ -1033,30 +1053,40 @@ events, reminders, clipboard, summaries, screenshots, file_index, voice_cache, u
   «Спрашивать реже»; остальное рискованное — при «Спрашивать чаще» (тогда и ввод текста). Пароли, коды и данные
   карт задача не вводит (ответ модели — попросить человека), файлы не скачивает и не загружает. Вкладкой
   управляет человек (`held`) — действие ждёт и не выполняется: «Пока человек управлял страницей, ничего не
-  сделано…».
+  сделано…». «Открыть окном» (`open_window`): тот же профиль обычным окном (`windowed`) — войти на сайт, который не
+  пускает браузер без окна; браузер без окна на это время закрыт (вкладки задач тоже), действия задач ждут до 30 с,
+  потом ответ модели «человек входит на сайт…»; окно закрыли — браузер снова без окна, а задача открывает
+  страницу заново.
 
-Настройки `background`: `vault`, `folder`, `read_vault`, `parallel` (1–4, 2), `autonomy` (`careful | normal | bold`),
+Настройки `background`: `vault`, `folder`, `read_vault`, `inbox` (`true`), `parallel` (1–4, 2), `autonomy` (`careful | normal | bold`),
 `max_steps` (10–1000, 150), `max_hours` (0.25–48, 4), `notify_question`, `notify_done` (`["toast"]`).
 
 | Маршрут | Тело | Ответ |
 |---|---|---|
-| `GET /api/background` | — | `{items: TaskCard[]}` — идущие первыми, потом новые |
-| `POST /api/background` | `{brief, deliverable?, title?, source?: ui\|text\|voice\|remote\|vault}` | `{task: TaskCard}`; ИИ не настроен — 400 |
+| `GET /api/background` | — | `{items: TaskCard[]}` — идущие первыми, потом повторяющиеся (ближайший запуск первым), потом новые |
+| `POST /api/background` | `{brief, deliverable?, title?, source?: ui\|text\|voice\|remote\|vault, repeat?: Repeat\|null, run_now?: true}` | `{task: TaskCard}`; ИИ не настроен или расписание неверное — 400 |
 | `GET /api/background/vault?refresh=` | — | `{path, folder, exists, obsidian, auto, vaults: [{path, name, open, ts}]}` |
 | `POST /api/background/vault/setup` | — | то же — после создания своей папки агента |
-| `GET /api/background/{id}` | — | `{task: Task}` — целиком: `brief, deliverable, plan[], log[], questions[], sources[], summary, note, result, error, steps, worked_s, runs, usage, provider, model, card, note_link, result_link` (`obsidian://…`) |
+| `GET /api/background/{id}` | — | `{task: Task}` — целиком: `brief, deliverable, plan[], log[], questions[], sources[], summary, note, result, error, steps, worked_s, runs, usage, provider, model, repeat, next_run, cycle, history[], fails, tables[], card, note_link, result_link` (`obsidian://…`) |
 | `POST /api/background/{id}/answer` | `{text, question_id?}` | `{task: TaskCard}`; вопроса нет — 400 |
 | `POST /api/background/{id}/cancel` | — | `{task: TaskCard}` |
-| `POST /api/background/{id}/retry` | — | `{task: TaskCard}` — снова в очередь, с тем же планом и ходом работы |
+| `POST /api/background/{id}/retry` | — | `{task: TaskCard}` — снова в очередь, с тем же планом и ходом работы; повторяющаяся — новый запуск сейчас |
+| `POST /api/background/{id}/pause` | — | `{task: TaskCard}` — повторы на паузе; не повторяется или идёт — 400 |
+| `POST /api/background/{id}/resume` | — | `{task: TaskCard}` — снова по расписанию |
+| `PUT /api/background/{id}/repeat` | `{repeat: Repeat\|null}` | `{task: TaskCard}` — сменить расписание (обычная законченная задача становится повторяющейся; `null` или `{}` — повторы сняты); идёт — 400 |
+| `GET /api/background/{id}/tables` | — | `{items: [{path, name, columns, rows (последние 400, старые первыми), total, numeric: [номер колонки], link}]}` |
 | `DELETE /api/background/{id}` | — | `{ok}` — из списка Jarvis (заметки в хранилище остаются) |
-| `GET /api/agent-browser` | — | `{status: closed\|starting\|connected\|error, app, found, version, error, tasks: {задача: вкладка}, held: [вкладка], profile}` |
+| `GET /api/agent-browser` | — | `{status: closed\|starting\|connected\|error, app, found, version, error, tasks: {задача: вкладка}, held: [вкладка], profile, windowed}` |
 | `POST /api/agent-browser/close` | — | то же — браузер агента закрыт |
+| `POST /api/agent-browser/window` | `{url?, task?}` | то же — открыт окном (адрес сайта `http(s)://…`, страница задачи `task` или страница «войдите в сайты»); Chrome и Edge нет или окно не открылось — 400 |
+| `POST /api/agent-browser/window/close` | — | то же — окно закрыто (бережно, через `Browser.close`) |
 
 WebSocket `/ws/agent-browser?token=&task=` — панель «Браузер агента»: смотрит вкладку задачи `task` (у задачи её
 ещё нет — `target: ""`, браузер не запускается) или, без `task`, свою новую вкладку (`task: "manual"`, стартовая
 страница со ссылками на входы популярных сайтов — войти на сайты; закрывается вместе с панелью). Страница
 сменилась сама (ссылка, действие агента) — снова `state`; после каждого перехода показ кадров включается заново,
-первый кадр — сразу снимком страницы. От ядра: `{type: "state", data: {target, task, url, title, held, status, error}}`, `{type:
+первый кадр — сразу снимком страницы. Браузер открыт окном — `state` с `windowed: true, target: ""` (кадров нет;
+окно закрыли — панель шлёт `watch` заново). От ядра: `{type: "state", data: {target, task, url, title, held, status, error, windowed}}`, `{type:
 "frame", data: {data: JPEG base64, metadata: {deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX,
 scrollOffsetY, timestamp}}}` (только последние кадры), `{type: "error", data: {text}}`. От панели: `{type: "watch",
 task?}`, `{type: "take"}` / `{type: "release"}`, ввод в страницу (координаты — CSS-точки, как в `metadata`):
@@ -1065,15 +1095,17 @@ task?}`, `{type: "take"}` / `{type: "release"}`, ввод в страницу (�
 `{type: "text", text}`, `{type: "navigate", url}`, `{type: "history", back: bool}`, `{type: "reload"}`. Панель
 закрылась — управление само возвращается агенту.
 
-`TaskCard = {id, title, brief, status: queued|running|waiting|done|partial|failed|cancelled, source, created,
-updated, finished, plan_done, plan_total, steps, progress: [{ts, text, kind}] (последние 3), question: Question|null,
-summary, error, note, result, sources}`. `Question = {id, text, kind: question|approval, options, detail, key, asked,
-answer, answered}`.
+`TaskCard = {id, title, brief, status: queued|running|waiting|done|partial|failed|cancelled|scheduled|paused, source,
+created, updated, finished, plan_done, plan_total, steps, progress: [{ts, text, kind}] (последние 3), question:
+Question|null, summary, error, note, result, sources, repeat: Repeat|{}, repeat_text («каждый день в 20:00»),
+next_run, cycle, last_run: {cycle, ts, status, summary, steps}|null, tables}`. `Question = {id, text, kind:
+question|approval, options, detail, key, asked, answer, answered}`. `Repeat = {kind: "daily", at, weekdays} |
+{kind: "hours", hours}`.
 
 | Событие | Данные |
 |---|---|
 | `background.updated` | `{task: TaskCard}` — по ходу работы не чаще раза в секунду |
 | `background.question` | `{task_id, question: Question}` |
-| `background.done` | `{task_id, status, summary, error, note, result}` |
+| `background.done` | `{task_id, status, summary, error, note, result, next_run, paused}` — у повторяющейся — итог запуска (`status`), когда следующий и не ушла ли на паузу |
 | `background.deleted` | `{id}` |
 | `agent_browser.state` | как `GET /api/agent-browser` |

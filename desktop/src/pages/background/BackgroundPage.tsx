@@ -1,11 +1,15 @@
 // «ФОНОВЫЕ ЗАДАЧИ» (#/background/<задача>): большие задачи, которые агент делает сам, в фоне, без экрана
 // человека — ищет, читает сайты, работает в своём браузере и пишет итог в заметки (Obsidian). Слева — задачи,
 // справа — выбранная: вопрос агента (ответить), ход работы и план, «Браузер» (живая картинка его вкладки, можно
-// взять управление), источники, сама задача. #/background/browser — браузер агента без задачи: войти на сайты.
+// взять управление), источники, сама задача; у повторяющейся — расписание, «Запуски» и «Замеры» (таблицы с
+// графиком). #/background/browser — браузер агента без задачи: войти на сайты.
 // Ядро — /api/background, события background.* (docs/CONTRACTS.md §8).
 import {
+  AppWindow,
   Ban,
   BookOpen,
+  CalendarClock,
+  ChartLine,
   Check,
   CircleAlert,
   CircleCheck,
@@ -14,10 +18,14 @@ import {
   Clock,
   ExternalLink,
   Globe,
+  History,
   ListChecks,
   Loader2,
   MessageCircleQuestion,
+  Pause,
+  Play,
   Plus,
+  Repeat,
   RotateCcw,
   Send,
   Settings,
@@ -37,12 +45,15 @@ import {
   type TaskCard,
   type TaskFull,
   type TaskQuestion,
+  type TaskRepeat,
   type TaskStatus,
   useBackground,
   wireBackground,
 } from "@/store/background";
-import { Button, cx, Empty, IconButton, Modal, notify, notifyError, Tabs, timeAgo } from "@/ui";
+import { Button, Check as CheckBox, cx, Empty, IconButton, Modal, notify, notifyError, Tabs, timeAgo } from "@/ui";
 import { AgentBrowserView } from "./AgentBrowserView";
+import { MeasureView } from "./MeasureView";
+import { fmtWhen, RepeatPicker } from "./repeat";
 import "@/styles/background.css";
 
 const STATUS: Record<TaskStatus, { label: string; icon: ReactNode; tone: string }> = {
@@ -53,12 +64,15 @@ const STATUS: Record<TaskStatus, { label: string; icon: ReactNode; tone: string 
   partial: { label: "Сделано не всё", icon: <TriangleAlert />, tone: "warn" },
   failed: { label: "Не получилось", icon: <CircleAlert />, tone: "err" },
   cancelled: { label: "Отменено", icon: <Ban />, tone: "muted" },
+  scheduled: { label: "По расписанию", icon: <CalendarClock />, tone: "accent" },
+  paused: { label: "На паузе", icon: <Pause />, tone: "muted" },
 };
 
-const EXAMPLES = [
-  "Сравни 5 популярных ноутбуков до 100 000 ₽ для программирования: цены в трёх магазинах, плюсы и минусы — таблицей",
-  "Собери главные новости про ИИ за неделю с источниками и коротким выводом",
-  "Найди 10 вакансий Python-разработчика удалённо с зарплатой от 250 000 ₽ и запиши таблицей",
+const EXAMPLES: { text: string; repeat?: TaskRepeat }[] = [
+  { text: "Сравни 5 популярных ноутбуков до 100 000 ₽ для программирования: цены в трёх магазинах, плюсы и минусы — таблицей" },
+  { text: "Собери главные новости про ИИ за неделю с источниками и коротким выводом" },
+  { text: "Записывай курс доллара ЦБ в таблицу замеров", repeat: { kind: "daily", at: "20:00", weekdays: [] } },
+  { text: "Проверяй цену на RTX 5070 в DNS и Ситилинке и записывай самую низкую", repeat: { kind: "hours", hours: 6 } },
 ];
 
 function StatusChip({ status }: { status: TaskStatus }) {
@@ -81,14 +95,24 @@ function openLink(url: string) {
 }
 
 // --- список ------------------------------------------------------------------------------------------------
+function rowNote(task: TaskCard): string {
+  if (task.question) return `Вопрос: ${plain(task.question.text)}`;
+  if (task.status === "scheduled" && task.next_run) return `Следующий запуск — ${fmtWhen(task.next_run)}`;
+  if (task.status === "paused") return `Повторы на паузе · ${task.repeat_text}`;
+  const last = task.progress[task.progress.length - 1]?.text ?? task.summary ?? "";
+  return plain(last) || STATUS[task.status].label;
+}
+
 function TaskRow({ task, active }: { task: TaskCard; active: boolean }) {
-  const last = plain(task.question?.text ?? task.progress[task.progress.length - 1]?.text ?? task.summary ?? "");
   return (
     <button type="button" className={cx("bg-row", active && "active", task.status)} onClick={() => navigate("background", task.id)}>
       <span className={cx("bg-row-ico", STATUS[task.status].tone)}>{STATUS[task.status].icon}</span>
       <span className="bg-row-main">
-        <span className="bg-row-title ellipsis">{task.title}</span>
-        <span className="bg-row-sub ellipsis">{task.question ? `Вопрос: ${last}` : last || STATUS[task.status].label}</span>
+        <span className="bg-row-title ellipsis">
+          {task.repeat_text && <Repeat className="bg-row-repeat" aria-label={task.repeat_text} />}
+          {task.title}
+        </span>
+        <span className="bg-row-sub ellipsis">{rowNote(task)}</span>
         {task.plan_total > 0 && ACTIVE.includes(task.status) && (
           <span className="bg-progress">
             <i style={{ width: `${(task.plan_done / task.plan_total) * 100}%` }} />
@@ -104,15 +128,27 @@ function TaskRow({ task, active }: { task: TaskCard; active: boolean }) {
 function NewTask({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [brief, setBrief] = useState("");
   const [deliverable, setDeliverable] = useState("");
+  const [repeat, setRepeat] = useState<TaskRepeat>({});
+  const [runNow, setRunNow] = useState(true);
   const [busy, setBusy] = useState(false);
+  const repeating = "kind" in repeat;
   const create = async () => {
     if (!brief.trim()) return;
     setBusy(true);
     try {
-      const r = await api.post<{ task: TaskCard }>("/api/background", { brief, deliverable, source: "ui" });
+      // «Не повторять» — null: ядро само найдёт повтор в тексте («каждый вечер записывай …»)
+      const r = await api.post<{ task: TaskCard }>("/api/background", {
+        brief,
+        deliverable,
+        source: "ui",
+        repeat: repeating ? repeat : null,
+        run_now: runNow,
+      });
       useBackground.getState().upsert(r.task);
       setBrief("");
       setDeliverable("");
+      setRepeat({});
+      setRunNow(true);
       onClose();
       navigate("background", r.task.id);
     } catch (e) {
@@ -161,11 +197,29 @@ function NewTask({ open, onClose }: { open: boolean; onClose: () => void }) {
         placeholder="Какой нужен результат (необязательно): отчёт, таблица, список…"
         onChange={(e) => setDeliverable(e.target.value)}
       />
+      <div className="bg-new-repeat">
+        <span className="small muted">Повторять</span>
+        <RepeatPicker value={repeat} onChange={setRepeat} />
+        {repeating && (
+          <CheckBox checked={runNow} onChange={setRunNow}>
+            Первый раз — сразу
+          </CheckBox>
+        )}
+      </div>
       <div className="bg-examples">
         <span className="faint tiny">Например:</span>
         {EXAMPLES.map((ex) => (
-          <button key={ex} type="button" className="bg-example" onClick={() => setBrief(ex)}>
-            {ex}
+          <button
+            key={ex.text}
+            type="button"
+            className="bg-example"
+            onClick={() => {
+              setBrief(ex.text);
+              setRepeat(ex.repeat ?? {});
+            }}
+          >
+            {ex.repeat && <Repeat />}
+            {ex.text}
           </button>
         ))}
       </div>
@@ -174,9 +228,17 @@ function NewTask({ open, onClose }: { open: boolean; onClose: () => void }) {
 }
 
 // --- вопрос агента ------------------------------------------------------------------------------------------
-function QuestionCard({ taskId, question }: { taskId: string; question: TaskQuestion }) {
+function QuestionCard({ taskId, question, site }: { taskId: string; question: TaskQuestion; site: boolean }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const openWindow = async () => {
+    try {
+      await api.post("/api/agent-browser/window", { task: taskId });
+      notify("Браузер агента открыт окном: войдите на сайт, закройте окно и ответьте агенту", "ok");
+    } catch (e) {
+      notifyError(e);
+    }
+  };
   const answer = async (value: string) => {
     if (!value.trim()) return;
     setBusy(true);
@@ -232,12 +294,20 @@ function QuestionCard({ taskId, question }: { taskId: string; question: TaskQues
           Ответить
         </Button>
       </div>
+      {site && (
+        <div className="bg-question-window faint small">
+          Сайт не пускает без входа или браузер без окна?
+          <Button size="sm" variant="ghost" icon={<AppWindow />} onClick={() => void openWindow()}>
+            Открыть сайт окном
+          </Button>
+        </div>
+      )}
     </section>
   );
 }
 
 // --- задача целиком ---------------------------------------------------------------------------------------
-type DetailTab = "progress" | "browser" | "sources" | "task";
+type DetailTab = "progress" | "runs" | "measures" | "browser" | "sources" | "task";
 
 function fmtDuration(seconds: number): string {
   const m = Math.round(seconds / 60);
@@ -246,11 +316,63 @@ function fmtDuration(seconds: number): string {
   return `${Math.floor(m / 60)} ч ${m % 60} мин`;
 }
 
+function fmtMoment(ts: number): string {
+  return new Date(ts * 1000).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+/** Расписание задачи: сменить, снять или сделать обычную задачу повторяющейся. */
+function ScheduleModal({ task, open, onClose }: { task: TaskFull; open: boolean; onClose: () => void }) {
+  const [repeat, setRepeat] = useState<TaskRepeat>(task.repeat ?? {});
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (open) setRepeat(task.repeat ?? {});
+  }, [open, task.repeat]);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = await api.put<{ task: TaskCard }>(`/api/background/${task.id}/repeat`, { repeat });
+      useBackground.getState().upsert(r.task);
+      onClose();
+    } catch (e) {
+      notifyError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Расписание задачи"
+      icon={<CalendarClock />}
+      width={520}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Отмена
+          </Button>
+          <Button variant="primary" loading={busy} onClick={() => void save()}>
+            Сохранить
+          </Button>
+        </>
+      }
+    >
+      <p className="muted small" style={{ marginTop: 0 }}>
+        Задача будет запускаться сама: каждый запуск — свежие данные (замер, обновление заметки), итог — в «Запусках».
+        «Не повторять» — повторы снимаются, задача остаётся с итогом последнего запуска.
+      </p>
+      <RepeatPicker value={repeat} onChange={setRepeat} />
+    </Modal>
+  );
+}
+
 function Detail({ id }: { id: string }) {
   const card = useBackground((s) => s.tasks.find((t) => t.id === id));
   const [task, setTask] = useState<TaskFull | null>(null);
   const [tab, setTab] = useState<DetailTab>("progress");
   const [busy, setBusy] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
+  const [browserTabs, setBrowserTabs] = useState<Record<string, string>>({});
   const load = useCallback(async () => {
     try {
       const r = await api.get<{ task: TaskFull }>(`/api/background/${id}`);
@@ -266,6 +388,14 @@ function Detail({ id }: { id: string }) {
   }, [load]);
   // обновлять по событиям этой задачи (не чаще раза в секунду — так их и шлёт ядро)
   useEffect(() => onEvent<{ task: TaskCard }>("background.updated", (e) => e.data.task.id === id && void load()), [id, load]);
+  // вкладки браузера агента: у задачи есть страница — её можно открыть окном (войти на сайт)
+  useEffect(() => {
+    api
+      .get<{ tasks: Record<string, string> }>("/api/agent-browser")
+      .then((r) => setBrowserTabs(r.tasks ?? {}))
+      .catch(() => undefined);
+    return onEvent<{ tasks?: Record<string, string> }>("agent_browser.state", (e) => setBrowserTabs(e.data.tasks ?? {}));
+  }, []);
 
   if (!task || !card) {
     return (
@@ -275,7 +405,8 @@ function Detail({ id }: { id: string }) {
     );
   }
   const active = ACTIVE.includes(card.status);
-  const act = async (what: "cancel" | "retry" | "delete") => {
+  const recurring = Boolean(card.repeat_text);
+  const act = async (what: "cancel" | "retry" | "delete" | "pause" | "resume") => {
     setBusy(true);
     try {
       if (what === "delete") {
@@ -292,6 +423,16 @@ function Detail({ id }: { id: string }) {
     }
   };
   const progress = task.log.filter((e) => e.kind !== "action");
+  const lastRun = task.history[task.history.length - 1];
+  const tabs: { value: DetailTab; label: string; icon: ReactNode }[] = [{ value: "progress", label: "Ход работы", icon: <ListChecks /> }];
+  if (recurring || task.history.length) tabs.push({ value: "runs", label: `Запуски${task.history.length ? ` · ${task.history.length}` : ""}`, icon: <History /> });
+  if (card.tables.length) tabs.push({ value: "measures", label: "Замеры", icon: <ChartLine /> });
+  tabs.push(
+    { value: "browser", label: "Браузер", icon: <Globe /> },
+    { value: "sources", label: `Источники${task.sources.length ? ` · ${task.sources.length}` : ""}`, icon: <BookOpen /> },
+    { value: "task", label: "Задача", icon: <Telescope /> },
+  );
+  const shown = tabs.some((t) => t.value === tab) ? tab : "progress";
   return (
     <div className="bg-detail">
       <div className="bg-detail-head">
@@ -299,6 +440,16 @@ function Detail({ id }: { id: string }) {
           <h2 className="bg-title">{task.title}</h2>
           <div className="row wrap small">
             <StatusChip status={card.status} />
+            {recurring && (
+              <span className="chip" title="Расписание">
+                <Repeat /> {card.repeat_text}
+              </span>
+            )}
+            {card.status === "scheduled" && card.next_run > 0 && (
+              <span className="chip">
+                <CalendarClock /> следующий — {fmtWhen(card.next_run)}
+              </span>
+            )}
             {task.plan.length > 0 && (
               <span className="chip">
                 <ListChecks /> {task.plan.filter((s) => s.done).length} из {task.plan.length}
@@ -306,7 +457,7 @@ function Detail({ id }: { id: string }) {
             )}
             <span className="faint tiny">
               {task.steps} действий · {fmtDuration(task.worked_s)}
-              {task.runs > 1 ? ` · заходов: ${task.runs}` : ""}
+              {recurring && task.cycle ? ` · запусков: ${task.cycle}` : task.runs > 1 ? ` · заходов: ${task.runs}` : ""}
             </span>
           </div>
         </div>
@@ -317,13 +468,42 @@ function Detail({ id }: { id: string }) {
             </Button>
           )}
           {active ? (
-            <Button size="sm" variant="ghost" icon={<Ban />} loading={busy} onClick={() => void act("cancel")}>
-              Отменить
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<Ban />}
+              loading={busy}
+              onClick={() => void act("cancel")}
+              title={recurring ? "Остановить этот запуск и повторы (продолжить можно потом)" : undefined}
+            >
+              {recurring ? "Остановить" : "Отменить"}
             </Button>
+          ) : recurring ? (
+            <>
+              <Button size="sm" variant="soft" icon={<Play />} loading={busy} onClick={() => void act("retry")}>
+                Запустить сейчас
+              </Button>
+              {card.status === "scheduled" ? (
+                <Button size="sm" variant="ghost" icon={<Pause />} onClick={() => void act("pause")}>
+                  Пауза
+                </Button>
+              ) : (
+                <Button size="sm" variant="ghost" icon={<RotateCcw />} onClick={() => void act("resume")}>
+                  Продолжить
+                </Button>
+              )}
+              <IconButton icon={<CalendarClock />} label="Расписание" size="sm" variant="ghost" onClick={() => setScheduling(true)} />
+              {card.status !== "cancelled" && (
+                <IconButton icon={<Ban />} label="Остановить повторы" size="sm" variant="ghost" onClick={() => void act("cancel")} />
+              )}
+            </>
           ) : (
-            <Button size="sm" variant="ghost" icon={<RotateCcw />} loading={busy} onClick={() => void act("retry")}>
-              Ещё раз
-            </Button>
+            <>
+              <Button size="sm" variant="ghost" icon={<RotateCcw />} loading={busy} onClick={() => void act("retry")}>
+                Ещё раз
+              </Button>
+              <IconButton icon={<Repeat />} label="Повторять по расписанию" size="sm" variant="ghost" onClick={() => setScheduling(true)} />
+            </>
           )}
           {!active && (
             <IconButton icon={<Trash2 />} label="Удалить из списка (заметки останутся)" size="sm" variant="ghost" onClick={() => void act("delete")} />
@@ -331,13 +511,13 @@ function Detail({ id }: { id: string }) {
         </div>
       </div>
 
-      {card.question && <QuestionCard taskId={id} question={card.question} />}
+      {card.question && <QuestionCard taskId={id} question={card.question} site={Boolean(browserTabs[id])} />}
 
       {(task.summary || task.error) && !active && (
-        <section className={cx("card", "bg-result", card.status)}>
+        <section className={cx("card", "bg-result", recurring && lastRun ? lastRun.status : card.status)}>
           <div className="row">
-            {card.status === "done" ? <Check /> : <CircleAlert />}
-            <strong>Итог</strong>
+            {(recurring && lastRun ? lastRun.status : card.status) === "done" ? <Check /> : <CircleAlert />}
+            <strong>{recurring && lastRun ? `Последний запуск · ${fmtMoment(lastRun.ts)}` : "Итог"}</strong>
             <span className="spacer" />
             {task.result_link && (
               <Button size="sm" variant="primary" icon={<ExternalLink />} onClick={() => openLink(task.result_link)}>
@@ -349,18 +529,9 @@ function Detail({ id }: { id: string }) {
         </section>
       )}
 
-      <Tabs<DetailTab>
-        value={tab}
-        onChange={setTab}
-        items={[
-          { value: "progress", label: "Ход работы", icon: <ListChecks /> },
-          { value: "browser", label: "Браузер", icon: <Globe /> },
-          { value: "sources", label: `Источники${task.sources.length ? ` · ${task.sources.length}` : ""}`, icon: <BookOpen /> },
-          { value: "task", label: "Задача", icon: <Telescope /> },
-        ]}
-      />
+      <Tabs<DetailTab> value={shown} onChange={setTab} items={tabs} />
       <div className="bg-tab">
-        {tab === "progress" && (
+        {shown === "progress" && (
           <div className="bg-progress-view">
             {task.plan.length > 0 && (
               <div className="bg-plan">
@@ -384,12 +555,33 @@ function Detail({ id }: { id: string }) {
                 ))}
               </ol>
             ) : (
-              <Empty icon={<Clock />}>{card.status === "queued" ? "Задача ждёт очереди" : "Агент только начинает"}</Empty>
+              <Empty icon={<Clock />}>
+                {card.status === "queued" ? "Задача ждёт очереди" : card.status === "scheduled" ? "Ждёт первого запуска" : "Агент только начинает"}
+              </Empty>
             )}
           </div>
         )}
-        {tab === "browser" && <AgentBrowserView task={id} />}
-        {tab === "sources" &&
+        {shown === "runs" &&
+          (task.history.length ? (
+            <ol className="bg-runs">
+              {[...task.history].reverse().map((run) => (
+                <li key={`${run.cycle}-${run.ts}`} className={run.status}>
+                  <span className={cx("bg-row-ico", STATUS[run.status]?.tone ?? "muted")}>{STATUS[run.status]?.icon ?? <Clock />}</span>
+                  <span className="faint tiny">
+                    №{run.cycle} · {fmtMoment(run.ts)}
+                  </span>
+                  <span>{plain(run.summary) || STATUS[run.status]?.label}</span>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <Empty icon={<History />}>
+              {card.status === "scheduled" && card.next_run ? `Первый запуск — ${fmtWhen(card.next_run)}` : "Запусков пока не было"}
+            </Empty>
+          ))}
+        {shown === "measures" && <MeasureView taskId={id} version={`${card.tables.length}:${card.last_run?.ts ?? 0}:${card.cycle}`} />}
+        {shown === "browser" && <AgentBrowserView task={id} />}
+        {shown === "sources" &&
           (task.sources.length ? (
             <ul className="bg-sources">
               {task.sources.map((s) => (
@@ -405,7 +597,7 @@ function Detail({ id }: { id: string }) {
           ) : (
             <Empty icon={<BookOpen />}>Агент ещё не читал источники</Empty>
           ))}
-        {tab === "task" && (
+        {shown === "task" && (
           <div className="bg-brief">
             <p>{task.brief}</p>
             {task.deliverable && (
@@ -421,6 +613,7 @@ function Detail({ id }: { id: string }) {
           </div>
         )}
       </div>
+      <ScheduleModal task={task} open={scheduling} onClose={() => setScheduling(false)} />
     </div>
   );
 }

@@ -187,8 +187,21 @@ System.Screenshot, System.EmptyRecycleBin, Media.PlayPause, Media.Next, Media.Pr
 Window.MinimizeAll, Window.Minimize, Window.Maximize, Window.Restore, Window.Close, Wait, Speak, Notify,
 Clipboard.Set, Web.Search, Info.Time, Info.Date, Info.Weather, Jarvis.OpenDesk, Jarvis.Ask, Jarvis.Command,
 Jarvis.Plugin, Jarvis.SilentMode, Jarvis.Microphone, Jarvis.ShowWindow` и для встроенных команд `Info.Volume, Info.Media,
-Info.Battery, Info.System, Jarvis.Timer, Jarvis.Reminder`. Каталог с описанием параметров —
-`GET /api/commands/actions`.
+Info.Battery, Info.System, Jarvis.Timer, Jarvis.Reminder, Jarvis.ReminderAt, Jarvis.Reminders, Jarvis.ReminderCancel,
+Jarvis.Undo, App.CloseLast`. Каталог с описанием параметров — `GET /api/commands/actions`.
+
+**Время словами и «отмени».** Слот `{when}` (`jarvis/commands/when.py`) — время напоминания: «завтра в 9», «в
+18:30», «сегодня вечером», «в пятницу в 10 утра», «в эту субботу», «послезавтра в полдень», «31 октября в 15:00», «в
+девять тридцать вечера»; подходит, только если слова целиком — время не в прошлом (иначе фраза уходит дальше, к ИИ);
+час без «утра/вечера» — ближайший такой на часах («в 7» в 15:00 — 19:00); два слота подряд разделяются, если один из
+них `{when}` (время — самое длинное). `Jarvis.ReminderAt` — «когда | текст» («завтра в 9 | Позвонить маме»);
+`Jarvis.Reminders` — ближайшие напоминания (до 10 на экране, 3 голосом); `Jarvis.ReminderCancel` — пусто: последнее
+поставленное, «все» — все (команда с подтверждением), иначе — то, в тексте которого есть эти слова. «Отмени»
+(`Jarvis.Undo`, `jarvis/commands/undo.py`) возвращает последнее обратимое действие Jarvis не старше 5 минут:
+громкость (прежний уровень), звук, «сверни все окна» (`window_action("undo_minimize_all")`), свернуть/развернуть окно
+(окно — как было), таймер и напоминание (удалить), открытую программу (закрыть); шагов нет — Ctrl+Z в активном окне,
+как раньше («контрол зет» — всегда Ctrl+Z). `App.CloseLast` («закрой его») — программа, которую Jarvis открыл не
+раньше 5 минут назад; нет такой — ошибка, а не закрытие чего попало.
 
 Значения: `Ui.Click` — название кнопки, ссылки или пункта окна впереди («Отправить»), `Ui.Type` — «поле | текст»
 («Кому | ivan@example.com»; содержимое поля заменится): элемент ищется UI Automation по названию (точное, начало,
@@ -212,7 +225,7 @@ screenshots`; `Launch.Shell` — только в своих командах; з
 `Jarvis.Command` — id команды или её фраза;
 `Jarvis.Plugin` — «плагин:действие» («dictation:toggle»), аргументы JSON после «|»; `Jarvis.SilentMode` и
 `Jarvis.Microphone` (микрофон Jarvis: «не слушай меня»; голосом обратно не включить) — `on`, `off`, `toggle`; `Jarvis.ShowWindow` — `show`, `hide` или страница (`settings`, `commands`, `chat`);
-`Jarvis.Timer` — «5m»; `Jarvis.Reminder` — «10m | Позвонить маме».
+`Jarvis.Timer` — «5m»; `Jarvis.Reminder` — «10m | Позвонить маме»; `Jarvis.ReminderAt` — «завтра в 9 | Позвонить маме».
 `Jarvis.Briefing` («Сводка дня», для сценариев) — `""` (утренняя сводка), `short`, `tasks`, `today`, `missed`,
 `welcome`, `hello` — см. §6.
 `Media.Close` («закрой музыку») — закрыть программу, которая играет (сеанс воспроизведения Windows), нет её —

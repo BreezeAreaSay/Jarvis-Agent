@@ -29,8 +29,11 @@ _PASSWORD_RE = re.compile(
 # «пин-код 1234» — и без двоеточия, если дальше одни цифры
 _PIN_RE = re.compile(r"(?i)\b(пин-?код|pin-?code|pin)(\s+)(\d{4,8})\b")
 # ключ=значение: api_key=…, "token": "…", Authorization: …, TELEGRAM_SESSION_STRING=…
+# имя ключа — до 40 знаков перед словом-признаком и не с середины слова: иначе на длинных «ab-ab-ab-…»
+# (адреса, base64) поиск квадратичный и замирает на секунды
 _ASSIGN_RE = re.compile(
-    r"(?i)((?<![A-Za-z0-9])[\"']?[A-Za-z0-9_-]*?(?:api[_-]?key|access[_-]?key|secret[_-]?key|client[_-]?secret|"
+    r"(?i)((?<![A-Za-z0-9_-])[\"']?[A-Za-z0-9_-]{0,40}?(?:api[_-]?key|access[_-]?key|secret[_-]?key|"
+    r"client[_-]?secret|"
     r"secret|token|access[_-]?token|refresh[_-]?token|authorization|session[_-]?string|api[_-]?hash|password|"
     r"passwd|pwd)[\"']?\s*[:=]\s*[\"']?)([A-Za-z0-9._~+/=:-]{8,})"
 )
@@ -91,7 +94,16 @@ def redact(text: str) -> str:
     out = _PIN_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", out)
     for pattern in _TOKEN_RES:
         out = pattern.sub(lambda m: f"{m.group(1)}{MASK}", out)
-    return _ASSIGN_RE.sub(lambda m: f"{m.group(1)}{MASK}", out)
+    return _ASSIGN_RE.sub(_assign, out)
+
+
+# «токены» страниц и синхронизации (nextPageToken, syncToken, cursor) — не секреты: без них ломается выдача
+# частями
+_PAGING_KEY = re.compile(r"(?i)(page|next|prev|sync|cursor|continuation|resume)[_-]?token")
+
+
+def _assign(m: re.Match[str]) -> str:
+    return m.group(0) if _PAGING_KEY.search(m.group(1)) else f"{m.group(1)}{MASK}"
 
 
 def has_secret(text: str) -> bool:

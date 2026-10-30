@@ -446,7 +446,9 @@ async def run_session(service: "Background", task: Task) -> Session:
     session = Session(service, task)
     host = Host(service)
     backend = getattr(ctx.ai, "account_backend", lambda: None)()
-    provider = ctx.settings.value.ai.provider
+    # подписка на паузе — отвечает запасной по ключу: у него нет встроенного поиска, а зрение — своё
+    llm_cfg = ctx.ai.llm.config() if backend is None else None
+    provider = llm_cfg.provider if llm_cfg is not None else ctx.settings.value.ai.provider
     native_search = provider in ("claude_code", "gemini_cli", "chatgpt")
     native_read = provider in ("claude_code", "gemini_cli", "qwen_code")
     toolset = task_tools.Toolset()
@@ -454,7 +456,8 @@ async def run_session(service: "Background", task: Task) -> Session:
     browser = service.browser_tools()
     if browser is not None:
         ai = ctx.settings.value.ai
-        toolset.add(*browser.tools(vision=sees_images(ai.provider, ai.model, ai.vision)))
+        sees = llm_cfg.vision if llm_cfg is not None else sees_images(ai.provider, ai.model, ai.vision)
+        toolset.add(*browser.tools(vision=sees))
     toolset.add(*task_tools.mcp_tools(ctx, set(toolset.tools) | {"finish"}))
     session.tools = toolset.tools
     search = SEARCH_NATIVE if native_search and native_read else SEARCH_CODEX if native_search else SEARCH_OWN

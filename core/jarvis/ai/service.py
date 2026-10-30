@@ -81,8 +81,10 @@ PRIVATE_PHRASE = re.compile(
     r"только\s+на\s+этом\s+(?:пк|компьютере))\s*[:,—–-]?\s*(?P<text>.+)$",
     re.I | re.S,
 )
-# инструменты, которые ходят в интернет: в приватном ответе их нет
-NETWORK_TOOLS = frozenset({"web_search", "fetch_page", "get_weather", "get_news", "get_rates", "run_agent"})
+# в приватном ответе нет инструментов, которые ходят в интернет, и памяти: она уходит в каждый облачный запрос
+NETWORK_TOOLS = frozenset(
+    {"web_search", "fetch_page", "get_weather", "get_news", "get_rates", "run_agent", "remember"}
+)
 _IMAGE_URL = re.compile(r"^data:image/(?:png|jpe?g|webp|gif);base64,", re.I)
 
 
@@ -422,10 +424,9 @@ class Ai(BaseService):
         if problem:
             return AskResult(chat_id or "", "", error=problem)
         try:
-            turn = self._begin(text, chat_id=chat_id, source=source, mode="chat", images=images)
+            turn = self._begin(text, chat_id=chat_id, source=source, mode="chat", images=images, private=True)
         except UserFacingError as e:
             return AskResult(chat_id or "", "", error=str(e))
-        turn.private = True
         return await self._spawn(turn)
 
     def _background(
@@ -551,7 +552,7 @@ class Ai(BaseService):
             self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
             await self.ctx.dispatcher.stop()
             return {"chat_id": chat_id, "message_id": row["id"], "reply_id": run.reply_id}  # type: ignore[union-attr]
-        if working and agent.interject(text):  # type: ignore[union-attr]
+        if working and agent.interject(text, source):  # type: ignore[union-attr]
             row = self.chats.add_message(chat_id, "user", text.strip())
             self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
             return {"chat_id": chat_id, "message_id": row["id"], "reply_id": run.reply_id}
@@ -613,6 +614,7 @@ class Ai(BaseService):
         images: list[str] | None,
         agent_task: str = "",
         browser: bool = False,
+        private: bool = False,
     ) -> Turn:
         text = (text or "").strip()
         pictures = self._check_images(images)
@@ -642,9 +644,10 @@ class Ai(BaseService):
         first = self.ctx.db.query_one(
             "SELECT 1 FROM messages WHERE chat_id=? AND role='user' LIMIT 1", (chat["id"],)
         )
-        row = self.chats.add_message(
-            chat["id"], "user", text, meta={"images": pictures} if pictures else None
-        )
+        meta: dict[str, Any] = {"images": pictures} if pictures else {}
+        if private:
+            meta["private"] = True  # «приватно: …» — в историю для облачной модели не идёт (Ai._history)
+        row = self.chats.add_message(chat["id"], "user", text, meta=meta or None)
         self.ctx.bus.publish("chat.message", {"chat_id": chat["id"], "message": ui_message(row)})
         changes: dict[str, Any] = {}
         if chat["kind"] == "chat" and first is None and chat["title"] in ("", "Новый чат"):
@@ -664,6 +667,7 @@ class Ai(BaseService):
             model=chat["model"],
             kind=chat["kind"],
             agent_task=agent_task,
+            private=private,
         )
 
     async def _spawn(self, turn: Turn) -> AskResult:
@@ -802,6 +806,8 @@ class Ai(BaseService):
         groups = group_turns(self.chats.rows(turn.chat_id))
         index = next((i for i, g in enumerate(groups) if g[0]["id"] == turn.user_id), len(groups))
         groups = groups[:index]
+        if not turn.private:  # «приватно: …» было только для модели на этом ПК — облаку его не показываем
+            groups = [g for g in groups if not g[0]["meta"].get("private")]
         if turn.kind == "voice":
             since = time.time() - VOICE_WINDOW_S
             groups = [g for g in groups if g[0]["created"] >= since][-VOICE_TURNS:]
@@ -827,7 +833,7 @@ class Ai(BaseService):
             "assistant",
             response.content,
             tool_calls=calls,
-            meta={"turn": turn.user_id, "hidden": True},
+            meta={"turn": turn.user_id, "hidden": True, **({"private": True} if turn.private else {})},
         )
         return {"role": "assistant", "content": response.content or None, "tool_calls": calls}
 
@@ -1051,6 +1057,8 @@ class Ai(BaseService):
             meta["stopped"] = True
         if final and final != text:
             meta["llm_content"] = final
+        if turn.private:
+            meta["private"] = True
         if not turn.finished:
             turn.finished = True
             row = self.chats.add_message(turn.chat_id, "assistant", text, meta=meta, message_id=turn.reply_id)

@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 
 from rapidfuzz import fuzz, process
 
+from jarvis.ai import private_windows
 from jarvis.ai.format import iso_local, one_line, parse_when
 from jarvis.ai.policy import (
     APP_SCHEMES,
@@ -42,6 +43,7 @@ from jarvis.ai.policy import (
     link_note,
     lookalike_host,
     normalize_combo,
+    web_url,
 )
 from jarvis.ai.web import WebClient, check_public_url, site_name
 from jarvis.background.repeat import describe
@@ -419,6 +421,9 @@ async def _open_url(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
             return ToolOutput.fail(
                 "нужна ссылка http(s) или адрес программы: tg:, ms-settings:, spotify:, mailto:, whatsapp:"
             )
+    url, problem = web_url(url)
+    if problem:
+        return ToolOutput.fail(problem.removeprefix("Ошибка: "))
     parsed = urlparse(url)
     host = (parsed.hostname or "").casefold()
     known = bool(SEARCH_HOSTS.search(host)) or host in env.user_text.casefold()
@@ -463,6 +468,9 @@ async def _type_text(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
     if not text:
         return ToolOutput.fail("пустой текст")
     window = await foreground_for_input(env.ctx)
+    hidden = private_windows.private_reason(window, private_windows.settings_list(env.ctx))
+    if hidden and window is not None:
+        return ToolOutput.fail(private_windows.hidden_text(window, hidden))
     title, exe = (window.title, window.exe) if window is not None else ("", "")
     where = f" в «{title}»" if title else ""
     if is_shell_window(title, exe):
@@ -492,6 +500,9 @@ async def _press_keys(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
     if combo in jarvis_hotkeys(env.ctx.settings.value):
         return ToolOutput.fail(f"{combo} — горячая клавиша самого Jarvis, её я не нажимаю")
     window = await foreground_for_input(env.ctx)
+    hidden = private_windows.private_reason(window, private_windows.settings_list(env.ctx))
+    if hidden and window is not None:
+        return ToolOutput.fail(private_windows.hidden_text(window, hidden))
     title, exe = (window.title, window.exe) if window is not None else ("", "")
     where = f" в «{title}»" if title else ""
     detail = ""

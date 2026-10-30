@@ -347,7 +347,7 @@ class MainDispatcher:
         """Фраза, пока агент работает: ему — ответом на вопрос, решением о разрешении или поправкой
         (на поправку — «Понял, учту» вслух)."""
         agent = self.ctx.agent
-        kind = str(agent.interject(raw) or "")
+        kind = str(agent.interject(raw, source) or "")
         delivered = bool(kind)
         detail = AGENT_REPLY.get(kind, "Агент уже закончил")
         item = self._history_add(source, raw, "ai", "ok" if delivered else "error", title=raw, detail=detail)

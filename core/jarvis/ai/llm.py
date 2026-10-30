@@ -273,6 +273,25 @@ OUTAGE_TEXT = {
 }
 
 
+def _without_images(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Сообщения без картинок (для модели без зрения): картинка — пометкой «[картинка не передана]»."""
+    out: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list) and any(
+            isinstance(p, dict) and p.get("type") == "image_url" for p in content
+        ):
+            parts = [
+                {"type": "text", "text": "[картинка не передана: модель её не видит]"}
+                if isinstance(p, dict) and p.get("type") == "image_url"
+                else p
+                for p in content
+            ]
+            message = {**message, "content": parts}
+        out.append(message)
+    return out
+
+
 def _minutes(seconds: float) -> str:
     """«30 мин», «1 мин», «45 с» — через сколько снова позвать основной провайдер."""
     if seconds < 60:
@@ -1079,7 +1098,9 @@ class LlmClient:
     def config(self, model: str | None = None) -> LlmConfig:
         """Параметры запроса: основной провайдер, а пока он на паузе после сбоя — запасной."""
         primary = self.primary_config(model)
-        if self.outage(primary.provider):
+        if self.outage(primary.provider) or primary.preset.login:
+            # подписку (ChatGPT, программы) клиент API не ведёт: сюда её зовут, только пока она на паузе, — и
+            # долгая работа (агент, фоновая задача) не должна сломаться, когда пауза кончится посреди неё
             backup = self.fallback_config()
             if backup is not None:
                 return backup
@@ -1124,8 +1145,16 @@ class LlmClient:
         пауза поставлена. Без запасного пауза не ставится: без основного не останется ничего."""
         kind = OUTAGE_KINDS.get(reason, "")
         backup = self.fallback_config()
-        if not kind or backup is None or backup.provider == provider:
+        if not kind or backup is None:
             return False
+        if backup.provider == provider:
+            primary = self.primary_config()
+            if (backup.base_url, backup.model, backup.api_key) == (
+                primary.base_url,
+                primary.model,
+                primary.api_key,
+            ):
+                return False  # запасной — тот же самый: пауза оставила бы без ответа совсем
         seconds = OUTAGE_COOLDOWN[kind]
         if kind == "rate" and retry_after:
             seconds = min(max(float(retry_after), 10.0), 600.0)
@@ -1273,7 +1302,8 @@ class LlmClient:
         json_schema: dict[str, Any] | None,
         stream: bool,
     ) -> dict[str, Any]:
-        if self.mask_secrets and not cfg.local:  # облачной модели — без паролей и ключей из текста
+        # облачной модели — без паролей и ключей из текста; модели Ollama «…:cloud» работают в облаке
+        if self.mask_secrets and (not cfg.local or "cloud" in cfg.model.casefold()):
             messages = redact_messages(messages)
         body: dict[str, Any] = {
             "model": cfg.wire_model,
@@ -1377,18 +1407,21 @@ class LlmClient:
             cfg = dataclasses.replace(backup, speed=speed) if speed and speed != backup.speed else backup
             self.check_budget(cfg)
             quirks = self._quirks_for(cfg)
+            if not cfg.vision:  # запасная модель картинок не видит — не ронять ответ ошибкой 400
+                msgs = _without_images(msgs)
             started, first = time.perf_counter(), 0.0
             response = await self._request(cfg, msgs, quirks, **options)
+        elapsed = time.perf_counter() - started
+        self._record(cfg, response, msgs)  # и оценка токенов, если провайдер их не прислал
         self.timings.append(
             {
                 "provider": cfg.provider,
                 "model": cfg.model,
-                "seconds": round(time.perf_counter() - started, 3),
+                "seconds": round(elapsed, 3),
                 "ttft": round(first - started, 3) if first else None,
                 "completion_tokens": int(response.usage.completion_tokens or 0),
             }
         )
-        self._record(cfg, response, msgs)
         if json_schema is None:
             return response
         parsed = _parse_json_answer(response.content, json_schema)
@@ -1632,8 +1665,22 @@ class LlmClient:
         cfg = self.primary_config()
         started = time.perf_counter()
         try:
-            await self.chat(
-                [{"role": "user", "content": "Ответь одним словом: готов."}], max_tokens=64, stream=False
+            # только основной: без запасного и без паузы (иначе «Проверить» хвалит сломанный основной)
+            problem = cfg.problem()
+            if problem:
+                raise LlmError(problem, kind="config")
+            self.check_budget(cfg)
+            await self._request(
+                cfg,
+                [{"role": "user", "content": "Ответь одним словом: готов."}],
+                self._quirks_for(cfg),
+                tools=None,
+                tool_choice=None,
+                temperature=None,
+                max_tokens=64,
+                json_schema=None,
+                stream=False,
+                on_delta=None,
             )
         except LlmError as e:
             latency = int((time.perf_counter() - started) * 1000)
@@ -1672,7 +1719,7 @@ def weak_local_model(cfg: LlmConfig) -> str:
     if not cfg.local:
         return ""
     sizes = [float(m.group(1)) for m in _SIZE.finditer(cfg.model)]
-    if not sizes or max(sizes) > WEAK_LOCAL_B:
+    if not sizes or max(sizes) >= WEAK_LOCAL_B:
         return ""
     return (
         f"Модель на этом ПК ({cfg.model}) для долгих задач слабовата: она может потерять план или закончить "

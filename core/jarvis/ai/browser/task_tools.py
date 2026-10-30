@@ -17,6 +17,7 @@ import contextlib
 import logging
 import re
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from jarvis.ai.agent import RISKY_NAME, SEND_NAME, Outcome
 from jarvis.ai.browser import page as pages
@@ -38,7 +39,7 @@ from jarvis.ai.browser.tools import (
     _url,
 )
 from jarvis.ai.format import one_line
-from jarvis.ai.policy import has_card_number, normalize_combo
+from jarvis.ai.policy import ascii_host, has_card_number, link_note, lookalike_host, normalize_combo, web_url
 from jarvis.ai.tools import untrusted
 from jarvis.services import UserFacingError
 
@@ -194,9 +195,19 @@ class TaskBrowser(BrowserTools):
     # --- действия
     # --------------------------------------------------------------------------------------------
     async def _open(self, run: "Session", args: dict[str, Any]) -> Outcome:
-        url = _url(str(args.get("url") or ""))
+        url, problem = web_url(_url(str(args.get("url") or "")))
+        if problem:
+            return Outcome(False, problem)
         if not url or not url.startswith(("http://", "https://")):
             return Outcome(False, "Ошибка: нужен адрес сайта https://…")
+        host = (urlparse(url).hostname or "").casefold()
+        if lookalike_host(host):  # «gооgle.com» с русскими «о» — только с разрешения человека
+            await self._ok(
+                run,
+                f"Открыть {ascii_host(host)}?",
+                f"{link_note(host)} Адрес: {one_line(url, 160)}",
+                f"open:{ascii_host(host)}",
+            )
         browser, _ = await self._front(run, opening=True)
         session = await browser.session(self.tab)
         if session in browser.dialogs:

@@ -50,6 +50,7 @@ from jarvis.ai.policy import (
     link_note,
     lookalike_host,
     normalize_combo,
+    web_url,
 )
 from jarvis.ai.tools import untrusted
 from jarvis.ai.uia import UiElement, UiSnapshot
@@ -388,7 +389,9 @@ class BrowserTools:
         browser = self._browser()
         self._start(run)
         raw = _arg(args, "url")
-        url = _url(raw)
+        url, problem = web_url(_url(raw))
+        if problem:
+            return Outcome(False, problem)
         if not url:
             return Outcome(
                 False,

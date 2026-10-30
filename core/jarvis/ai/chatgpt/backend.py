@@ -1169,11 +1169,12 @@ class ChatGpt:
                 apps=await apphints.chat_hints(self.ctx, turn.text, allowed),
             )
             sent = dict(state.sent)
+            # память, свои инструкции и история — в облако тоже через маску («запомни пароль …» — •••)
             context: dict[str, Any] = {
-                "jarvis": {"kind": "application", "value": prompt.context_text(sections, sent)}
+                "jarvis": {"kind": "application", "value": _mask(prompt.context_text(sections, sent))}
             }
             if state.history:
-                context["history"] = {"kind": "untrusted", "value": state.history}
+                context["history"] = {"kind": "untrusted", "value": _mask(state.history)}
             params: dict[str, Any] = {
                 "model": model,
                 "effort": self._effort(model, turn.source),

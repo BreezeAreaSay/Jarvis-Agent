@@ -1,6 +1,7 @@
 """«Приватно: …» — ответ только моделью на этом ПК: без облака, поиска в интернете и серверов MCP; модели на
 этом ПК нет — понятная ошибка, а не тихий уход в облако."""
 
+import json
 from typing import Any
 
 import httpx
@@ -54,3 +55,20 @@ async def test_private_uses_local_primary(ctx: AppContext, llm: ScriptedLlm) -> 
     llm.add(answer("Готово.", seen))
     result = await ctx.ai.ask("локально — перескажи мою заметку о встрече")  # type: ignore[attr-defined]
     assert result.text == "Готово." and seen[0].url.host == "127.0.0.1"
+
+
+async def test_private_exchange_never_reaches_the_cloud_later(ctx: AppContext, llm: ScriptedLlm) -> None:
+    ctx.settings.patch({"ai": {"fallback_provider": "ollama", "fallback_model": "qwen3:8b"}})
+    seen: list[httpx.Request] = []
+    llm.add(answer("Записал у себя, сэр.", seen))
+    private = await ctx.ai.ask("приватно: мой счёт в банке 40817810099910004312", source="voice")  # type: ignore[attr-defined]
+    llm.add(answer("Привет!", seen))
+    public = await ctx.ai.ask("а что ты думаешь о погоде", chat_id=private.chat_id, source="voice")  # type: ignore[attr-defined]
+    assert public.chat_id == private.chat_id and seen[-1].url.host == "api.openai.com"
+    cloud = json.dumps(llm.requests[-1]["messages"], ensure_ascii=False)
+    assert "40817810099910004312" not in cloud and "Записал у себя" not in cloud
+    # а следующий приватный вопрос свою приватную историю видит
+    llm.add(answer("Помню.", seen))
+    await ctx.ai.ask("приватно: какой у меня счёт?", chat_id=private.chat_id)  # type: ignore[attr-defined]
+    local = json.dumps(llm.requests[-1]["messages"], ensure_ascii=False)
+    assert "40817810099910004312" in local and seen[-1].url.host == "127.0.0.1"

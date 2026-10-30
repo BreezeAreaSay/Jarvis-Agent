@@ -917,8 +917,10 @@ class Agent(BaseService):
             windows = await self.ctx.run_platform(self.ctx.platform.list_windows)
         except Exception as e:
             return f"(список окон недоступен: {e})"
+        hidden = private_windows.settings_list(self.ctx)
         lines = [
-            f"- «{w.title}» ({w.exe})" + (" — активное" if w.foreground else "")
+            f"- «{private_windows.shown_title(w, hidden)}» ({w.exe})"
+            + (" — активное" if w.foreground else "")
             for w in windows[:25]
             if w.title
         ]
@@ -1708,14 +1710,17 @@ class Agent(BaseService):
         if fg is not None:
             previous = run.target
             if previous is not None and previous.pid != fg.pid:
+                names = private_windows.settings_list(self.ctx)
+                now_title = private_windows.shown_title(fg, names)
+                was_title = private_windows.shown_title(previous, names)
                 if keep_target:
                     parts.append(
-                        f"Впереди теперь окно «{fg.title}» ({fg.exe}), а работаешь ты с «{previous.title}»: "
+                        f"Впереди теперь окно «{now_title}» ({fg.exe}), а работаешь ты с «{was_title}»: "
                         "нажимать его кнопки (ui_click, click_point) можно, вводить вслепую (type_text, "
                         "клавиши) — нет; работать в нём — ui_snapshot, вернуться — focus_window."
                     )
                 else:
-                    parts.append(f"Впереди теперь окно «{fg.title}» ({fg.exe}); было «{previous.title}».")
+                    parts.append(f"Впереди теперь окно «{now_title}» ({fg.exe}); было «{was_title}».")
             if not keep_target or previous is None:
                 run.target = fg
             hint = self._new_playbook(run, fg)
@@ -1803,7 +1808,12 @@ class Agent(BaseService):
             windows = await self.ctx.run_platform(self.ctx.platform.list_windows)
         except Exception:
             return ""
-        current = {w.hwnd: f"«{one_line(w.title, 60)}» ({w.exe})" for w in windows if w.title}
+        hidden = private_windows.settings_list(self.ctx)
+        current = {
+            w.hwnd: f"«{one_line(private_windows.shown_title(w, hidden), 60)}» ({w.exe})"
+            for w in windows
+            if w.title
+        }
         seen, run.windows = run.windows, current
         if seen is None:
             return ""

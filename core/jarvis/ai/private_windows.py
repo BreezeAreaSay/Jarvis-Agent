@@ -94,3 +94,9 @@ def hidden_text(window: WindowInfo, reason: str) -> str:
         "Нужно что-то в этом окне — попроси человека (ask_user) или переключись на другое окно "
         "(focus_window)."
     )
+
+
+def shown_title(window: WindowInfo, extra: Iterable[str] = ()) -> str:
+    """Заголовок окна для модели: у скрытого от ИИ — пометка вместо заголовка (в нём бывает имя записи
+    менеджера паролей или сайта)."""
+    return "(окно скрыто от ИИ)" if private_reason(window, extra) else (window.title or "")

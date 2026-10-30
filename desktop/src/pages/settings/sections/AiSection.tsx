@@ -16,6 +16,11 @@ function FallbackCard() {
   const status = useApi<AiFallbackStatus>("/api/ai/fallback");
   const reload = status.reload;
   useEffect(() => onEvent("ai.fallback", () => void reload()), [reload]);
+  const fb = settings?.ai;
+  // сменили провайдера, модель или адрес запасного — «готов ли он» узнать заново
+  useEffect(() => {
+    void reload();
+  }, [fb?.fallback_provider, fb?.fallback_model, fb?.fallback_base_url, fb?.folder_id, reload]);
   if (!settings) return null;
   const ai = settings.ai;
   const choices = providers.items.filter((p) => !p.login && !isAccountProvider(p.id));
@@ -56,6 +61,11 @@ function FallbackCard() {
           {chosen.needs_key && chosen.id !== ai.provider && (
             <Setting name="Ключ API" desc="Хранится зашифрованным только на этом компьютере" wide>
               <SecretField name="ai_fallback_api_key" placeholder={`Ключ ${chosen.title}`} onSaved={() => void reload()} />
+            </Setting>
+          )}
+          {chosen.folder && ai.provider !== chosen.id && (
+            <Setting name="ID каталога Yandex Cloud" desc="Тот же, что в консоли Yandex Cloud: b1g…" wide>
+              <LazyText value={ai.folder_id} placeholder="b1g…" width="100%" onCommit={(v) => patch({ ai: { folder_id: v } })} />
             </Setting>
           )}
           {(chosen.local || chosen.id === "custom") && (

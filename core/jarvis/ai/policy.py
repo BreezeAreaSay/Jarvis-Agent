@@ -9,6 +9,7 @@ import contextlib
 import re
 import unicodedata
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 Risk = Literal["read", "act", "risky"]
 Decision = Literal["allow", "ask", "deny"]
@@ -268,6 +269,27 @@ def lookalike_host(host: str) -> bool:
         ):
             return True
     return False
+
+
+USERINFO = (
+    "Ошибка: в адресе перед сайтом стоит «логин@» — так прячут настоящий сайт; такие ссылки не открываю"
+)
+
+
+def web_url(url: str) -> tuple[str, str]:
+    """Адрес http(s) так, как его поймёт браузер: «\\» — это «/» (иначе Python и браузер видят разные сайты:
+    «https://evil.example\\@google.com» — для браузера evil.example); «логин@» перед сайтом — ошибка.
+    Вернёт (адрес, ошибка)."""
+    head, sep, rest = url.partition("://")
+    if not sep:
+        return url, ""
+    url = head + sep + rest.replace("\\", "/")
+    try:
+        parsed = urlparse(url)
+        userinfo = parsed.username is not None or parsed.password is not None
+    except ValueError:
+        return url, "Ошибка: адрес не разобрать"
+    return url, USERINFO if userinfo else ""
 
 
 def link_note(host: str) -> str:

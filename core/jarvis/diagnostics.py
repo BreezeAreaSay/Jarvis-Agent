@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from jarvis import __version__, crashguard, paths
+from jarvis.ai.llm import weak_local_model
 from jarvis.redact import redact
 
 if TYPE_CHECKING:
@@ -80,8 +81,11 @@ def _ai(ctx: "AppContext") -> list[dict[str, str]]:
     problem = _safe(backend.problem) if backend is not None else _safe(ai.llm.problem)
     preset = _safe(lambda: ai.llm.primary_config().preset.title) or settings.provider
     model = settings.model or "модель по умолчанию"
+    weak = "" if backend is not None else (_safe(lambda: weak_local_model(ai.llm.primary_config())) or "")
     if problem:
         out.append(_item("ai", "Jarvis AI", "fail", f"{preset}, {model}: {problem}", "Настройки → Jarvis AI"))
+    elif weak:
+        out.append(_item("ai", "Jarvis AI", "warn", f"{preset}, {model}", weak))
     else:
         out.append(_item("ai", "Jarvis AI", "ok", f"{preset}, {model}"))
     status = _safe(ai.llm.fallback_status) or {}

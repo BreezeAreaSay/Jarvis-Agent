@@ -29,6 +29,7 @@ from evals.sim.platform import SimPlatform
 from evals.sim.ui import SimToasts, SimUi
 from evals.tasks.base import Approval, Question, Task, Trace
 from jarvis import paths
+from jarvis.ai.llm import speed_stats
 from jarvis.services import UserFacingError
 from jarvis.settings import Secrets
 
@@ -244,6 +245,7 @@ async def attempt(task: Task, options: Options, *, label: str = "") -> Outcome:
         seconds = time.monotonic() - started
         run = agent.current
         usage = run.usage.to_json() if run is not None else {}
+        speed = speed_stats(getattr(ctx.ai.llm, "timings", []))  # type: ignore[attr-defined]
         trace = Trace(
             status=result.status,
             outcome=result.outcome,
@@ -258,6 +260,8 @@ async def attempt(task: Task, options: Options, *, label: str = "") -> Outcome:
             cost=float(usage.get("cost") or 0.0),
             actions=[str(a.get("title") or "") for a in result.actions],
             timed_out=timed_out,
+            ttft_s=speed["ttft_s"],
+            tokens_per_s=speed["tokens_per_s"],
         )
         journal = run.journal.dir if run is not None and run.journal is not None else None
         copied = _keep_journal(journal, options, label or task.id) if journal is not None else None

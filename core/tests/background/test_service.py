@@ -288,3 +288,19 @@ async def test_phrase_in_background_starts_task_from_chat(bg: Bg) -> None:
 def test_chat_has_background_tool(ctx: AppContext) -> None:
     names = {t.name for t in ctx.ai.tools.builtin.values()}  # type: ignore[attr-defined]
     assert "start_background_task" in names
+
+
+async def test_weak_local_model_warns_once(bg: Bg) -> None:
+    ctx, script, events = bg
+    ctx.settings.patch({"ai": {"provider": "ollama", "model": "qwen3:8b"}})
+    script.add(
+        calls(("finish", {"status": "done", "summary": "Готово."})),
+        calls(("finish", {"status": "done", "summary": "Готово."})),
+    )
+    first = service(ctx).create("Собери новости про ИИ", source="text")
+    await until(lambda: first.status == "done")
+    second = service(ctx).create("Собери новости про роботов", source="text")
+    await until(lambda: second.status == "done")
+    assert any("слабовата" in str(item) for item in first.log)
+    warned = [t for t in events.of("toast") if "слабовата" in str(t.get("message"))]
+    assert len(warned) == 1  # тост — раз на модель, в ход каждой задачи — да

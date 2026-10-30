@@ -11,6 +11,7 @@ stream_options): известное описано в jarvis.ai.providers, ос�
 """
 
 import asyncio
+import collections
 import contextlib
 import dataclasses
 import hashlib
@@ -21,7 +22,7 @@ import random
 import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -1065,6 +1066,9 @@ class LlmClient:
         # провайдер на паузе после сбоя → (до какого monotonic не звать, вид сбоя)
         self._outages: dict[str, tuple[float, str]] = {}
         self.clock: Callable[[], float] = time.monotonic
+        # скорость последних запросов: {provider, model, seconds, ttft, completion_tokens} — для проверочных
+        # прогонов (evals: время до первого токена и токены в секунду) и диагностики
+        self.timings: collections.deque[dict[str, Any]] = collections.deque(maxlen=500)
 
     # --- настройки ------------------------------------------------------------------------------------
     def config(self, model: str | None = None) -> LlmConfig:
@@ -1317,11 +1321,13 @@ class LlmClient:
         quirks = self._quirks_for(cfg)
         msgs = _with_json_instruction(messages, json_schema) if json_schema is not None else messages
         shown = False  # часть ответа уже ушла на экран — запасной не зовём (ответ продублировался бы)
+        started, first = time.perf_counter(), 0.0
 
         def relay(text: str) -> None:
-            nonlocal shown
-            shown = True
+            nonlocal shown, first
+            first = first or time.perf_counter()
             if on_delta is not None:
+                shown = True
                 on_delta(text)
 
         options: dict[str, Any] = {
@@ -1331,7 +1337,7 @@ class LlmClient:
             "max_tokens": max_tokens,
             "json_schema": json_schema,
             "stream": stream,
-            "on_delta": relay if on_delta is not None else None,
+            "on_delta": relay if stream or on_delta is not None else None,
         }
         try:
             response = await self._request(cfg, msgs, quirks, **options)
@@ -1345,7 +1351,17 @@ class LlmClient:
             cfg = dataclasses.replace(backup, speed=speed) if speed and speed != backup.speed else backup
             self.check_budget(cfg)
             quirks = self._quirks_for(cfg)
+            started, first = time.perf_counter(), 0.0
             response = await self._request(cfg, msgs, quirks, **options)
+        self.timings.append(
+            {
+                "provider": cfg.provider,
+                "model": cfg.model,
+                "seconds": round(time.perf_counter() - started, 3),
+                "ttft": round(first - started, 3) if first else None,
+                "completion_tokens": int(response.usage.completion_tokens or 0),
+            }
+        )
         self._record(cfg, response, msgs)
         if json_schema is None:
             return response
@@ -1603,3 +1619,36 @@ class LlmClient:
         for client in clients:
             with contextlib.suppress(Exception):
                 await client.aclose()
+
+
+def speed_stats(timings: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Скорость модели по запросам (LlmClient.timings): время до первого токена (медиана, с) и токены ответа в
+    секунду генерации (после первого токена; без потока — за весь запрос)."""
+    items = list(timings)
+    firsts = sorted(t["ttft"] for t in items if t.get("ttft") is not None)
+    tokens = sum(int(t.get("completion_tokens") or 0) for t in items)
+    generation = sum(max(0.001, float(t["seconds"]) - float(t.get("ttft") or 0.0)) for t in items)
+    return {
+        "requests": len(items),
+        "ttft_s": round(firsts[len(firsts) // 2], 3) if firsts else None,
+        "tokens_per_s": round(tokens / generation, 1) if items and tokens else None,
+    }
+
+
+# модели на этом ПК меньше стольких миллиардов параметров в долгих задачах (агент, фоновые задачи) часто
+# сбиваются: теряют план, путают инструменты, заканчивают раньше времени
+WEAK_LOCAL_B = 14.0
+_SIZE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*b(?![a-z])", re.I)
+
+
+def weak_local_model(cfg: LlmConfig) -> str:
+    """Предупреждение для долгой задачи, если модель на этом ПК маленькая («qwen3:8b»); иначе ""."""
+    if not cfg.local:
+        return ""
+    sizes = [float(m.group(1)) for m in _SIZE.finditer(cfg.model)]
+    if not sizes or max(sizes) > WEAK_LOCAL_B:
+        return ""
+    return (
+        f"Модель на этом ПК ({cfg.model}) для долгих задач слабовата: она может потерять план или закончить "
+        "раньше времени. Для фоновых задач и агента лучше облачная модель или локальная от 30B."
+    )

@@ -26,6 +26,7 @@ from collections.abc import Callable
 from typing import Any
 
 from jarvis.ai.format import human_time, one_line, speech_text
+from jarvis.ai.llm import weak_local_model
 from jarvis.background import inbox, measure
 from jarvis.background.model import Question, Task, TaskStore
 from jarvis.background.repeat import clean_repeat, describe, next_run, parse_repeat
@@ -90,6 +91,7 @@ class Background(BaseService):
         # (заметка задачи или «!причина»), ts}; помнится в базе — после перезапуска не будет второй задачи
         self._inbox_pending: dict[str, dict[str, Any]] = {}
         self._inbox_warned = ""
+        self._warned_models: set[str] = set()  # о слабой модели на этом ПК уже сказали (тост — раз на модель)
 
     # --- жизнь сервиса --------------------------------------------------------------------------------
     async def start(self) -> None:
@@ -416,6 +418,33 @@ class Background(BaseService):
         backend = ai.account_backend()
         return backend.problem() if backend is not None else ai.llm.problem()
 
+    def _warn_weak_model(self, task: Task) -> None:
+        """Маленькая модель на этом ПК — в ход задачи и тостом (тост — раз за запуск Jarvis на модель)."""
+        ai = getattr(self.ctx, "ai", None)
+        if ai is None or ai.account_backend() is not None:
+            return
+        try:
+            warning = weak_local_model(ai.llm.config())
+        except Exception:
+            return
+        if not warning:
+            return
+        task.add_log(warning, "note")
+        model = ai.llm.config().model
+        if model in self._warned_models:
+            return
+        self._warned_models.add(model)
+        self.ctx.bus.publish(
+            "toast",
+            {
+                "title": "Фоновая задача",
+                "message": warning,
+                "status": "warn",
+                "icon": "ai",
+                "ts": time.time(),
+            },
+        )
+
     def _schedule(self) -> None:
         if not self._started or self._shutting:
             return
@@ -430,6 +459,7 @@ class Background(BaseService):
         task.runs += 1
         task.started = task.started or time.time()
         task.provider, task.model = settings.provider, settings.model
+        self._warn_weak_model(task)
         self._save_now(task)
         session: Session | None = None
         try:

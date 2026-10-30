@@ -399,6 +399,74 @@ async def test_voice_is_transcribed_and_dispatched(
     assert "слишком длинное" in fake.texts()[-1]
 
 
+# --- вопросы фоновых задач ------------------------------------------------------------------------------
+
+
+def _waiting_task(ctx: AppContext, kind: str = "question", options: list[str] | None = None) -> Any:
+    from jarvis.background.model import Question, Task
+
+    task = Task(id="t1", brief="Сравни ноутбуки", title="Ноутбуки", status="waiting")
+    choices = ["Вес", "Мощность"] if options is None else options
+    question = Question("q1", "Что важнее — вес или мощность?", kind, choices)
+    task.questions.append(question)
+    ctx.background._tasks[task.id] = task  # type: ignore[attr-defined]
+    return task
+
+
+async def test_task_question_answered_by_button(
+    ctx: AppContext, owned: None, bot: TelegramBot, fake: FakeTelegram
+) -> None:
+    task = _waiting_task(ctx)
+    assert await bot.ask_owner(task.id, task.questions[0], "Ноутбуки: Что важнее — вес или мощность?")
+    sent = fake.of("sendMessage")[-1]
+    assert sent["chat_id"] == OWNER and sent["parse_mode"] == "HTML" and "вес или мощность" in sent["text"]
+    assert buttons(sent) == ["bq:t1:q1:0", "bq:t1:q1:1"]
+
+    await bot.handle_update(callback("bq:t1:q1:1"))
+    assert task.questions[0].answer == "Мощность" and task.status == "queued"
+    assert fake.of("answerCallbackQuery")[-1]["text"] == "Ответ передан задаче"
+    edited = fake.of("editMessageText")[-1]
+    assert "ответ: Мощность" in edited["text"] and edited["reply_markup"] == {"inline_keyboard": []}
+
+    await bot.handle_update(callback("bq:t1:q1:0"))  # второй раз — уже ответили
+    assert task.questions[0].answer == "Мощность"
+    assert fake.of("answerCallbackQuery")[-1]["text"] == "На этот вопрос уже ответили"
+    await bot.handle_update(callback("bq:t1:q1:0", user=STRANGER))
+    assert fake.of("answerCallbackQuery")[-1]["text"] == telegram.DENIED
+
+
+async def test_task_question_answered_by_reply(
+    ctx: AppContext, owned: None, bot: TelegramBot, fake: FakeTelegram
+) -> None:
+    task = _waiting_task(ctx, options=[])
+    await bot.ask_owner(task.id, task.questions[0], "Ноутбуки: Что важнее — вес или мощность?")
+    sent, asked = fake.of("sendMessage")[-1], fake.message_id
+    assert "reply_markup" not in sent and "Ответьте на это сообщение" in sent["text"]
+    dispatcher = FakeDispatcher({"kind": "unknown"})
+    ctx.dispatcher = dispatcher  # type: ignore[assignment]
+    reply = message("Главное — лёгкий, до 1,5 кг", reply_to_message={"message_id": asked})
+    await bot.handle_update(reply)
+    assert task.questions[0].answer == "Главное — лёгкий, до 1,5 кг" and dispatcher.calls == []
+    assert fake.texts()[-1].startswith("✅ Передал ответ задаче")
+    other = message("сверни все окна", reply_to_message={"message_id": 1})  # ответ на другое — как обычно
+    await bot.handle_update(other)
+    assert dispatcher.calls == [("сверни все окна", "telegram")]
+    bot._questions = None  # перезапуск Jarvis: сообщения с вопросами — из базы
+    assert bot._question_of(asked) == ("t1", "q1")
+
+
+async def test_task_approval_needs_fresh_press(
+    ctx: AppContext, owned: None, bot: TelegramBot, fake: FakeTelegram
+) -> None:
+    task = _waiting_task(ctx, kind="approval", options=["Разрешить", "Отклонить"])
+    await bot.ask_owner(task.id, task.questions[0], "Оплатить заказ?")
+    assert fake.of("sendMessage")[-1]["text"].startswith("🔐")
+    await bot.handle_update(callback("bq:t1:q1:0"), backlog=True)
+    assert task.questions[0].open and "ещё раз" in fake.of("answerCallbackQuery")[-1]["text"]
+    await bot.handle_update(callback("bq:t1:q1:0"))
+    assert task.questions[0].answer == "Разрешить"
+
+
 # --- накопившиеся обновления и опрос ------------------------------------------------------------------
 
 

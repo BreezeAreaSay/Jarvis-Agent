@@ -3,6 +3,7 @@
 
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -196,3 +197,23 @@ async def test_inbox_off_and_waits_for_ai(bg: Bg, vault_dir: Path) -> None:
     await bg_service.tick()
     assert [t.title for t in bg_service._tasks.values()] == ["Сравни тарифы мобильной связи"]
     assert path.read_text("utf-8").startswith("- [x] Сравни тарифы мобильной связи — [[")
+
+
+async def test_question_goes_to_telegram_with_buttons(bg: Bg, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx, script, _ = bg
+    asked: list[tuple[str, str, list[str]]] = []
+
+    async def ask_owner(task_id: str, question: Any, text: str) -> bool:
+        asked.append((task_id, text, list(question.options)))
+        return True
+
+    telegram = ctx.remote.telegram  # type: ignore[attr-defined]
+    monkeypatch.setattr(telegram, "ask_owner", ask_owner)
+    ctx.settings.patch({"background": {"notify_question": ["telegram"]}})
+    script.add(
+        calls(("ask_user", {"question": "Какой бюджет?", "options": ["до 50 000", "до 100 000"]})),
+        calls(("finish", {"status": "done", "summary": "Ок"})),
+    )
+    task = service(ctx).create("Подбери ноутбук")
+    await until(lambda: task.status == "waiting" and task.open_question() is not None)
+    assert asked == [(task.id, "Подбери ноутбук: Какой бюджет?", ["до 50 000", "до 100 000"])]

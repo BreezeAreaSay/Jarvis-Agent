@@ -718,6 +718,7 @@ class CliBackend:
             self._remember_auth(False, message)
         if reason in ("region", "network"):
             message = self._socks_problem() or message
+        self.ai.llm.note_outage(self.id, reason)  # лимит, вход, регион, сбой — есть запасной, отвечает он
         return reason, message
 
     def _record_usage(self, out: CliOutcome, model: str) -> Usage:

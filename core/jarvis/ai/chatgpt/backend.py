@@ -1112,8 +1112,10 @@ class ChatGpt:
         if out.abort_reason == "subagent":
             return errors.SUBAGENT
         if out.abort_reason == "region":
+            self.ai.llm.note_outage("chatgpt", "region")  # есть запасной провайдер — дальше отвечает он
             return errors.REGION
         if out.abort_reason == "network":
+            self.ai.llm.note_outage("chatgpt", "network")
             detail = errors.short((out.retry_error or {}).get("message") or errors.NO_DETAILS, 160)
             return errors.NETWORK.format(detail=detail)
         if out.status == "gone":
@@ -1121,6 +1123,7 @@ class ChatGpt:
         reason, text = errors.classify_turn_error(out.error or out.retry_error, model=model)
         if reason == "auth":
             self.ctx.spawn(self._refresh_account(), "chatgpt-account")
+        self.ai.llm.note_outage("chatgpt", reason)
         return text
 
     # --- чат ----------------------------------------------------------------------------------------

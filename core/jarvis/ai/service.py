@@ -244,11 +244,15 @@ class Ai(BaseService):
         self.llm.transport = transport
         self.web.transport = transport
 
-    def account_backend(self) -> Any:
-        """Провайдер без ключа API (ChatGPT или программа человека), если выбран он, иначе None."""
-        if self.chatgpt.selected:
-            return self.chatgpt
-        return self.cli.selected()
+    def account_backend(self, *, routed: bool = True) -> Any:
+        """Провайдер без ключа API (ChatGPT или программа человека), если выбран он, иначе None. routed — для
+        ответов: пока он на паузе после сбоя (лимит подписки, нет входа, регион) и есть запасной провайдер по
+        ключу, — None: отвечает запасной (llm.config)."""
+        backend = self.chatgpt if self.chatgpt.selected else self.cli.selected()
+        paused = backend is not None and routed and self.llm.outage(self.ctx.settings.value.ai.provider)
+        if paused and self.llm.fallback_config() is not None:
+            return None
+        return backend
 
     @property
     def configured(self) -> bool:
@@ -270,7 +274,7 @@ class Ai(BaseService):
         self._configured = self.configured
         self._unsubs += [
             self.ctx.settings.on_change(self._on_settings),
-            self.ctx.bus.on("secrets.changed", lambda _e: self.refresh_configured()),
+            self.ctx.bus.on("secrets.changed", self._on_secrets),
         ]
         await self.mcp_server.start()
         await self.chatgpt.start()
@@ -284,7 +288,12 @@ class Ai(BaseService):
         if old.ai.mask_secrets != new.ai.mask_secrets:
             set_outgoing(new.ai.mask_secrets)
         if old.ai != new.ai:
+            self.llm.clear_outages()  # другой провайдер, модель или запасной — основной снова зовётся первым
             self.refresh_configured()
+
+    def _on_secrets(self, _event: Any) -> None:
+        self.llm.clear_outages()  # новый ключ — основной снова зовётся первым
+        self.refresh_configured()
 
     async def stop(self) -> None:
         for off in self._unsubs:
@@ -316,14 +325,14 @@ class Ai(BaseService):
 
     async def list_models(self) -> list[str]:
         """Модели выбранного провайдера (у ChatGPT — из каталога Codex, у программ — свой список)."""
-        backend = self.account_backend()
+        backend = self.account_backend(routed=False)
         if backend is not None:
             return list(await backend.list_models())
         return await self.llm.list_models()
 
     async def test_connection(self) -> dict[str, Any]:
         """Проверка связи с выбранным провайдером: {ok, error?, latency_ms, model}."""
-        backend = self.account_backend()
+        backend = self.account_backend(routed=False)
         if backend is not None:
             return dict(await backend.test())
         return await self.llm.test()

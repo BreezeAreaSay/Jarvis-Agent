@@ -171,6 +171,11 @@ class AiSettings(_Model):
     browser_app: Literal["auto", "chrome", "edge"] = "auto"
     monthly_budget: float = Field(0.0, ge=0.0)  # лимит расходов в месяц, $; 0 — без лимита
     folder_id: str = ""  # ID каталога Yandex Cloud (для YandexGPT)
+    # запасной ИИ (по ключу API или на этом ПК): основной не отвечает (квота, лимит подписки, регион, сбой,
+    # нет связи) — отвечает он, основной какое-то время не зовётся (ai/llm.py, OUTAGE_COOLDOWN); "" — нет
+    fallback_provider: AiProvider | Literal[""] = ""
+    fallback_model: str = ""  # пусто — модель провайдера по умолчанию
+    fallback_base_url: str = ""  # пусто — адрес провайдера по умолчанию
     # разрешения инструментов ИИ по имени: allow / ask / deny; auto или нет записи — по риску (ai/policy.py)
     tool_policy: dict[str, Literal["auto", "allow", "ask", "deny"]] = Field(default_factory=dict)
 
@@ -359,6 +364,7 @@ class SettingsStore:
 
 SECRET_NAMES = (
     "ai_api_key",  # ключ выбранного провайдера ИИ
+    "ai_fallback_api_key",  # ключ запасного провайдера ИИ (settings.ai.fallback_provider)
     "openai_api_key",  # ключ OpenAI для голоса (если ИИ — другой провайдер)
     "fish_api_key",
     "elevenlabs_api_key",  # голоса ElevenLabs

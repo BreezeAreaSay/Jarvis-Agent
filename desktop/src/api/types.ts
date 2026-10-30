@@ -100,6 +100,10 @@ export interface Settings {
     provider: AiProvider;
     base_url: string;
     folder_id: string;
+    /** Запасной ИИ по ключу или на этом ПК: основной не отвечает — отвечает он; "" — нет. */
+    fallback_provider: AiProvider | "";
+    fallback_model: string;
+    fallback_base_url: string;
     model: string;
     temperature: number;
     proxy: string;
@@ -193,6 +197,7 @@ export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartia
 
 export type SecretName =
   | "ai_api_key"
+  | "ai_fallback_api_key"
   | "openai_api_key"
   | "fish_api_key"
   | "elevenlabs_api_key"
@@ -838,4 +843,12 @@ export interface FileSearchCard {
   items: FoundFile[];
   total: number;
   ttl: number;
+}
+
+/** GET /api/ai/fallback — запасной провайдер и кто сейчас на паузе после сбоя. */
+export interface AiFallbackStatus {
+  configured: boolean;
+  provider: string;
+  model: string;
+  paused: { provider: string; reason: string; text: string; seconds: number }[];
 }

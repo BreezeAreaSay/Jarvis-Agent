@@ -7,6 +7,7 @@ from jarvis.commands import catalog, numbers
 from jarvis.commands.keys import normalize_keys, validate_keys
 from jarvis.commands.model import Action, Command, CommandIn
 from jarvis.commands.textutil import normalize
+from jarvis.commands.when import parse_text
 from jarvis.services import UserFacingError
 
 MAX_ACTIONS = 60
@@ -92,6 +93,10 @@ def action_error(action: Action, *, user: bool) -> str | None:
         return f"«{spec.title}»: нужно «поле | текст», например «Кому | ivan@example.com»"
     if t == "Jarvis.Reminder" and "|" not in value:
         return f"«{spec.title}»: нужно «через | текст», например «10m | Позвонить маме»"
+    if t == "Jarvis.ReminderAt":
+        when, sep, text = value.partition("|")
+        if not sep or not text.strip() or parse_text(normalize(when)) is None:
+            return f"«{spec.title}»: нужно «когда | текст», например «завтра в 9 | Позвонить маме»"
     if t in _CHOICES and value.casefold() not in _CHOICES[t]:
         return f"«{spec.title}»: допустимо {', '.join(v or '(пусто)' for v in _CHOICES[t])}"
     return None

@@ -27,6 +27,7 @@ from jarvis.commands.packs import PackStore
 from jarvis.commands.recorder import Recorder
 from jarvis.commands.sites import SiteResolver
 from jarvis.commands.textutil import normalize, slugify
+from jarvis.commands.when import parse_text
 from jarvis.db import dumps, loads, now
 from jarvis.platform.base import AppInfo
 from jarvis.service_base import BaseService
@@ -74,7 +75,12 @@ class Commands(BaseService):
         self._apps_tried_at = 0.0  # последняя попытка прочитать «Пуск» (после ошибки — не чаще раза в минуту)
         self._desks: tuple[float, list[str]] = (0.0, [])
         self._matcher = Matcher(
-            {"app": self._resolve_app, "site": self._resolve_site, "desk": self._resolve_desk},
+            {
+                "app": self._resolve_app,
+                "site": self._resolve_site,
+                "desk": self._resolve_desk,
+                "when": _resolve_when,
+            },
             self._wake_words,
         )
         self._rebuild()
@@ -626,3 +632,8 @@ def _combine(results: list[ExecResult], parts: list[MatchedPart]) -> ExecResult:
     return ExecResult(
         ok, title, message, icon=results[0].icon, say=". ".join(says), command_ids=ids, data=data
     )
+
+
+def _resolve_when(text: str) -> tuple[dict[str, Any], float] | None:
+    """Слот {when}: слова целиком — время напоминания («завтра в 9»), иначе не подходит."""
+    return ({"when": text}, 100.0) if parse_text(text) is not None else None

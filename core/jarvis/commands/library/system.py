@@ -367,6 +367,14 @@ def _windows() -> list[Builtin]:
             icon=w,
         ),
         cmd(
+            "windows.close_last",
+            "Закрыть то, что открыл Jarvis",
+            v("(закрой|закрыть|выключи) (его|ее|её|их|обратно)", "закрой то что (открыл|ты открыл)"),
+            [("App.CloseLast", "")],
+            category=c,
+            icon=w,
+        ),
+        cmd(
             "windows.restore",
             "Восстановить окно",
             v(

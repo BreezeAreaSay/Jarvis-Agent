@@ -4,9 +4,10 @@
 слотов сравниваются целиком (точно, по основам слов и нечётко — rapidfuzz по заранее подготовленным строкам),
 шаблоны со слотами — выравниванием по словам: слова шаблона сравниваются нечётко, слот забирает часть фразы
 ({number} — число, {app} — программа, {site} — сайт, {desk} — стол, {text}/{query} — свободный хвост,
-{keys} — клавиши словами). Фраза из нескольких команд («сверни все окна и включи музыку») делится на части,
-только если каждая часть — команда со «Связывать»; без запятых и «и» («включи музыку открой вс код») — ещё и
-перед повелительным глаголом, если целиком фраза ни на что не похожа.
+{keys} — клавиши словами, {when} — время напоминания словами: «завтра в 9», jarvis.commands.when). Фраза
+из нескольких команд («сверни все окна и включи музыку») делится на части, только если каждая часть — команда
+со «Связывать»; без запятых и «и» («включи музыку открой вс код») — ещё и перед повелительным глаголом, если
+целиком фраза ни на что не похожа.
 
 Лишние слова снижают похожесть, поэтому вопросы и длинные просьбы уходят к ИИ.
 """
@@ -47,7 +48,7 @@ FREE_SLOT_PENALTY = 5.0
 MAX_PARTS = 6
 
 SLOT_RE = re.compile(r"\{(\w+)\}")
-KNOWN_SLOTS = frozenset({"number", "app", "site", "desk", "text", "query", "keys"})
+KNOWN_SLOTS = frozenset({"number", "app", "site", "desk", "text", "query", "keys", "when"})
 FREE_SLOTS = frozenset({"text", "query"})
 NAMED_SLOTS = frozenset({"app", "site", "desk"})
 SOFT_WORDS = frozenset(
@@ -111,8 +112,8 @@ def compile_template(phrase: str) -> Template | None:
     for i, part in enumerate(parts):
         if i % 2:
             name = part if part in KNOWN_SLOTS else "text"
-            if tokens and tokens[-1].kind == "slot":
-                continue  # два слота подряд не разделить — оставляем первый
+            if tokens and tokens[-1].kind == "slot" and "when" not in (name, tokens[-1].value):
+                continue  # два слота подряд не разделить — оставляем первый (время {when} знает свои границы)
             tokens.append(Token("slot", name))
         else:
             tokens.extend(Token("lit", w, w in SOFT_WORDS) for w in normalize(part).split())
@@ -439,6 +440,8 @@ class Matcher:
         if resolver is None:
             return
         ends = ([n] if n - wi <= 6 else []) if last else list(range(wi + 1, min(n - 1, wi + 5) + 1))
+        if name == "when":
+            ends.reverse()  # «завтра в 9 позвонить» — время целиком («завтра в 9»), а не «завтра»
         for end in ends:
             key = (name, wi, end)
             if key not in cache:

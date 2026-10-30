@@ -17,12 +17,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from jarvis import paths
+from jarvis.ai.format import human_time, one_line, plural
 from jarvis.ai.uia import find_by_name
 from jarvis.commands import keys as keyops
 from jarvis.commands import numbers
 from jarvis.commands.matcher import display_title
 from jarvis.commands.model import Action, Entry
 from jarvis.commands.sites import looks_like_url, search_url, to_url
+from jarvis.commands.textutil import normalize
+from jarvis.commands.undo import UndoJournal
+from jarvis.commands.when import parse_text
 from jarvis.platform.base import PlatformError
 from jarvis.services import ExecResult, NeedsAgent, Source, UserFacingError
 
@@ -33,7 +37,7 @@ log = logging.getLogger(__name__)
 
 MAX_DEPTH = 4  # Jarvis.Command внутри Jarvis.Command…
 MAX_WAIT_S = 600.0
-SLOT_NAMES = ("number", "app", "site", "desk", "text", "query", "keys", "url", "app_id", "exe")
+SLOT_NAMES = ("number", "app", "site", "desk", "text", "query", "keys", "when", "url", "app_id", "exe")
 SLOT_TITLES = {
     "number": "число",
     "app": "программа",
@@ -42,6 +46,7 @@ SLOT_TITLES = {
     "text": "текст",
     "query": "запрос",
     "keys": "клавиши",
+    "when": "когда",
     "url": "адрес",
 }
 _SLOT_RE = re.compile(r"\{(" + "|".join(SLOT_NAMES) + r")\}")
@@ -249,6 +254,7 @@ class Executor:
     def __init__(self, service: "Commands") -> None:
         self.service = service
         self.ctx = service.ctx
+        self.undo = UndoJournal()  # «отмени» и «закрой его» (jarvis.commands.undo)
         self._handlers: dict[str, Callable[[str, RunState], Awaitable[None]]] = {
             "Launch.App": self._launch_app,
             "Launch.File": self._launch_file,
@@ -256,6 +262,7 @@ class Executor:
             "Launch.Folder": self._launch_folder,
             "Launch.Shell": self._launch_shell,
             "App.Close": self._app_close,
+            "App.CloseLast": self._app_close_last,
             "App.Kill": self._app_kill,
             "App.Focus": self._app_focus,
             "Keys.Press": self._keys_press,
@@ -311,6 +318,10 @@ class Executor:
             "Jarvis.ShowWindow": self._show_window,
             "Jarvis.Timer": self._timer,
             "Jarvis.Reminder": self._reminder,
+            "Jarvis.ReminderAt": self._reminder_at,
+            "Jarvis.Reminders": self._reminders,
+            "Jarvis.ReminderCancel": self._reminder_cancel,
+            "Jarvis.Undo": self._undo,
             "Jarvis.Briefing": self._briefing,
             "Ui.Click": self._ui_click,
             "Ui.Type": self._ui_type,
@@ -411,6 +422,7 @@ class Executor:
         else:
             await self._platform(platform.launch, target, "")
         st.data["app"] = name
+        self._remember_launch(value, name)
         if key:
             st.data["app_key"] = key
         if _is_game(key, target):
@@ -546,6 +558,40 @@ class Executor:
             raise UserFacingError(f"Команда консоли завершилась с ошибкой (код {code}){detail}")
 
     # --- программы ----------------------------------------------------------------------------------
+    def _remember_launch(self, value: str, name: str) -> None:
+        """Открытую программу — для «закрой его» и «отмени» (закрыть её)."""
+        self.undo.remember_app(value, name)
+
+        async def close() -> None:
+            found = self.service.apps.resolve(value)
+            await self._platform(self.ctx.platform.close_app, found.target if found is not None else value)
+            self.undo.forget_app()
+
+        self.undo.push(f"{name} закрыт", close)
+
+    async def _app_close_last(self, value: str, st: RunState) -> None:
+        app = self.undo.last_app()
+        if app is None:
+            raise UserFacingError("Не знаю, что закрыть: за последние пять минут я ничего не открывал")
+        target, _ = self._app_target(app.target, st)
+        closed = await self._platform(self.ctx.platform.close_app, target)
+        self.undo.forget_app()
+        if not closed:
+            raise UserFacingError(f"{app.name} уже закрыт")
+        st.info(f"Закрыл {app.name}", "Закрыл")
+        st.data["closed"] = app.name
+
+    async def _undo(self, value: str, st: RunState) -> None:
+        """Вернуть последнее, что Jarvis сделал обратимо (не раньше пяти минут назад); не было — Ctrl+Z."""
+        step = self.undo.pop()
+        if step is None:
+            await self._platform(self.ctx.platform.press_keys, "ctrl+z")
+            st.info("Отменил последнее действие в окне (Ctrl+Z)", "Отменил")
+            return
+        await step.revert()
+        st.info(f"Отменил: {step.title}", "Отменил")
+        st.data["undone"] = step.title
+
     def _app_target(self, value: str, st: RunState) -> tuple[str, str]:
         """Программа из значения → (что передать платформе, название для людей)."""
         if st.slots.get("app") == value and st.slots.get("exe"):
@@ -712,32 +758,73 @@ class Executor:
         await self._platform(self.ctx.platform.mouse_scroll, max(-100, min(100, amount)))
 
     # --- звук ---------------------------------------------------------------------------------------
+    async def _volume_before(self) -> int | None:
+        try:
+            return int(await self._platform(self.ctx.platform.volume_get))
+        except (PlatformError, UserFacingError, TypeError, ValueError):
+            return None
+
+    def _volume_undo(self, before: int | None, after: int) -> None:
+        if before is None or before == after:
+            return
+
+        async def revert() -> None:
+            await self._platform(self.ctx.platform.volume_set, before)
+
+        self.undo.push(f"громкость снова {before}%", revert)
+
     async def _volume_set(self, value: str, st: RunState) -> None:
         platform = self.ctx.platform
+        before = await self._volume_before()
         if value[:1] in "+-" and value[1:2].isdigit():
             level = await self._platform(platform.volume_change, _int(value, "громкости"))
         else:
             level = await self._platform(platform.volume_set, max(0, min(100, _int(value, "громкости"))))
+        self._volume_undo(before, level)
         st.info(f"Громкость {level}%")
 
     async def _volume_up(self, value: str, st: RunState) -> None:
+        before = await self._volume_before()
         level = await self._platform(self.ctx.platform.volume_change, abs(_int(value or "10", "шага")))
+        self._volume_undo(before, level)
         st.info(f"Громкость {level}%")
 
     async def _volume_down(self, value: str, st: RunState) -> None:
+        before = await self._volume_before()
         level = await self._platform(self.ctx.platform.volume_change, -abs(_int(value or "10", "шага")))
+        self._volume_undo(before, level)
         st.info(f"Громкость {level}%")
 
+    async def _muted(self) -> bool | None:
+        try:
+            return bool(await self._platform(self.ctx.platform.is_muted))
+        except (PlatformError, UserFacingError, AttributeError):
+            return None
+
+    def _mute_undo(self, before: bool | None, after: bool) -> None:
+        if before is None or before == after:
+            return
+
+        async def revert() -> None:
+            await self._platform(self.ctx.platform.mute_set, before)
+
+        self.undo.push("звук снова выключен" if before else "звук снова включён", revert)
+
     async def _mute(self, value: str, st: RunState) -> None:
+        before = await self._muted()
         await self._platform(self.ctx.platform.mute_set, True)
+        self._mute_undo(before, True)
         st.info("Звук выключен")
 
     async def _unmute(self, value: str, st: RunState) -> None:
+        before = await self._muted()
         await self._platform(self.ctx.platform.mute_set, False)
+        self._mute_undo(before, False)
         st.info("Звук включён")
 
     async def _mute_toggle(self, value: str, st: RunState) -> None:
         muted = await self._platform(self.ctx.platform.mute_set, None)
+        self._mute_undo(not muted, bool(muted))
         st.info("Звук выключен" if muted else "Звук включён")
 
     # --- система ------------------------------------------------------------------------------------
@@ -922,9 +1009,25 @@ class Executor:
     async def _minimize_all(self, value: str, st: RunState) -> None:
         await self._platform(self.ctx.platform.window_action, "minimize_all", None)
 
+        async def revert() -> None:
+            await self._platform(self.ctx.platform.window_action, "undo_minimize_all", None)
+
+        self.undo.push("окна развёрнуты обратно", revert)
+
     async def _window(self, action: str, value: str, st: RunState) -> None:
         target = self._app_target(value, st)[0] if value else None
+        window = None
+        if action in ("minimize", "maximize") and target is None:
+            with contextlib.suppress(PlatformError, UserFacingError):
+                window = await self._platform(self.ctx.platform.foreground_window)
         await self._platform(self.ctx.platform.window_action, action, target)
+        if window is not None and not (action == "maximize" and window.maximized):
+            hwnd, title = window.hwnd, window.title
+
+            async def revert() -> None:
+                await self._platform(self.ctx.platform.window_action, "restore", hwnd)
+
+            self.undo.push(f"окно «{one_line(title, 40)}» как было", revert)
 
     async def _window_minimize(self, value: str, st: RunState) -> None:
         await self._window("minimize", value, st)
@@ -1201,7 +1304,8 @@ class Executor:
             raise UserFacingError(f"Не понял длительность таймера «{value}»")
         at = time.time() + seconds
         duration = numbers.duration_text(seconds, accusative=True)
-        self.ctx.notes.reminder_add(f"Таймер на {duration}", at)
+        item = self.ctx.notes.reminder_add(f"Таймер на {duration}", at)
+        self._reminder_undo(item, f"таймер на {duration} снят")
         when = dt.datetime.fromtimestamp(at).strftime("%H:%M")
         st.info(f"Таймер на {duration} — сработает в {when}", f"Поставил таймер на {duration}")
         st.data.update({"at": at, "seconds": seconds})
@@ -1215,12 +1319,82 @@ class Executor:
         if seconds is None or seconds < 1 or seconds > 366 * 86400:
             raise UserFacingError(f"Не понял, через сколько напомнить: «{delay.strip()}»")
         at = time.time() + seconds
-        self.ctx.notes.reminder_add(text[:1].upper() + text[1:], at)
+        item = self.ctx.notes.reminder_add(text[:1].upper() + text[1:], at)
+        self._reminder_undo(item, f"напоминание «{one_line(text, 40)}» удалено")
         when = dt.datetime.fromtimestamp(at).strftime("%H:%M")
         st.info(
             f"Напомню в {when}: {text}", f"Напомню через {numbers.duration_text(seconds, accusative=True)}"
         )
         st.data.update({"at": at, "text": text, "seconds": seconds})
+
+    def _reminder_undo(self, item: dict[str, Any], title: str) -> None:
+        reminder_id = str(item.get("id") or "")
+        if not reminder_id:
+            return
+
+        async def revert() -> None:
+            self.ctx.notes.reminder_delete(reminder_id)
+
+        self.undo.push(title, revert)
+
+    async def _reminder_at(self, value: str, st: RunState) -> None:
+        """«завтра в 9 | Позвонить маме» — напоминание на время, сказанное словами (jarvis.commands.when)."""
+        when_text, sep, text = value.partition("|")
+        text = text.strip()
+        if not sep or not text:
+            raise UserFacingError("Не понял, о чём напомнить")
+        moment = parse_text(normalize(when_text))
+        if moment is None:
+            raise UserFacingError(f"Не понял, когда напомнить: «{when_text.strip()}»")
+        at = moment.timestamp()
+        item = self.ctx.notes.reminder_add(text[:1].upper() + text[1:], at)
+        self._reminder_undo(item, f"напоминание «{one_line(text, 40)}» удалено")
+        when = human_time(at)
+        st.info(f"Напомню {when}: {text}", f"Напомню {when}")
+        st.data.update({"at": at, "text": text})
+
+    async def _reminders(self, value: str, st: RunState) -> None:
+        items = [r for r in self.ctx.notes.reminders_list(include_done=False) if not r.get("done")]
+        if not items:
+            st.info("Напоминаний нет", "Напоминаний нет")
+            return
+        items.sort(key=lambda r: float(r.get("at") or 0))
+        lines = [f"{human_time(float(r['at']))} — {r['text']}" for r in items]
+        count = len(items)
+        head = f"{count} {plural(count, ('напоминание', 'напоминания', 'напоминаний'))}"
+        spoken = "; ".join(lines[:3]) + (f" и ещё {count - 3}" if count > 3 else "")
+        st.info(f"{head}:\n" + "\n".join(lines[:10]), f"{head}: {spoken}")
+        st.data["count"] = count
+
+    async def _reminder_cancel(self, value: str, st: RunState) -> None:
+        """Пусто — последнее поставленное; «все» — все; иначе — то, в тексте которого есть эти слова."""
+        notes = self.ctx.notes
+        pending = [r for r in notes.reminders_list(include_done=False) if not r.get("done")]
+        if not pending:
+            raise UserFacingError("Напоминаний нет")
+        query = normalize(value or "")
+        if query in ("все", "всё"):
+            for r in pending:
+                notes.reminder_delete(r["id"])
+            count = len(pending)
+            st.info(f"Удалил все напоминания: {count}", "Все напоминания удалены")
+            return
+        if query:
+            words = [w for w in query.split() if len(w) > 2]
+            scored = [
+                (sum(1 for w in words if w[: max(4, len(w) - 2)] in normalize(r["text"])), r) for r in pending
+            ]
+            best = max(scored, key=lambda pair: pair[0])
+            if best[0] == 0:
+                raise UserFacingError(f"Не нашёл напоминание про «{value.strip()}»")
+            target = best[1]
+        else:
+            target = max(pending, key=lambda r: float(r.get("created") or 0))
+        notes.reminder_delete(target["id"])
+        st.info(
+            f"Удалил напоминание: {target['text']} ({human_time(float(target['at']))})", "Напоминание удалено"
+        )
+        st.data["removed"] = target["text"]
 
     async def _briefing(self, value: str, st: RunState) -> None:
         # текст собирает jarvis.scenarios.briefing (погода, календарь, задачи…); голосом — через say итога

@@ -5,6 +5,7 @@ from jarvis.commands.library.base import variants as v
 
 N = "{number}"
 T = "{text}"
+W = "{when}"  # время словами: «завтра в 9», «в пятницу в 18:30» (jarvis.commands.when)
 # погода «на завтра» и прогнозы — это вопрос к ИИ, а не «какая погода сейчас»
 _FORECAST = (
     "завтр",
@@ -441,6 +442,54 @@ def _timers() -> list[Builtin]:
             icon="note",
             chain=False,
             optional=("мне",),
+        ),
+        cmd(
+            "timers.remind_at",
+            "Напомнить в назначенное время",
+            v(f"{remind} {W} {T}", f"{remind} {T} {W}"),
+            [("Jarvis.ReminderAt", f"{W}|{T}")],
+            category=c,
+            icon="note",
+            chain=False,
+            optional=("мне",),
+        ),
+        cmd(
+            "timers.reminders",
+            "Какие у меня напоминания",
+            v(
+                "(какие|покажи|прочитай|назови) (у меня |мои |)напоминания",
+                "(список|все) (моих |)напоминаний",
+                "(что|о чем) (ты |)(мне |)(должен|обещал) напомнить",
+                "есть (у меня |)напоминания",
+            ),
+            [("Jarvis.Reminders", "")],
+            category=c,
+            icon="note",
+        ),
+        cmd(
+            "timers.reminder_cancel",
+            "Отменить напоминание",
+            v("(отмени|удали|убери|сними) (последнее |это |)напоминание", "не надо (мне |)напоминать"),
+            [("Jarvis.ReminderCancel", "")],
+            category=c,
+            icon="note",
+        ),
+        cmd(
+            "timers.reminder_cancel_about",
+            "Отменить напоминание про …",
+            v(f"(отмени|удали|убери|сними) напоминание (про|о|об|насчет) {T}"),
+            [("Jarvis.ReminderCancel", T)],
+            category=c,
+            icon="note",
+        ),
+        cmd(
+            "timers.reminder_cancel_all",
+            "Отменить все напоминания",
+            v("(отмени|удали|убери|сними) все (мои |)напоминания"),
+            [("Jarvis.ReminderCancel", "все")],
+            category=c,
+            icon="note",
+            confirm=True,
         ),
     ]
 

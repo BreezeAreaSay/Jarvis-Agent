@@ -42,6 +42,7 @@ from jarvis.ai.policy import (
 )
 from jarvis.ai.web import WebClient, check_public_url, site_name
 from jarvis.background.repeat import describe
+from jarvis.confirm import high_risk
 from jarvis.platform.base import AppInfo, PlatformError, WindowInfo
 from jarvis.services import ExecResult, Source, UserFacingError
 
@@ -179,8 +180,11 @@ def args_detail(args: dict[str, Any], limit: int = 4) -> str:
 
 
 async def confirm(env: "ToolEnv", title: str, detail: str = "") -> bool:
-    """Спросить человека (карточка подтверждения; голосом — голосом)."""
-    return bool(await env.ctx.confirmations.request(title, detail, kind="command", source=env.source))
+    """Спросить человека (карточка подтверждения; голосом — голосом, необратимое — только кнопкой)."""
+    risk = high_risk(title, detail)
+    return bool(
+        await env.ctx.confirmations.request(title, detail, kind="command", source=env.source, risk=risk)
+    )
 
 
 def _notes(env: ToolEnv) -> "Notes":

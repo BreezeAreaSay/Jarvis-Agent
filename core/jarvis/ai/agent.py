@@ -82,7 +82,7 @@ from jarvis.ai.uia import (
 )
 from jarvis.ai.web import site_name
 from jarvis.commands.validate import MAX_ACTIONS as MAX_RECIPE
-from jarvis.confirm import parse_yes_no
+from jarvis.confirm import high_risk, parse_yes_no
 from jarvis.db import new_id
 from jarvis.platform.base import PlatformError, WindowInfo
 from jarvis.redact import redact
@@ -1444,8 +1444,9 @@ class Agent(BaseService):
         previous = run.text
         self._set(run, "waiting", f"Жду вашего решения: {title}")
         source = "voice" if run.source == "voice" else "agent"
+        risk = high_risk(title, detail)  # необратимое — только кнопкой, не голосовым «да»
         allowed = await self.ctx.confirmations.request(
-            title, detail, kind="agent", source=source, timeout=APPROVAL_TIMEOUT
+            title, detail, kind="agent", source=source, timeout=APPROVAL_TIMEOUT, risk=risk
         )
         self._set(run, "running", previous)
         if not allowed:

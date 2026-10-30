@@ -63,6 +63,8 @@ export interface Settings {
     earcons: boolean;
     max_utterance_s: number;
     confirm_by_voice: boolean;
+    /** Необратимое (отправить, оплатить, удалить…) разрешать и голосовым «да» (по умолчанию — только кнопкой). */
+    confirm_high_by_voice: boolean;
     speak_confirmations: "short" | "off";
     /** Приветствие, когда человек вернулся к компьютеру: news — только если есть что напомнить. */
     presence_greeting: "off" | "news" | "always";
@@ -245,6 +247,8 @@ export interface Confirmation {
   source: string;
   created: number;
   timeout: number;
+  /** high — необратимое: разрешить только кнопкой, голосовое «да» не принимается. */
+  risk?: "normal" | "high";
 }
 
 // --- команды ---------------------------------------------------------------------------------------

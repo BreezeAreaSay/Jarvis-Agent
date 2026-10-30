@@ -56,3 +56,64 @@ async def test_cancelled_request_is_recorded(ctx: AppContext) -> None:
     await asyncio.gather(task, return_exceptions=True)
     assert [(r["title"], r["detail"]) for r in _rows(ctx)] == [("Оплатить заказ?", "Отменено")]
     assert ctx.confirmations.pending() == []
+
+
+def test_high_risk_words() -> None:
+    from jarvis.confirm import high_risk
+
+    for title in (
+        "Отправить сообщение Ане?",
+        "Нажать «Купить» на ozon.ru?",
+        "Ввести пароль в поле «Пароль»?",
+        "Удалить выделенное (Delete)?",
+        "Оплатить заказ?",
+        "Ввести номер карты?",
+    ):
+        assert high_risk(title) == "high", title
+    for title in ("Открыть файл «Отчёт.docx»?", "Переключиться на окно «Блокнот»?", "Запустить «Paint»?"):
+        assert high_risk(title) == "normal", title
+    assert high_risk("Нажать «Готово»?", "Будет отправлено: «Привет»") == "high"
+
+
+class _Voice:
+    def __init__(self, answer: bool | None) -> None:
+        self.answer = answer
+
+    async def ask_yes_no(self, timeout: float = 8.0) -> bool | None:
+        return self.answer
+
+
+class _Tts:
+    def __init__(self) -> None:
+        self.said: list[str] = []
+
+    async def say(self, text: str, **kwargs: object) -> None:
+        self.said.append(text)
+
+
+async def _voice_request(ctx: AppContext, answer: bool | None, risk: str, timeout: float = 0.3) -> bool:
+    tts = _Tts()
+    ctx.tts = tts  # type: ignore[assignment]
+    ctx.voice = _Voice(answer)  # type: ignore[assignment]
+    allowed = await ctx.confirmations.request(
+        "Отправить письмо?",
+        kind="agent",
+        source="voice",
+        timeout=timeout,
+        risk=risk,  # type: ignore[arg-type]
+    )
+    ctx._said = tts.said  # type: ignore[attr-defined]
+    return allowed
+
+
+async def test_irreversible_needs_button_not_voice_yes(ctx: AppContext) -> None:
+    from jarvis.confirm import BUTTON_ONLY, NOT_BY_VOICE
+
+    ctx.loop = asyncio.get_running_loop()
+    assert await _voice_request(ctx, True, "normal") is True  # обычное — голосом можно
+    assert await _voice_request(ctx, True, "high") is False  # «да» голосом не разрешает — нет ответа, отказ
+    said = ctx._said  # type: ignore[attr-defined]
+    assert BUTTON_ONLY in said[0] and said[-1] == NOT_BY_VOICE
+    assert await _voice_request(ctx, False, "high") is False  # «нет» голосом — отказ
+    ctx.settings.patch({"voice": {"confirm_high_by_voice": True}})
+    assert await _voice_request(ctx, True, "high") is True  # включили в настройках — и голосом

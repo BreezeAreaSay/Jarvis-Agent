@@ -362,6 +362,13 @@
   overflow-wrap: anywhere;
 }
 
+.ov-approval-risk {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn);
+}
+
 .ov-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;

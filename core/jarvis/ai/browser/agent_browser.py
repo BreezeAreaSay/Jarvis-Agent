@@ -14,6 +14,11 @@
 
 Запускается, когда задаче понадобился сайт или человек открыл панель; закрывается вместе с Jarvis и сам —
 через IDLE_S без задач и зрителей. Его процесс — наш (нет окна, человек его не закроет).
+
+«Открыть окном» (open_window): тот же профиль — обычным окном Chrome или Edge на рабочем столе, чтобы войти
+на сайт, который не пускает браузер без окна (вход Google и т. п.). Пока окно открыто, браузера без окна нет:
+действия задач ждут (до WINDOW_WAIT_S за раз), панель показывает «открыт окном». Человек закрыл окно —
+браузер снова работает без окна, со входом, который человек сделал.
 """
 
 import asyncio
@@ -47,6 +52,19 @@ HEADLESS = (
     "--accept-lang=ru-RU,ru,en-US,en",
     "--no-default-browser-check",
 )
+WINDOW = (  # окном: как обычный браузер, только свой профиль
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=Translate,MediaRouter",
+    "--lang=ru-RU",
+    "--accept-lang=ru-RU,ru,en-US,en",
+    "--no-default-browser-check",
+)
+WINDOW_OPEN = (
+    "Браузер агента сейчас открыт отдельным окном — войдите там на сайт и закройте окно; после этого он "
+    "снова заработает здесь."
+)
+WINDOW_POLL_S = 0.5
+WINDOW_GONE_S = 10.0  # окно закрыто (связь оборвалась), а процесс всё живёт — столько ждать, потом закрыть
 IDLE_S = 10 * 60.0  # без задач и зрителей столько — закрыть браузер (память)
 FRAME_QUALITY = 70
 FRAME_MAX = (1600, 1100)
@@ -91,6 +109,12 @@ class AgentBrowser(Browser):
         self._used = time.monotonic()
         self._idle: asyncio.Task[None] | None = None
         self._acks: set[asyncio.Future[None]] = set()  # «кадр получен» браузеру — ссылки, пока идут
+        # «Открыть окном»: процесс окна, связь с ним (узнать, что окно закрыли; закрыть бережно), сторож
+        self.windowed = False
+        self.window_launcher: Callable[[launch.BrowserApp, list[str]], Any] = self._spawn_window
+        self._window_proc: Any = None
+        self._window_client: CdpClient | None = None
+        self._window_watch: asyncio.Task[None] | None = None
 
     # --- что это за браузер ------------------------------------------------------------------------------
     @property
@@ -117,6 +141,7 @@ class AgentBrowser(Browser):
             "tasks": dict(self.task_tabs),
             "held": sorted(self.held),
             "profile": str(self.profile),
+            "windowed": self.windowed,
         }
 
     def _set(self, status: Status, error: str = "") -> None:
@@ -131,7 +156,13 @@ class AgentBrowser(Browser):
         if self._idle is not None:
             self._idle.cancel()
             self._idle = None
+        await self.close_window()
         await self.close()
+
+    async def connect(self, launch: bool = True) -> CdpClient | None:
+        if self.windowed:  # профиль занят окном — второй браузер с ним не запустить
+            raise UserFacingError(WINDOW_OPEN)
+        return await super().connect(launch)
 
     async def close(self) -> None:
         """Закрыть браузер совсем (окна у него нет — иначе процесс остался бы висеть)."""
@@ -236,6 +267,115 @@ class AgentBrowser(Browser):
                     timeout=3.0,
                 )
         return session
+
+    # --- «Открыть окном» -----------------------------------------------------------------------------------
+    async def open_window(self, url: str = "", task: str = "") -> None:
+        """Тот же профиль — обычным окном (url или страница задачи task; нет — страница «войдите в сайты»).
+        Браузер без окна на это время закрывается: вкладки задач закроются, задачи откроют страницы заново."""
+        if self.windowed:
+            return
+        if task and not url and self.connected:  # открыть окном ту же страницу, где задача
+            target = self.task_tabs.get(task, "")
+            with contextlib.suppress(Exception):
+                tab = next((t for t in await self.tabs() if t["targetId"] == target), None)
+                url = str(tab.get("url") or "") if tab is not None else ""
+        url = url.strip()
+        if not url.startswith(("http://", "https://")):  # и не флаг Chrome («--…»): только адрес сайта
+            url = START_PAGE
+        app = self.find(self._choice())
+        if app is None:
+            raise UserFacingError("Не нашёл Google Chrome или Microsoft Edge — установите один из них")
+        self.windowed = True
+        self.ctx.bus.publish("agent_browser.state", self.state())
+        try:
+            await self.close()
+            await asyncio.sleep(0.3)  # профиль освобождается не мгновенно
+            profile = self.profile
+            profile.mkdir(parents=True, exist_ok=True)
+            args = [*launch.arguments(profile, url), *WINDOW]
+            if sys.platform != "win32" and getattr(os, "geteuid", lambda: 1)() == 0:
+                args.append("--no-sandbox")
+            log.info("браузер агента: открываю окном %s", app.title)
+            proc = await self.window_launcher(app, args)
+            self._window_proc = proc
+            deadline = time.monotonic() + self.port_wait_s
+            client = None
+            while time.monotonic() < deadline:
+                client = await self._running(profile)
+                if client is not None or proc.poll() is not None:
+                    break
+                await asyncio.sleep(0.2)
+            if client is None and proc.poll() is not None:
+                raise UserFacingError(f"{app.title} не открылся окном — попробуйте ещё раз")
+            self._window_client = client  # нет связи (запрещена политикой) — следим только за процессом
+            self._window_watch = asyncio.ensure_future(self._watch_window(proc, client))
+        except BaseException:
+            self.windowed, self._window_proc, self._window_client = False, None, None
+            self._set("closed")
+            raise
+        self._set("closed")
+
+    async def close_window(self) -> None:
+        """Закрыть окно бережно (браузер сам сохранит вход); не закрылось — остановить процесс."""
+        if not self.windowed:
+            return
+        client, proc = self._window_client, self._window_proc
+        if client is not None and not client.closed:
+            with contextlib.suppress(Exception):
+                await client.send("Browser.close", timeout=3.0)
+        if proc is not None and proc.poll() is None:
+            with contextlib.suppress(Exception):
+                await self.ctx.run_io(proc.wait, 5.0)
+            if proc.poll() is None:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+        self._window_done()
+
+    async def wait_window(self, stopping: Callable[[], bool], limit: float) -> bool:
+        """Окно открыто — подождать, пока его закроют (не дольше limit). True — закрыли."""
+        deadline = time.monotonic() + limit
+        while self.windowed and not stopping() and time.monotonic() < deadline:
+            await asyncio.sleep(WINDOW_POLL_S)
+        return not self.windowed
+
+    async def _watch_window(self, proc: Any, client: CdpClient | None) -> None:
+        """Окно закрыли — процесс закончился (или связь оборвалась, а процесс живёт дольше WINDOW_GONE_S)."""
+        gone = 0.0
+        try:
+            while proc.poll() is None:
+                if client is not None and client.closed:
+                    gone = gone or time.monotonic()
+                    if time.monotonic() - gone > WINDOW_GONE_S:
+                        with contextlib.suppress(Exception):
+                            proc.terminate()
+                        break
+                await asyncio.sleep(WINDOW_POLL_S)
+        finally:
+            if self._window_proc is proc:
+                self._window_done()
+
+    def _window_done(self) -> None:
+        if not self.windowed:
+            return
+        self.windowed = False
+        client, self._window_client, self._window_proc = self._window_client, None, None
+        if client is not None and not client.closed:
+            closing = asyncio.ensure_future(client.close())
+            self._acks.add(closing)  # type: ignore[arg-type]
+            closing.add_done_callback(self._acks.discard)  # type: ignore[arg-type]
+        log.info("окно браузера агента закрыто — дальше он снова без окна")
+        self._set("closed")
+
+    async def _spawn_window(self, app: launch.BrowserApp, args: list[str]) -> subprocess.Popen[bytes]:
+        def run() -> subprocess.Popen[bytes]:
+            return subprocess.Popen(
+                [app.path, *args],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+        return await self.ctx.run_io(run)
 
     # --- окна у браузера агента нет ----------------------------------------------------------------------
     async def activate(self, target: str, title: str = "") -> None:

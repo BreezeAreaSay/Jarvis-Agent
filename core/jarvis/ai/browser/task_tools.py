@@ -66,6 +66,16 @@ HELD = (
     "Пока человек управлял страницей, ничего не сделано — страница могла измениться: посмотри на неё заново "
     "(browser_read) и продолжай."
 )
+WINDOW_WAIT_S = 30.0  # окно браузера агента открыто — столько ждать за одно действие
+WINDOWED = (
+    "Ничего не сделано: браузер агента сейчас открыт отдельным окном — человек входит на сайт. Подожди: "
+    "займись пока тем, что можно сделать поиском, или спроси человека (ask_user), закончил ли он вход; потом "
+    "открой страницу заново (browser_open)."
+)
+REOPENED = (
+    "Ничего не сделано: человек входил на сайт в окне браузера агента, и вкладка задачи закрылась — открой "
+    "нужный адрес заново (browser_open), вход уже сделан."
+)
 TASK_BROWSER_RULES = (
     "Браузер агента — твоя вкладка в Chrome без окна (человек видит её в Jarvis и может взять управление). "
     "browser_open — открыть адрес; ответ каждого действия — снимок страницы: адрес, текст и элементы с id "
@@ -117,13 +127,34 @@ class TaskBrowser(BrowserTools):
         run.tab = target
         return target
 
-    async def _front(self, run: "Session") -> tuple[AgentBrowser, None]:
+    async def _front(self, run: "Session", *, opening: bool = False) -> tuple[AgentBrowser, None]:
         browser = self.agent_browser
+        if browser.windowed:  # человек входит на сайт в окне — профиль занят, подождать
+            if not await browser.wait_window(lambda: run.closing, WINDOW_WAIT_S):
+                raise UserFacingError(WINDOWED)
+            self.page = None
+            if not opening:
+                raise UserFacingError(REOPENED)
         target = await self._tab_of(run)
         if await browser.wait_free(target, lambda: run.closing):
             self.page = None
             raise UserFacingError(HELD)
         return browser, None
+
+    async def _read(self, run: Any, args: dict[str, Any]) -> Outcome:
+        if self.agent_browser.windowed:  # окно открыто — старый снимок страницы не выдавать
+            await self._front(run)
+        return await super()._read(run, args)
+
+    async def _scroll(self, run: Any, args: dict[str, Any]) -> Outcome:
+        if self.agent_browser.windowed:
+            await self._front(run)
+        return await super()._scroll(run, args)
+
+    async def _wait(self, run: Any, args: dict[str, Any]) -> Outcome:
+        if self.agent_browser.windowed:
+            await self._front(run)
+        return await super()._wait(run, args)
 
     async def _done(self, run: "Session", result: str, detail: str = "") -> Outcome:
         """Ответ действия — со свежим снимком страницы."""
@@ -166,7 +197,7 @@ class TaskBrowser(BrowserTools):
         url = _url(str(args.get("url") or ""))
         if not url or not url.startswith(("http://", "https://")):
             return Outcome(False, "Ошибка: нужен адрес сайта https://…")
-        browser, _ = await self._front(run)
+        browser, _ = await self._front(run, opening=True)
         session = await browser.session(self.tab)
         if session in browser.dialogs:
             raise UserFacingError(

@@ -8,6 +8,10 @@ WebSocket /ws/agent-browser?token=…&task=… — панель смотрит �
 {"type": "release"} («Взять управление» / «Вернуть агенту»), ввод — {"type": "mouse" | "wheel" | "key" |
 "text" | "navigate" | "history" | "reload", …} (AgentBrowser.human_input; координаты — CSS-точки страницы).
 Панель закрылась — управление само возвращается агенту, своя вкладка для входа закрывается.
+
+«Открыть окном» — POST /api/agent-browser/window {url?, task?}: тот же профиль обычным окном (войти на сайт,
+который не пускает браузер без окна); POST /api/agent-browser/window/close — закрыть окно. Пока окно открыто,
+состояние панели — {windowed: true, target: ""}: картинки нет.
 """
 
 import asyncio
@@ -18,6 +22,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
 from jarvis.ai.browser.agent_browser import AgentBrowser
 from jarvis.api.deps import Ctx
@@ -47,6 +52,25 @@ async def agent_browser_state(ctx: Ctx) -> dict[str, Any]:
 async def agent_browser_close(ctx: Ctx) -> dict[str, Any]:
     browser = _browser(ctx)
     await browser.close()
+    return browser.state()
+
+
+class WindowIn(BaseModel):
+    url: str = ""  # адрес сайта; пусто — страница задачи task или «войдите в сайты»
+    task: str = ""
+
+
+@router.post("/api/agent-browser/window")
+async def agent_browser_window(body: WindowIn, ctx: Ctx) -> dict[str, Any]:
+    browser = _browser(ctx)
+    await browser.open_window(body.url, body.task)
+    return browser.state()
+
+
+@router.post("/api/agent-browser/window/close")
+async def agent_browser_window_close(ctx: Ctx) -> dict[str, Any]:
+    browser = _browser(ctx)
+    await browser.close_window()
     return browser.state()
 
 
@@ -96,6 +120,7 @@ class Viewer:
                 "held": self.target in self.browser.held,
                 "status": base["status"],
                 "error": base["error"],
+                "windowed": base["windowed"],
             },
         )
 
@@ -103,6 +128,10 @@ class Viewer:
         await self.unwatch()
         browser = self.browser
         self.task = task
+        if browser.windowed:  # браузер открыт окном — смотреть нечего, пока его не закроют
+            self.task, self.target = task or MANUAL, ""
+            await self.state()
+            return
         if task and task != MANUAL:
             target = browser.task_tabs.get(task, "")
             if not target:  # задача ещё не открывала сайты — смотреть нечего, браузер не запускаем

@@ -4,6 +4,7 @@
 import asyncio
 import json
 import re
+import subprocess
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -12,11 +13,12 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from jarvis.ai.browser import launch
-from jarvis.ai.browser.agent_browser import HEADLESS, AgentBrowser
+from jarvis.ai.browser import launch, task_tools
+from jarvis.ai.browser.agent_browser import HEADLESS, START_PAGE, WINDOW, AgentBrowser
 from jarvis.background import runner
 from jarvis.background.model import Task
 from jarvis.context import AppContext
+from jarvis.services import UserFacingError
 from tests.ai.cdp_fake import APP, FakeChrome, shop
 from tests.ai.fakes import ScriptedLlm, calls
 from tests.background.conftest import service, until
@@ -193,3 +195,109 @@ def test_panel_for_task_without_tab_does_not_start_browser(client: TestClient) -
         assert state == {"type": "state", "data": {**state["data"], "target": "", "task": "nope"}}
     assert launched == []
     assert client.get("/api/agent-browser").json()["status"] == "closed"
+
+
+# --- «Открыть окном» ---------------------------------------------------------------------------------------
+
+
+class FakeProc:
+    """Процесс окна браузера: живёт, пока окно не закрыли (Browser.close) или процесс не остановили."""
+
+    def __init__(self, chrome: FakeChrome) -> None:
+        self.chrome = chrome
+        self.code: int | None = None
+
+    def poll(self) -> int | None:
+        return 0 if self.chrome.closed else self.code
+
+    def wait(self, timeout: float | None = None) -> int:
+        deadline = time.monotonic() + (timeout or 0)
+        while self.poll() is None:
+            if time.monotonic() > deadline:
+                raise subprocess.TimeoutExpired("chrome", timeout or 0)
+            time.sleep(0.02)
+        return self.poll() or 0
+
+    def kill(self) -> None:
+        self.code = -9
+
+    def terminate(self) -> None:
+        self.code = -15
+
+
+def use_window(ctx: Any, window: FakeChrome) -> list[list[str]]:
+    browser: AgentBrowser = ctx.agent_browser
+    opened: list[list[str]] = []
+
+    async def launcher(app: launch.BrowserApp, args: list[str]) -> FakeProc:
+        opened.append(args)
+        await window.start(browser.profile)
+        return FakeProc(window)
+
+    browser.window_launcher = launcher
+    return opened
+
+
+async def test_open_window_for_login_and_tasks_wait(
+    bg: Bg, chrome: FakeChrome, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx, _, events = bg
+    use_agent_browser(ctx, chrome)
+    window = FakeChrome(shop(), pid=5300)
+    opened = use_window(ctx, window)
+    browser: AgentBrowser = ctx.agent_browser  # type: ignore[assignment]
+    task = Task("w1", "x")
+    session = runner.Session(service(ctx), task)
+    tools = {t.name: t for t in service(ctx).browser_tools().tools()}
+    await tools["browser_open"].run(session, {"url": "https://shop.test/cart"})
+
+    await browser.open_window(task="w1")  # та же страница, где задача, — обычным окном
+    assert browser.windowed and chrome.closed and browser.task_tabs == {}
+    assert opened and "https://shop.test/cart" in opened[0] and set(WINDOW) <= set(opened[0])
+    assert "--headless=new" not in opened[0] and "--remote-debugging-port=0" in opened[0]
+    assert browser.state()["windowed"] and events.of("agent_browser.state")[-1]["windowed"]
+    with pytest.raises(UserFacingError, match="открыт отдельным окном"):
+        await browser.connect()
+
+    monkeypatch.setattr(task_tools, "WINDOW_WAIT_S", 0.3)
+    with pytest.raises(UserFacingError, match="человек входит на сайт"):
+        await tools["browser_read"].run(session, {})
+    waiting = asyncio.ensure_future(tools["browser_read"].run(session, {}))
+    await asyncio.sleep(0.1)
+    window.closed = True  # человек закрыл окно
+    await window.stop()
+    with pytest.raises(UserFacingError, match="вход уже сделан"):  # вкладка закрылась — открыть заново
+        await asyncio.wait_for(waiting, 5)
+    await until(lambda: not browser.windowed)
+    outcome = await tools["browser_open"].run(session, {"url": "https://shop.test/"})  # снова без окна
+    assert outcome.ok and browser.connected and not browser.windowed
+
+
+async def test_close_window_from_jarvis_and_bad_url(bg: Bg, chrome: FakeChrome) -> None:
+    ctx, _, _ = bg
+    use_agent_browser(ctx, chrome)
+    window = FakeChrome(shop(), pid=5300)
+    opened = use_window(ctx, window)
+    browser: AgentBrowser = ctx.agent_browser  # type: ignore[assignment]
+    await browser.open_window(url="--remote-allow-origins=*")  # не адрес сайта — страница «войдите»
+    assert START_PAGE in opened[0] and not any(a.startswith("--remote-allow") for a in opened[0])
+    await browser.open_window(url="https://accounts.google.com/")  # уже открыто — второго окна нет
+    assert len(opened) == 1
+    await browser.close_window()
+    assert window.closed and not browser.windowed
+    await window.stop()
+    await browser.task_tab("after")  # профиль свободен — снова без окна
+    assert browser.connected
+
+
+def test_window_api_and_panel_state(client: TestClient) -> None:
+    ctx = client.ctx  # type: ignore[attr-defined]
+    use_agent_browser(ctx, FakeChrome(shop()))
+    window = FakeChrome(shop(), pid=5300)
+    use_window(ctx, window)
+    state = client.post("/api/agent-browser/window", json={"url": "https://passport.yandex.ru/"}).json()
+    assert state["windowed"] is True
+    with client.websocket_connect("/ws/agent-browser?token=test-token") as ws:
+        panel = json.loads(ws.receive_text())
+        assert panel["type"] == "state" and panel["data"]["windowed"] and panel["data"]["target"] == ""
+    assert client.post("/api/agent-browser/window/close").json()["windowed"] is False

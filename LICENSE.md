@@ -1,5 +1,8 @@
 Required Notice: Copyright © 2026 stonebridgeway (https://github.com/stonebridgeway/Jarvis-Agent)
 
+Files in scripts/ru_dict/ (the voice stress dictionary) are not covered by this license: they are licensed
+separately under GPL-3.0-or-later and CC BY-SA 4.0, see scripts/ru_dict/LICENSE.md.
+
 # PolyForm Noncommercial License 1.0.0
 
 <https://polyformproject.org/licenses/noncommercial/1.0.0>

@@ -90,6 +90,8 @@ export interface Settings {
     speed: number;
     pitch: number;
     effect: number;
+    /** Голос Jarvis (piper): ударения и «ё» по словарю Jarvis; смена — со следующего запуска */
+    stress_dict: boolean;
     volume: number;
     output_device: string;
   };

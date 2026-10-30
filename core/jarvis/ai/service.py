@@ -44,6 +44,7 @@ from jarvis.platform.base import PlatformError
 from jarvis.redact import set_outgoing
 from jarvis.service_base import BaseService
 from jarvis.services import AskResult, Source, UserFacingError
+from jarvis.voice.stress import strip_accents
 
 log = logging.getLogger(__name__)
 
@@ -959,6 +960,8 @@ class Ai(BaseService):
         self.ctx.bus.publish("chat.tool", data)
 
     def _delta(self, turn: Turn, text: str) -> None:
+        # знаки ударения («за́мок») модель ставит для голоса: в речь идут из turn.rounds, на экран — без них
+        text = strip_accents(text)
         if turn.new_round:
             text = text.lstrip()
             if not text:

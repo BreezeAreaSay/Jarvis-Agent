@@ -103,6 +103,7 @@ class TtsSettings(_Model):
     speed: float = Field(1.0, ge=0.5, le=2.0)
     pitch: float = Field(1.0, ge=0.8, le=1.2)
     effect: float = Field(0.35, ge=0.0, le=1.0)  # «электроника» в голосе
+    stress_dict: bool = True  # голос Jarvis (piper): ударения и «ё» по словарю Jarvis (jarvis.voice.stress)
     volume: int = Field(100, ge=0, le=100)
     output_device: str = ""
 

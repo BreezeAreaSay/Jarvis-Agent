@@ -127,6 +127,21 @@ async def test_unknown_command_and_failed_tool_become_error_cards(ctx: AppContex
     assert "инструмента «no_such_tool» нет" in tool_results[1]["content"]
 
 
+async def test_voice_answer_keeps_stress_marks_for_speech_only(
+    ctx: AppContext, llm: ScriptedLlm, events: EventLog
+) -> None:
+    llm.add(reply("Это за\u0301мок, сэр, а не замо\u0301к. Ещё вопросы?"))
+    result = await ctx.ai.ask("что это", source="voice")
+    system = llm.requests[0]["messages"][0]["content"]
+    assert "«ё»" in system and "знак ударения" in system
+    assert result.text == "Это замок, сэр, а не замок. Ещё вопросы?"  # на экране и в чате — без знаков
+    assert result.spoken == "Это за\u0301мок, сэр, а не замо\u0301к. Ещё вопросы?"  # в речь — со знаками
+    shown = "".join(e["delta"] for e in events.of("chat.delta"))
+    assert "\u0301" not in shown and "\u0301" not in events.of("chat.done")[-1]["text"]
+    stored = ctx.ai.chats.rows(result.chat_id)[-1]  # type: ignore[attr-defined]
+    assert stored["role"] == "assistant" and "\u0301" not in stored["content"]
+
+
 async def test_voice_uses_persistent_chat_and_short_answers(ctx: AppContext, llm: ScriptedLlm) -> None:
     llm.add(reply("**Погода**: в Москве +5 °C, пасмурно.\n- ветер слабый\nПодробнее: https://example.com 🌧"))
     first = await ctx.ai.ask("какая погода", source="voice")

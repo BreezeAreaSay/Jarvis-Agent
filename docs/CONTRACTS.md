@@ -314,6 +314,20 @@ label, placeholder?, options?, required}], description}`.
 у ElevenLabs Flash — ≈1,3 тыс. кредитов один раз). `Tts.is_ready(text)` — прозвучит ли фраза сразу (локальный голос
 или звук всех её предложений уже в памяти).
 
+**Ударения и «ё» голоса piper** — словарь Jarvis (`jarvis/voice/stress.py`; сборка и лицензии — `scripts/ru_dict`:
+GPL-3.0-or-later и CC BY-SA 4.0, не PolyForm): согласие ударений с OpenRussian 94,2 → 99,6 %, «ё» в 106 тыс. слов,
+омографы по знаку ударения. Установщик несёт `jarvis/resources/voice/{ru_dict, ru_dict.json, LICENSE.md}`
+(`scripts/build-core-win.sh`, `scripts/build-win.ps1`; без сети — `SKIP_RU_DICT=1` / `-SkipStressDict`). Перед
+загрузкой голоса ядро ставит словарь в его `espeak-ng-data` (исходный — рядом, `ru_dict.orig`), если фонемные
+таблицы голоса (`phontab`, `phonindex`, `phondata`) — те, с которыми словарь собран (`ru_dict.json.phoneme_tables`);
+`settings.tts.stress_dict: false`, другие таблицы или вылет ядра при загрузке голоса с этим словарём (этап
+crashguard `ru-dict`) — исходный словарь. espeak-ng читает словарь один раз на процесс: смена — со следующего
+запуска. В ответе голосом модель пишет «ё» и знак ударения U+0301 в словах с двояким ударением
+(`prompts.SOURCE_VOICE`): на экран, в `chat.delta`/`chat.done` и в чат ответ уходит без знаков (`Ai._delta`), в речь —
+со знаками (`AskResult.spoken`); знак получает только piper со словарём Jarvis (`engine.accents`), остальным
+голосам — без него (`textprep.prepare(accents=False)`). `Tts.status().stress_dict = {bundled, loaded:
+jarvis|espeak|""}`.
+
 Характер Джарвиса (`jarvis/voice/character.py`, `ctx.character`) — с персоной «Джарвис» (`ai.persona: jarvis`):
 ответ голосом на встроенную команду в его духе, коротко и с обращением из профиля (`profile.address`; пусто — без
 обращения): «Сворачиваю все окна, сэр.», «Я здесь, сэр.», «Приятного просмотра, сэр.», «Библиотека игр будет доступна

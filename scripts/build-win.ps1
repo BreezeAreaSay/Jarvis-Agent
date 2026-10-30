@@ -5,7 +5,8 @@
 
 .DESCRIPTION
     1. Python 3.12 для встраивания (пакет NuGet «python») → build\core-win\python
-    2. Зависимости ядра (uv pip install --target) и пакет jarvis → build\core-win
+    2. Зависимости ядра (uv pip install --target), пакет jarvis и словарь ударений голоса
+       (scripts\ru_dict\build_ru_dict.py; -SkipStressDict — без него) → build\core-win
     3. Интерфейс (npm run build) и установщик (electron-builder, NSIS)
     Нужны: uv (https://docs.astral.sh/uv/) и Node.js 22+.
 
@@ -23,6 +24,7 @@
 param(
     [string]$PythonVersion = '3.12.10',
     [switch]$SkipCore,
+    [switch]$SkipStressDict,
     [string]$Certificate = '',
     [string]$CertificatePassword = '',
     [string]$CertificateSubject = ''
@@ -101,6 +103,18 @@ if (-not $SkipCore) {
     New-Item -ItemType Directory -Force (Join-Path $Out 'app') | Out-Null
     robocopy (Join-Path $Root 'core\jarvis') (Join-Path $Out 'app\jarvis') /E /XD __pycache__ /XF *.pyc /NFL /NDL /NJH /NJS | Out-Null
     & (Join-Path $Out 'python\python.exe') -m compileall -q (Join-Path $Out 'app\jarvis') | Out-Null
+
+    # словарь ударений и «ё» голоса Jarvis (scripts\ru_dict, свои лицензии — LICENSE.md там же): собирается из
+    # закреплённых по SHA-256 исходников; ядро ставит его голосу piper само. Путь — латиницей (espeak-ng)
+    if (-not $SkipStressDict) {
+        Write-Host '==> Словарь ударений голоса'
+        $voiceOut = Join-Path $Root 'build\voice'
+        & (Join-Path $Out 'python\python.exe') (Join-Path $Root 'scripts\ru_dict\build_ru_dict.py') --out $voiceOut
+        if ($LASTEXITCODE -ne 0) { throw 'Словарь ударений не собрался (или запустите с -SkipStressDict)' }
+        $res = Join-Path $Out 'app\jarvis\resources\voice'
+        New-Item -ItemType Directory -Force $res | Out-Null
+        foreach ($f in 'ru_dict', 'ru_dict.json', 'LICENSE.md') { Copy-Item (Join-Path $voiceOut $f) $res }
+    }
 }
 
 Write-Host '==> Интерфейс и установщик'

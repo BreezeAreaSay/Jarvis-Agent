@@ -1,6 +1,7 @@
 """Локальный голос Jarvis: piper (VITS) через sherpa-onnx OfflineTts — без сети, ≈0,1–0,15 с на фразу.
 
-Голоса — модели piper-<имя> (ru_RU medium, fp32: int8-версии медленнее). Паузы — GenerationConfig
+Голоса — модели piper-<имя> (ru_RU medium, fp32: int8-версии медленнее). Ударения и «ё» — словарь Jarvis
+(jarvis.voice.stress): ставится в данные espeak-ng голоса перед загрузкой. Паузы — GenerationConfig
 с silence_scale = 1,0: старый generate(text, sid, speed) в sherpa-onnx 1.13.8 берёт 0,2 и сжимает паузы
 на запятых в 5 раз (замер jarvis-v1). Тон ниже (pitch < 1): синтез быстрее в 1/pitch раза, вывод на частоте
 ×pitch — длительность та же, голос ниже, без передискретизации.
@@ -15,6 +16,7 @@ import os
 import shutil
 import sys
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -23,6 +25,7 @@ import numpy as np
 
 from jarvis import crashguard
 from jarvis.voice import models as m
+from jarvis.voice import stress
 from jarvis.voice.engines.base import SynthOptions, TtsEngineError, clamp
 
 if TYPE_CHECKING:
@@ -88,13 +91,22 @@ class PiperEngine:
     name = "piper"
     title = "Голос Jarvis (локально)"
 
-    def __init__(self, models: m.ModelManager, threads: int = 2) -> None:
+    def __init__(
+        self, models: m.ModelManager, threads: int = 2, stress_dict: Callable[[], bool] | None = None
+    ) -> None:
         self.models = models
         self.threads = threads
+        self.stress_dict = stress_dict or (lambda: True)  # settings.tts.stress_dict
+        self.dictionary = ""  # словарь загруженного голоса: «jarvis» | «espeak»; не загружен — ""
         self._executor = ThreadPoolExecutor(1, thread_name_prefix="piper")
         self._lock = threading.Lock()
         self._tts: Any = None
         self._loaded = ""
+
+    @property
+    def accents(self) -> bool:
+        """Знак ударения (U+0301) голосу понятен: у него словарь Jarvis."""
+        return self.dictionary == "jarvis"
 
     def available(self) -> str:
         return "" if self.pick("") else "голос piper не скачан"
@@ -138,10 +150,13 @@ class PiperEngine:
                 import sherpa_onnx as so
             except Exception as e:
                 raise TtsEngineError(f"sherpa-onnx недоступен: {e}") from e
+            dictionary = stress.install(files["espeak"], self.stress_dict())
             espeak = ascii_espeak_dir(files["espeak"])
+            # со словарём Jarvis — свой этап: упало ядро — дальше голос с исходным словарём, а не без голоса
+            guard = crashguard.stage(stress.STAGE) if dictionary == "jarvis" else contextlib.nullcontext()
             try:
                 # espeak-ng и sherpa-onnx при ошибке могут завершить процесс: после двух вылетов — не грузим
-                with crashguard.stage(f"tts-{voice}"):
+                with crashguard.stage(f"tts-{voice}"), guard:
                     vits = so.OfflineTtsVitsModelConfig(
                         model=str(files["model"]), tokens=str(files["tokens"]), data_dir=str(espeak)
                     )
@@ -158,8 +173,8 @@ class PiperEngine:
                 ) from None
             except Exception as e:
                 raise TtsEngineError(f"голос {voice} не загрузился: {type(e).__name__}: {e}") from e
-            self._tts, self._loaded = tts, voice
-            log.info("голос: piper %s загружен", voice)
+            self._tts, self._loaded, self.dictionary = tts, voice, dictionary
+            log.info("голос: piper %s загружен (словарь %s)", voice, dictionary)
             return tts
 
     def _synth(self, text: str, voice: str, speed: float, pitch: float) -> tuple[np.ndarray, int]:
@@ -191,7 +206,7 @@ class PiperEngine:
 
     def unload(self) -> None:
         with self._lock:
-            self._tts, self._loaded = None, ""
+            self._tts, self._loaded, self.dictionary = None, "", ""
 
     def close(self) -> None:
         self.unload()

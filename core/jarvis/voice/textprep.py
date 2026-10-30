@@ -145,9 +145,12 @@ def _strip_symbols(text: str) -> str:
     return "".join(out)
 
 
-def prepare(text: str, *, russian: bool = True) -> str:
-    """Текст для синтеза; russian — голос русский (латиницу — русскими буквами, % — словом)."""
+def prepare(text: str, *, russian: bool = True, accents: bool = True) -> str:
+    """Текст для синтеза; russian — голос русский (латиницу — русскими буквами, % — словом); accents=False —
+    без знаков ударения U+0301 (голос их не понимает: понимает только piper со словарём Jarvis)."""
     t = str(text or "")
+    if not accents:
+        t = t.replace("\u0301", "")
     t = _FENCE.sub(" ", t)
     t = _TABLE_LINE.sub(" ", t)
     t = _HTML_TAG.sub(" ", t)

@@ -72,3 +72,5 @@ find "$OUT/python/Lib/site-packages" -path '*/tests/*' -name '*.py' -delete 2>/d
 
 du -sh "$OUT/python" "$OUT/app" | sed 's/^/    /'
 echo "==> Готово: $OUT"
+# самопроверку (python -m jarvis --selftest --strict) запускает сборка на Windows — scripts/build-win.ps1:
+# здесь Python для Windows не запустить

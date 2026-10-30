@@ -33,6 +33,7 @@ import httpx
 from jarvis import __version__, netproxy
 from jarvis.ai.providers import PRESETS, ProviderPreset, estimate_cost, get_preset, price_for
 from jarvis.ai.vision import sees_images
+from jarvis.redact import redact_messages
 from jarvis.services import UserFacingError
 
 if TYPE_CHECKING:
@@ -955,6 +956,11 @@ class LlmClient:
         return self.config(model).problem()
 
     @property
+    def mask_secrets(self) -> bool:
+        ctx = getattr(self, "ctx", None)
+        return True if ctx is None else bool(getattr(ctx.settings.value.ai, "mask_secrets", True))
+
+    @property
     def configured(self) -> bool:
         try:
             return self.problem() is None
@@ -1031,6 +1037,8 @@ class LlmClient:
         json_schema: dict[str, Any] | None,
         stream: bool,
     ) -> dict[str, Any]:
+        if self.mask_secrets and not cfg.local:  # облачной модели — без паролей и ключей из текста
+            messages = redact_messages(messages)
         body: dict[str, Any] = {
             "model": cfg.wire_model,
             "messages": adapt_messages(messages, cfg.preset),

@@ -348,7 +348,8 @@ async def test_ai_configured_event_follows_key_and_provider(ctx: AppContext, eve
 async def test_secrets_are_masked_in_stored_chat(ctx: AppContext, llm: ScriptedLlm) -> None:
     llm.add(reply("Не буду это запоминать."))
     result = await ctx.ai.ask("Моя карта 4111 1111 1111 1111, пароль: Qwerty123!")
-    # модель получила сообщение как есть, а на диске секретов нет
-    assert "4111 1111 1111 1111" in llm.requests[0]["messages"][-1]["content"]
+    # облачная модель получила сообщение без секретов (settings.ai.mask_secrets), и на диске их нет
+    sent = llm.requests[0]["messages"][-1]["content"]
+    assert "4111 1111 1111 1111" not in sent and "•••• 1111" in sent and "Qwerty123!" not in sent
     stored = ctx.ai.get_chat(result.chat_id)["messages"][0]["content"]  # type: ignore[attr-defined]
     assert "4111 1111 1111 1111" not in stored and "Qwerty123!" not in stored

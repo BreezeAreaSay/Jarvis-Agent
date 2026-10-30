@@ -19,6 +19,7 @@ from typing import Any
 
 from jarvis.ai.cli.stream import ClaudeStream, GeminiStream
 from jarvis.mcp.server import SERVER_NAME, TOKEN_HEADER, TURN_HEADER
+from jarvis.redact import outgoing
 
 MCP_TIMEOUT_MS = 600_000  # вызов инструмента ждёт и подтверждения человека (до 2 минут) — с запасом
 NO_SERVER = "jarvis-none"  # имя несуществующего сервера: «никаких серверов MCP» (одиночные запросы)
@@ -59,6 +60,10 @@ class CliRun:
     web: bool = False  # фоновая задача: веб-поиск и чтение страниц самой программы включены
     files: list[Path] = field(default_factory=list)  # временные файлы запуска — удаляются после
     tag: str = field(default_factory=lambda: uuid.uuid4().hex[:12])  # для имён временных файлов
+
+    def __post_init__(self) -> None:
+        # программа отдаёт текст облачной модели — пароли, ключи и номера карт из него маской
+        self.prompt, self.system = outgoing(self.prompt), outgoing(self.system)
 
     def temp(self, name: str, text: str) -> Path:
         path = self.work_dir / name

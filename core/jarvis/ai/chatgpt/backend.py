@@ -51,6 +51,7 @@ from jarvis.ai.providers import PRESETS
 from jarvis.ai.tools import Tool, ToolEnv
 from jarvis.ai.web import site_name
 from jarvis.db import new_id
+from jarvis.redact import outgoing as _mask
 from jarvis.services import AskResult, UserFacingError
 
 if TYPE_CHECKING:
@@ -827,7 +828,7 @@ class ChatGpt:
             content = await ai._call_tool(turn, env, allowed, call)
         ai._status(turn, "thinking", "Формирую ответ…")
         return {
-            "contentItems": [{"type": "inputText", "text": content}],
+            "contentItems": [{"type": "inputText", "text": _mask(content)}],
             "success": not content.startswith("Ошибка"),
         }
 
@@ -841,7 +842,7 @@ class ChatGpt:
             "sandbox": "read-only",
             "cwd": str(component.work_dir()),
             "ephemeral": False,
-            "developerInstructions": developer,
+            "developerInstructions": _mask(developer),
             "dynamicTools": specs,
             "config": component.thread_config(web_search=native_search),
         }
@@ -970,7 +971,7 @@ class ChatGpt:
     # --- ход ----------------------------------------------------------------------------------------
     @staticmethod
     def _items(text: str, images: list[str]) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = [{"type": "text", "text": text or "Что на изображении?"}]
+        items: list[dict[str, Any]] = [{"type": "text", "text": _mask(text) or "Что на изображении?"}]
         items += [{"type": "image", "url": url} for url in images]
         return items
 
@@ -1280,9 +1281,9 @@ class ChatGpt:
             text = ("Предыдущие сообщения:\n" + "\n".join(lines) + "\n\n" + last) if lines else last
         developer = "\n\n".join(system) or "Отвечай по-русски, кратко и по делу."
         developer += "\n\nОтвечай сразу текстом: инструментов в этом запросе нет."
-        items: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        items: list[dict[str, Any]] = [{"type": "text", "text": _mask(text)}]
         items += [{"type": "image", "url": url} for url in images]
-        return developer, items
+        return _mask(developer), items
 
     async def complete(
         self,
@@ -1431,7 +1432,9 @@ class ChatGpt:
                     "sandbox": "read-only",
                     "cwd": str(component.work_dir()),
                     "ephemeral": True,
-                    "developerInstructions": f"{prompt.AGENT_RULES if rules is None else rules}\n\n{system}",
+                    "developerInstructions": _mask(
+                        f"{prompt.AGENT_RULES if rules is None else rules}\n\n{system}"
+                    ),
                     "dynamicTools": tools,
                     "config": component.thread_config(web_search=web_search),
                 },
@@ -1448,12 +1451,12 @@ class ChatGpt:
                 return await act(params)
 
         def result(content: str, extras: list[dict[str, Any]]) -> dict[str, Any]:
-            items: list[dict[str, Any]] = [{"type": "inputText", "text": content}]
+            items: list[dict[str, Any]] = [{"type": "inputText", "text": _mask(content)}]
             for extra in extras:
                 parts = extra.get("content") if isinstance(extra.get("content"), list) else []
                 for part in parts:
                     if part.get("type") == "text" and part.get("text"):
-                        items.append({"type": "inputText", "text": str(part["text"])})
+                        items.append({"type": "inputText", "text": _mask(str(part["text"]))})
                     elif part.get("type") == "image_url":
                         url = (part.get("image_url") or {}).get("url")
                         if isinstance(url, str):

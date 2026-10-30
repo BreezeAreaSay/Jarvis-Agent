@@ -155,6 +155,9 @@ class AiSettings(_Model):
     agent_confirm: Literal["risky", "always"] = "risky"
     max_agent_steps: int = Field(25, ge=3, le=100)
     agent_notes: bool = True  # агент запоминает, что не сработало в программе (ai/lessons.py)
+    # пароли, ключи API, номера карт и закрытые ключи в тексте — маской, прежде чем он уйдёт облачной модели
+    # (ChatGPT, Claude, ключ API не на этом ПК); модели на этом ПК (Ollama, LM Studio) видят как есть
+    mask_secrets: bool = True
     agent_journal: bool = True  # шаги агента и снимки экрана — в журнал на этом компьютере (ai/journal.py)
     # браузер Jarvis: свой профиль Chrome или Edge, агент работает со страницами по CDP (ai/browser)
     browser: bool = False

@@ -33,7 +33,7 @@ import { api } from "@/api/client";
 import { onEvent } from "@/api/events";
 import type { Settings } from "@/api/types";
 import { bridge, isElectron } from "@/lib/bridge";
-import { Button, Card, Check, Modal, notify, notifyError, type Option, Select, Setting, timeAgo } from "@/ui";
+import { Button, Card, Check, Modal, notify, notifyError, type Option, Select, Setting, timeAgo, Toggle } from "@/ui";
 import { FALLBACK_PROVIDERS, providerTitle } from "../ai";
 import { Note, useApi, useSettingsPatch } from "../kit";
 import { fileUrl } from "./SystemSection";
@@ -199,6 +199,23 @@ function FlowCard({ settings }: { settings: Settings }) {
         Картинки рисует OpenAI: когда вы просите нарисовать, туда уходят описание картинки и ваше фото-образец, если вы
         его приложили. Нарисованное хранится в чате на ПК — удалить можно ниже, «Нарисованные картинки».
       </Note>
+    </Card>
+  );
+}
+
+// --- защита от утечек ----------------------------------------------------------------------------------------
+
+function ProtectCard() {
+  const [settings, patch] = useSettingsPatch();
+  if (!settings) return null;
+  return (
+    <Card icon={<KeyRound />} title="Защита от утечек" sub="Что Jarvis не отдаёт облачному ИИ, даже если это попало в текст">
+      <Setting
+        name="Скрывать пароли и ключи"
+        desc="Пароли, ключи API, токены, номера карт и закрытые ключи в сообщениях, заметках, окнах и страницах заменяются на «•••», прежде чем уйти облачному ИИ. Модели на этом ПК видят текст как есть"
+      >
+        <Toggle checked={settings.ai.mask_secrets} onChange={(v) => patch({ ai: { mask_secrets: v } })} label="Скрывать пароли и ключи" />
+      </Setting>
     </Card>
   );
 }
@@ -497,6 +514,7 @@ export default function PrivacySection() {
   return (
     <div className="stack">
       <FlowCard settings={settings} />
+      <ProtectCard />
       <RetentionCard privacy={settings.privacy} purgedAt={inv.data?.purged_at ?? null} onPurged={() => void reload()} />
       <StorageCard inv={inv} reload={() => void reload()} />
       <LogsCard dir={inv.data?.logs_dir ?? ""} />

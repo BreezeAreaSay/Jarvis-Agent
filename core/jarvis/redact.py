@@ -1,11 +1,15 @@
-"""Маскировка секретов в тексте: номера карт, CVV, пароли, ключи API и токены.
+"""Маскировка секретов в тексте: номера карт, CVV, пароли, ключи API, токены, закрытые ключи и пароли в
+адресах подключения.
 
 redact() зовут перед записью в журналы (jarvis.log.RedactFilter) и в историю чатов, чтобы случайно
-сказанный или найденный в окне секрет не остался на диске. Маска оставляет начало ключа и последние цифры
-карты — по ним человек узнает, что это было, но воспользоваться уже нельзя.
+сказанный или найденный в окне секрет не остался на диске, и перед отправкой облачной модели
+(redact_messages — в клиенте API, подписки ChatGPT и программ вроде Claude Code; settings.ai.mask_secrets).
+Маска оставляет начало ключа и последние цифры карты — по ним человек узнает, что это было, но
+воспользоваться уже нельзя.
 """
 
 import re
+from typing import Any
 
 MASK = "•••"
 
@@ -43,7 +47,17 @@ _TOKEN_RES = (
     re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]{16,}"),
     re.compile(r"(?i)\b(basic\s+)[A-Za-z0-9+/]{12,}={0,2}"),
     re.compile(r"\b(eyJ)[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),  # JWT
+    re.compile(r"\b(glpat-)[A-Za-z0-9_-]{20,}"),  # GitLab
+    re.compile(r"\b(hf_)[A-Za-z0-9]{30,}"),  # Hugging Face
+    re.compile(r"\b((?:sk|rk|pk)_(?:live|test)_)[A-Za-z0-9]{16,}"),  # Stripe
+    re.compile(r"\b(AQVN)[A-Za-z0-9_-]{30,}"),  # ключ API Yandex Cloud
+    re.compile(r"\b(t1\.)[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{40,}"),  # IAM-токен Yandex Cloud
+    re.compile(r"\b(ya29\.)[A-Za-z0-9_-]{20,}"),  # Google OAuth
 )
+# закрытый ключ целиком: -----BEGIN RSA PRIVATE KEY----- … -----END RSA PRIVATE KEY-----
+_PEM_RE = re.compile(r"-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----.*?-----END \1-----", re.S)
+# пароль в адресе подключения: postgres://user:пароль@host, mongodb+srv://…, ftp://…
+_URL_CREDS_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]{1,20}://[^\s:/@\"']+:)([^\s@/\"']{3,})(@)")
 
 
 def luhn_ok(digits: str) -> bool:
@@ -69,7 +83,9 @@ def redact(text: str) -> str:
     """Текст с замаскированными секретами (без секретов — тот же текст)."""
     if not text:
         return text
-    out = _CARD_RE.sub(_card, text)
+    out = _PEM_RE.sub(lambda m: f"-----BEGIN {m.group(1)}----- {MASK} -----END {m.group(1)}-----", text)
+    out = _URL_CREDS_RE.sub(lambda m: f"{m.group(1)}{MASK}{m.group(3)}", out)
+    out = _CARD_RE.sub(_card, out)
     out = _CVV_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", out)
     out = _PASSWORD_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", out)
     out = _PIN_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", out)
@@ -81,3 +97,39 @@ def redact(text: str) -> str:
 def has_secret(text: str) -> bool:
     """Есть ли в тексте то, что redact() замаскирует."""
     return bool(text) and redact(text) != text
+
+
+# маскировать ли текст для облачных моделей подписки (ChatGPT, Claude Code…) — settings.ai.mask_secrets;
+# ставит сервис Jarvis AI при запуске и смене настроек
+_OUTGOING = {"on": True}
+
+
+def set_outgoing(enabled: bool) -> None:
+    _OUTGOING["on"] = bool(enabled)
+
+
+def outgoing(text: str) -> str:
+    """Текст для облачной модели: секреты — маской (если это не выключено в настройках)."""
+    return redact(text) if _OUTGOING["on"] and text else text
+
+
+def redact_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Сообщения для модели (формат /chat/completions) с замаскированными секретами в тексте: и строкой, и
+    частями {"type": "text"}; картинки и вызовы инструментов — как есть. Исходный список не меняется."""
+    out: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str):
+            masked: Any = redact(content)
+        elif isinstance(content, list):
+            masked = [
+                {**part, "text": redact(part["text"])}
+                if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
+                else part
+                for part in content
+            ]
+        else:
+            out.append(message)
+            continue
+        out.append(message if masked == content else {**message, "content": masked})
+    return out

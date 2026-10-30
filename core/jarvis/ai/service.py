@@ -41,6 +41,7 @@ from jarvis.background.repeat import describe
 from jarvis.db import new_id
 from jarvis.mcp.server import JarvisMcpServer
 from jarvis.platform.base import PlatformError
+from jarvis.redact import set_outgoing
 from jarvis.service_base import BaseService
 from jarvis.services import AskResult, Source, UserFacingError
 
@@ -264,6 +265,7 @@ class Ai(BaseService):
         return now
 
     async def start(self) -> None:
+        set_outgoing(self.ctx.settings.value.ai.mask_secrets)
         self._configured = self.configured
         self._unsubs += [
             self.ctx.settings.on_change(self._on_settings),
@@ -278,6 +280,8 @@ class Ai(BaseService):
             backend = self.cli.get(new.ai.provider)
             if backend is not None and self.ctx.loop is not None and not self.ctx.loop.is_closed():
                 self.ctx.loop.call_soon_threadsafe(backend.on_selected)  # проверить вход в программу
+        if old.ai.mask_secrets != new.ai.mask_secrets:
+            set_outgoing(new.ai.mask_secrets)
         if old.ai != new.ai:
             self.refresh_configured()
 

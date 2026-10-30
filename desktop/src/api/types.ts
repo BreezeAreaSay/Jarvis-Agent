@@ -116,6 +116,8 @@ export interface Settings {
     agent_notes: boolean;
     /** Шаги агента и снимки экрана — в журнал на этом компьютере. */
     agent_journal: boolean;
+    /** Пароли, ключи API, номера карт — маской, прежде чем текст уйдёт облачной модели. */
+    mask_secrets: boolean;
     /** Браузер Jarvis: свой профиль Chrome или Edge, агент работает со страницами по CDP. */
     browser: boolean;
     browser_app: "auto" | "chrome" | "edge";

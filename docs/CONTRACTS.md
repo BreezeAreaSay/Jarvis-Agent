@@ -124,7 +124,7 @@ sherpa-onnx нужной версии и PortAudio, паки команд и с�
 | `settings.changed` | `{settings}` |
 | `secrets.changed` | `{name, set}` |
 | `dispatch.started` / `dispatch.done` | `{text, source}` / `{text, kind, ok?}` |
-| `history.added` / `history.updated` | `{item: HistoryItem}` |
+| `history.added` / `history.updated` | `{item: HistoryItem}` (`ms` — сколько длилось от фразы до итога; 0 — сразу) |
 | `history.cleared` | `{}` |
 | `command.executed` | `{text, source, result: ExecResult}` |
 | `toast` | `{title, message, status: ok\|error\|info, icon, ts}` — карточка в оверлее («Включить музыку — Выполнено ✓») |
@@ -1213,3 +1213,23 @@ question|approval, options, detail, key, asked, answer, answered}`. `Repeat = {k
 | `background.done` | `{task_id, status, summary, error, note, result, next_run, paused}` — у повторяющейся — итог запуска (`status`), когда следующий и не ушла ли на паузу |
 | `background.deleted` | `{id}` |
 | `agent_browser.state` | как `GET /api/agent-browser` |
+
+**Утверждение плана** (`settings.background.approve_plan`: `never` | `big` (по умолчанию) | `always`): первый план
+задачи (`update_plan`) из 4+ шагов, план повторяющейся задачи или любой при `always` уходит человеку вопросом
+`kind: "plan"` — «Утвердить план?» с шагами, варианты «Начинай» / «Отмени задачу», ответ словами — правка: модель
+составляет новый план, и он снова на утверждение; утвердили — `task.plan_ok`, дальше отметки по ходу без вопросов
+(ответ во время паузы тоже ставит `plan_ok`). В Telegram — с 📋.
+
+**Поиск и чтение — параллельно.** Пачка вызовов модели только из `web_search`, `web_read`, `vault_search`,
+`vault_read` идёт одновременно (`runner.PARALLEL_TOOLS`); вперемешку с записью — по очереди.
+
+**Скачивание с разрешения.** `browser_click` по ссылке на файл (или Enter на ней) в браузере агента — вопрос
+«Скачать файл с <сайт>: «<ссылка>»?» (`approval`, ключ `download:<сайт>:<ссылка>`); разрешили — браузер на время
+этого щелчка скачивает в `<Загрузки>\Jarvis` (нет такой папки — `<данные>/downloads`; `agent_browser.download_folder`)
+и снова запрещает скачивания; модель получает путь, файл не открывается и не запускается; в ход задачи —
+«Скачан файл …». Загрузка файлов на сайты — по-прежнему только человеком.
+
+`POST /api/background/{id}/notebooklm` → `{path, link, urls}` — «Для NotebookLM»: итог, текст главной заметки и все
+источники задачи одним Markdown-файлом `Jarvis/NotebookLM/<задача>.md` (у NotebookLM нет открытого API для обычных
+аккаунтов — файл загружает человек: «Добавить источник» → «Загрузить»; ссылки — ещё и списком в конце файла и в
+буфер, для «Добавить источник» → «Сайт»); у задачи без итога и источников — 400.

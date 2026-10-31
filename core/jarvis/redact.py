@@ -32,7 +32,7 @@ _PIN_RE = re.compile(r"(?i)\b(пин-?код|pin-?code|pin)(\s+)(\d{4,8})\b")
 # имя ключа — до 40 знаков перед словом-признаком и не с середины слова: иначе на длинных «ab-ab-ab-…»
 # (адреса, base64) поиск квадратичный и замирает на секунды
 _ASSIGN_RE = re.compile(
-    r"(?i)((?<![A-Za-z0-9_-])[\"']?[A-Za-z0-9_-]{0,40}?(?:api[_-]?key|access[_-]?key|secret[_-]?key|"
+    r"(?i)((?<![A-Za-z0-9_-])[\"']?[A-Za-z0-9_-]{0,100}?(?:api[_-]?key|access[_-]?key|secret[_-]?key|"
     r"client[_-]?secret|"
     r"secret|token|access[_-]?token|refresh[_-]?token|authorization|session[_-]?string|api[_-]?hash|password|"
     r"passwd|pwd)[\"']?\s*[:=]\s*[\"']?)([A-Za-z0-9._~+/=:-]{8,})"
@@ -97,13 +97,19 @@ def redact(text: str) -> str:
     return _ASSIGN_RE.sub(_assign, out)
 
 
-# «токены» страниц и синхронизации (nextPageToken, syncToken, cursor) — не секреты: без них ломается выдача
-# частями
-_PAGING_KEY = re.compile(r"(?i)(page|next|prev|sync|cursor|continuation|resume)[_-]?token")
+# «токены» страниц и синхронизации (nextPageToken, page_token, syncToken) — не секреты: без них ломается
+# выдача частями. Только имя целиком: FB_PAGE_TOKEN — это ключ страницы Facebook, его маскируем
+_PAGING_KEY = re.compile(
+    r"(?i)(?:(?:next|prev|previous)[_-]?)?page[_-]?token|(?:next[_-]?)?sync[_-]?token|"
+    r"(?:continuation|resume|cursor)[_-]?token"
+)
+_KEY_NAME = re.compile(r"[\"']?([A-Za-z0-9_-]+)")
 
 
 def _assign(m: re.Match[str]) -> str:
-    return m.group(0) if _PAGING_KEY.search(m.group(1)) else f"{m.group(1)}{MASK}"
+    name = _KEY_NAME.match(m.group(1))
+    paging = name is not None and _PAGING_KEY.fullmatch(name.group(1)) is not None
+    return m.group(0) if paging else f"{m.group(1)}{MASK}"
 
 
 def has_secret(text: str) -> bool:

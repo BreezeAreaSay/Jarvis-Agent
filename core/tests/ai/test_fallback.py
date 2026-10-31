@@ -182,3 +182,24 @@ async def test_no_backup_after_part_of_the_answer_is_shown(ctx: AppContext, llm:
     with pytest.raises(LlmError):
         await ctx.ai.llm.chat(MESSAGES, stream=True, on_delta=shown.append)  # type: ignore[attr-defined]
     assert "".join(shown) == "Начало ответа " and seen == []  # ответ не задвоился чужим текстом
+
+
+async def test_paused_primary_backup_without_vision_gets_no_pictures(
+    ctx: AppContext, llm: ScriptedLlm
+) -> None:
+    backup(ctx)  # DeepSeek картинок не видит
+    seen: list[httpx.Request] = []
+    picture = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Что на экране?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            ],
+        }
+    ]
+    llm.add(answer(429, "quota", "insufficient_quota"), ok("Вижу окно.", seen), ok("Дальше.", seen))
+    await ctx.ai.llm.chat(picture)  # type: ignore[attr-defined]  # основной на паузе, ответил запасной
+    await ctx.ai.llm.chat(picture)  # type: ignore[attr-defined]  # и следующий снимок — сразу запасному
+    assert [r["model"] for r in llm.requests][1:] == ["deepseek-v4-flash", "deepseek-v4-flash"]
+    assert "image_url" not in str(llm.requests[2]["messages"])  # без картинки, а не ошибка 400

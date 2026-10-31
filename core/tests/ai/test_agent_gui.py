@@ -618,3 +618,23 @@ async def test_agent_waits_while_the_human_uses_mouse(
     assert len(clicks) == 1  # первый — после того, как человек отпустил мышь; второй — не делается
     texts = [str(m.get("content")) for m in llm.requests[-1]["messages"] if m.get("role") == "tool"]
     assert any("человек сам работает мышью и клавиатурой" in t for t in texts)
+
+
+async def test_waiting_for_the_human_is_not_a_useless_repeat(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx.settings.patch({"ai": {"vision": "on", "max_agent_steps": 4}})
+    _telegram(ui)
+    monkeypatch.setattr(agent_module, "HUMAN_QUIET_S", 0.2)
+    monkeypatch.setattr(agent_module, "HUMAN_WAIT_S", 0.02)
+    platform: Any = ctx.platform
+    platform.report_input = True
+    platform.idle = 0.0  # человек всё время работает мышью
+    click = calls(("click_point", {"x": 100, "y": 50, "what": "поле поиска"}))
+    llm.add(PLAN, *[click] * 6, calls(("finish", {"status": "done", "summary": "Подожду вас."})))
+    result = await _run(ctx, "Нажми поиск в Telegram")
+    texts = [str(m.get("content")) for m in llm.requests[-1]["messages"] if m.get("role") == "tool"]
+    assert sum("человек сам работает мышью" in t for t in texts) == 6
+    assert not any("повторял одно и то же" in t or "Осталось шагов" in t for t in texts)
+    assert ctx.agent.state()["status"] == "done", result  # type: ignore[attr-defined]
+    assert not [c for c in platform.calls if c[0] == "mouse_click"]

@@ -1376,6 +1376,9 @@ class LlmClient:
         self.check_budget(cfg)
         quirks = self._quirks_for(cfg)
         msgs = _with_json_instruction(messages, json_schema) if json_schema is not None else messages
+        if cfg.backup and not private and not cfg.vision:
+            # основной на паузе — отвечает запасной без зрения: снимки (агент, фоновая задача) — без картинок
+            msgs = _without_images(msgs)
         shown = False  # часть ответа уже ушла на экран — запасной не зовём (ответ продублировался бы)
         started, first = time.perf_counter(), 0.0
 

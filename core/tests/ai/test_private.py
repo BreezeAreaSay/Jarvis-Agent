@@ -72,3 +72,41 @@ async def test_private_exchange_never_reaches_the_cloud_later(ctx: AppContext, l
     await ctx.ai.ask("приватно: какой у меня счёт?", chat_id=private.chat_id)  # type: ignore[attr-defined]
     local = json.dumps(llm.requests[-1]["messages"], ensure_ascii=False)
     assert "40817810099910004312" in local and seen[-1].url.host == "127.0.0.1"
+
+
+async def _wait_requests(llm: ScriptedLlm, count: int) -> None:
+    import asyncio
+
+    for _ in range(200):
+        if len(llm.requests) >= count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"запросов {len(llm.requests)}, ждали {count}")
+
+
+async def test_private_from_the_chat_box_stays_local(ctx: AppContext, llm: ScriptedLlm) -> None:
+    import pytest
+
+    from jarvis.services import UserFacingError
+
+    chat = ctx.ai.chats.create()  # type: ignore[attr-defined]
+    with pytest.raises(UserFacingError):  # модели на этом ПК нет — отказ, а не облако
+        await ctx.ai.post_message(chat["id"], "приватно: мой счёт 40817810099910004312")  # type: ignore[attr-defined]
+    assert llm.requests == []
+    ctx.settings.patch({"ai": {"fallback_provider": "ollama", "fallback_model": "qwen3:8b"}})
+    seen: list[httpx.Request] = []
+    llm.add(answer("Записал у себя.", seen))
+    await ctx.ai.post_message(chat["id"], "приватно: мой счёт 40817810099910004312")  # type: ignore[attr-defined]
+    await _wait_requests(llm, 1)
+    assert seen[0].url.host == "127.0.0.1" and llm.requests[0]["model"] == "qwen3:8b"
+
+
+async def test_private_agent_phrase_and_cloud_tools_stay_off(ctx: AppContext, llm: ScriptedLlm) -> None:
+    ctx.settings.patch({"ai": {"fallback_provider": "ollama", "fallback_model": "qwen3:8b"}})
+    seen: list[httpx.Request] = []
+    llm.add(answer("Агента в приватном режиме не зову.", seen))
+    result = await ctx.ai.ask("приватно: агент, найди письмо от врача про мои анализы")  # type: ignore[attr-defined]
+    assert result.text.startswith("Агента") and seen[0].url.host == "127.0.0.1"
+    assert ctx.agent.current is None  # type: ignore[attr-defined]  # экранный агент (облачная модель) не запускался
+    names = {t["function"]["name"] for t in llm.requests[0].get("tools", [])}
+    assert not names & {"run_agent", "generate_image", "add_task", "remember"}

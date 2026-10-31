@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 from jarvis.ai.agent import AgentLimit, Outcome
 from jarvis.ai.format import now_text, one_line
 from jarvis.ai.llm import LlmClient, LlmError, ToolCall, Usage
+from jarvis.ai.providers import PRESETS, get_preset
 from jarvis.ai.vision import sees_images
 from jarvis.ai.web import WebError
 from jarvis.background import tools as task_tools
@@ -476,8 +477,16 @@ def first_message(service: "Background", task: Task) -> str:
 
 
 def task_model(ctx: Any) -> str | None:
-    """Своя модель фоновых задач (settings.background.model) или None — та же, что в чате."""
-    return str(getattr(ctx.settings.value.background, "model", "") or "").strip() or None
+    """Своя модель фоновых задач (settings.background.model) или None — та же, что в чате. Модель другого
+    провайдера (выбрали её, потом сменили провайдера) — тоже None: иначе каждая задача падала бы ошибкой."""
+    model = str(getattr(ctx.settings.value.background, "model", "") or "").strip()
+    if not model:
+        return None
+    preset = get_preset(ctx.settings.value.ai.provider)
+    if model in preset.models or model == preset.default_model:
+        return model
+    others = (p for p in PRESETS.values() if p.id != preset.id)
+    return None if any(model in p.models or model == p.default_model for p in others) else model
 
 
 async def run_session(service: "Background", task: Task) -> Session:

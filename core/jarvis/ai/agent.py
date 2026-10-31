@@ -1418,7 +1418,11 @@ class Agent(BaseService):
             images=_image_urls(outcome.extras),
         )
         run.failed_at = time.monotonic() if not outcome.ok else 0.0
-        repeat = self._repeat(run, call.name, args, outcome)
+        # ждали, пока человек отпустит мышь: шаг задачи не потрачен, и это не «хождение по кругу»
+        human = not outcome.ok and outcome.content == HUMAN_BUSY
+        if human:
+            run.count -= 1
+        repeat = "" if human else self._repeat(run, call.name, args, outcome)
         # реплика человека посреди работы (модель узнаёт сразу, с ответом на это действие) и план (составлялся
         # параллельно) — до снимка окна: устаревшие снимки вырезаются (_prune), а они должны остаться
         head: list[str] = []
@@ -1618,15 +1622,17 @@ class Agent(BaseService):
             raise WindowChanged(
                 "впереди нет окна программы — открой её (launch_app) или переключись на окно (focus_window)"
             )
+        extra = private_windows.settings_list(self.ctx)
+        hidden = private_windows.private_reason(fg, extra)
+        if hidden:  # менеджер паролей и окна из «Не показывать ИИ» — ни ввода, ни нажатий, ни заголовка
+            raise UserFacingError(private_windows.hidden_text(fg, hidden))
         seen = run.snapshot is not None and run.snapshot.pid == fg.pid and run.snapshot.hwnd in (0, fg.hwnd)
         if target is not None and fg.pid != target.pid and fg.hwnd != target.hwnd and not (explicit and seen):
+            was = private_windows.shown_title(target, extra)
             raise WindowChanged(
-                f"активное окно сменилось: было «{target.title}», сейчас «{fg.title}» — ничего не сделано. "
-                f"Работать здесь — сделай ui_snapshot; вернуться — focus_window «{target.title}»"
+                f"активное окно сменилось: было «{was}», сейчас «{private_windows.shown_title(fg, extra)}» — "
+                f"ничего не сделано. Работать здесь — сделай ui_snapshot; вернуться — focus_window «{was}»"
             )
-        hidden = private_windows.private_reason(fg, private_windows.settings_list(self.ctx))
-        if hidden:  # менеджер паролей и окна из «Не показывать ИИ» — ни ввода, ни нажатий
-            raise UserFacingError(private_windows.hidden_text(fg, hidden))
         if not fg.foreground:  # впереди окно Jarvis (из него и дали задачу): вперёд — окно задачи
             await self.ctx.run_platform(self.ctx.platform.window_action, "focus", fg.hwnd)
             if self.settle_s:

@@ -196,21 +196,41 @@ def plan_needs_approval(task: Any, steps: list[dict[str, Any]], mode: str) -> bo
     return mode == "always" or len(steps) >= BIG_PLAN or bool(task.repeat)
 
 
-_PLAN_YES = ("начина", "да", "ок", "окей", "давай", "утвержда", "соглас", "поехали", "годится", "go", "yes")
-_PLAN_NO = ("отмен", "нет", "не надо", "стоп", "не начина", "no")
+# «да», «начинай», «ок, давай» — первое слово короткого ответа; «нет возражений», «не надо менять» — тоже «да»
+_PLAN_YES = frozenset(
+    {
+        "да", "ага", "угу", "ок", "окей", "ok", "okay", "yes", "go", "начинай", "начинайте", "начни",
+        "начать", "давай", "давайте", "поехали", "погнали", "вперед", "запускай", "утверждаю", "утверждено",
+        "согласен", "согласна", "согласны", "годится", "подходит",
+    }
+)  # fmt: skip
+_PLAN_FINE = re.compile(
+    r"\b(?:нет возражений|возражений нет|нет проблем|без проблем|все хорошо|все верно|все ок|устраивает|"
+    r"не надо менять|менять не надо|не нужно менять|ничего не менять)\b"
+)
+# отмена — только сам отказ, без продолжения: «нет, лучше через Яндекс» — правка плана
+_PLAN_NO = frozenset(
+    {"нет", "стоп", "отмена", "отмени", "отменить", "отменяй", "отмени задачу", "не надо", "не нужно",
+     "не начинай", "no", "stop", "cancel"}
+)  # fmt: skip
 _PLAN_BUT = re.compile(r"\b(?:но|только|сначала|кроме|без|добавь|убери|замени|поменяй|лучше|а также)\b")
 
 
 def plan_approved(answer: str) -> bool | None:
     """Ответ на «Утвердить план?»: True — начинать, False — отменить задачу, None — правка плана словами.
     Да или нет — только короткий ответ без оговорок: «да, но сначала сравни цены» и «нет, лучше через
-    Яндекс» — правки, а не «начинай» и не «отмени задачу»."""
+    Яндекс» — правки, а не «начинай» и не «отмени задачу»; «нет возражений» и «не надо менять» — «да»."""
     low = " ".join(re.sub(r"[^\w\s-]", " ", answer.casefold().replace("ё", "е")).split())
-    if not low or len(low.split()) > 3 or _PLAN_BUT.search(low):
+    words = low.split()
+    if not words or len(words) > 4:
         return None
-    if low.startswith(_PLAN_NO):
+    if _PLAN_FINE.search(low) and not _PLAN_BUT.search(low.replace("без проблем", "")):
+        return True
+    if len(words) > 3 or _PLAN_BUT.search(low):
+        return None
+    if low in _PLAN_NO:
         return False
-    if low.startswith(_PLAN_YES):
+    if words[0] in _PLAN_YES:
         return True
     return None
 

@@ -136,12 +136,14 @@ def moment(words: list[str], now: datetime | None = None) -> datetime | None:
     minute = 0
     exact = False
     night = False
+    said_today = False  # «сегодня в 2 ночи» — ближайшая ночь; «30 октября в 2 ночи» — ровно та дата
     part = 0
     i, n = 0, len(words)
     while i < n:
         w = words[i]
         if day is None and w in ("сегодня", "завтра", "послезавтра"):
             day = today + timedelta(days=("сегодня", "завтра", "послезавтра").index(w))
+            said_today = w == "сегодня"
             i += 1
         elif day is None and w in ("в", "во") and i + 1 < n and words[i + 1] in WEEKDAYS:
             weekday = WEEKDAYS[words[i + 1]]
@@ -188,7 +190,7 @@ def moment(words: list[str], now: datetime | None = None) -> datetime | None:
     at = datetime.combine(day or today, datetime.min.time()).replace(hour=hour, minute=minute)
     if not exact and at <= now and at + timedelta(hours=12) > now:
         at += timedelta(hours=12)  # «в 7» в три часа дня — это 19:00
-    if night and at <= now and (day is None or day == today):
+    if night and at <= now and (day is None or said_today):
         at += timedelta(days=1)  # «сегодня в 2 ночи», «в полночь» днём — ближайшая ночь
     if at <= now and not (day is not None and weekday < 0):  # «сегодня в 9 утра» в полдень — прошло
         at += timedelta(days=7 if weekday >= 0 else 1)

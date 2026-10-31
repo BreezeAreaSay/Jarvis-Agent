@@ -294,7 +294,13 @@ export function useChooseProvider() {
   return (p: Provider) => {
     if (!settings || settings.ai.provider === p.id) return;
     const keepModel = p.models.includes(settings.ai.model) || (!p.default_model && !p.models.length);
-    patch({ ai: { provider: p.id, model: keepModel ? settings.ai.model : p.default_model, base_url: "" } });
+    // модель фоновых задач — от прежнего провайдера: новому она не годится (снова «та же, что в чате»)
+    const taskModel = settings.background.model ?? "";
+    const keepTaskModel = !taskModel || p.models.includes(taskModel);
+    patch({
+      ai: { provider: p.id, model: keepModel ? settings.ai.model : p.default_model, base_url: "" },
+      ...(keepTaskModel ? {} : { background: { model: "" } }),
+    });
   };
 }
 

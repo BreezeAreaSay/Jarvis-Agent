@@ -5,7 +5,8 @@
 (вернуть окно), таймер, напоминание (удалить), открытую программу (закрыть). «Отмени» берёт самый свежий шаг
 не старше TTL_S; шагов нет — Ctrl+Z в активном окне, как раньше. «Закрой его» — последняя программа, которую
 Jarvis открыл (не раньше TTL_S назад); после сайта, папки или файла «его» — уже не программа. Программу,
-которая уже работала до «открой …», «отмени» не закрывает: она была открыта до команды.
+которая уже работала до «открой …», «отмени» не закрывает (и не тянется дальше назад — к программе, открытой
+раньше); «отмени» после «закрой его» открывает её снова.
 """
 
 import time
@@ -22,6 +23,7 @@ class Step:
     revert: Callable[[], Awaitable[None]]
     at: float
     key: str = ""  # «app:Spotify» — шаг можно убрать, когда его уже сделали иначе («закрой его»)
+    note: bool = False  # отменять нечего — сказать title как есть (а не «Отменил: …»), дальше назад не идти
 
 
 @dataclass
@@ -37,8 +39,10 @@ class UndoJournal:
         self._steps: list[Step] = []
         self._app: LastApp | None = None
 
-    def push(self, title: str, revert: Callable[[], Awaitable[None]], key: str = "") -> None:
-        self._steps.append(Step(title, revert, self.clock(), key))
+    def push(
+        self, title: str, revert: Callable[[], Awaitable[None]], key: str = "", *, note: bool = False
+    ) -> None:
+        self._steps.append(Step(title, revert, self.clock(), key, note))
         del self._steps[:-LIMIT]
 
     def discard(self, key: str) -> None:

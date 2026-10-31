@@ -5,8 +5,10 @@ import asyncio
 from typing import Any
 
 import httpx
+import pytest
 
-from jarvis.ai.policy import USERINFO, web_url
+from jarvis.ai import tools as chat_tools
+from jarvis.ai.policy import NO_HOST, USERINFO, web_url
 from jarvis.context import AppContext
 from jarvis.platform.base import WindowInfo
 from tests.ai.fakes import ScriptedLlm, completion, reply
@@ -98,3 +100,62 @@ async def test_backup_on_the_same_provider_is_used(ctx: AppContext, llm: Scripte
     llm.add(quota, ok)
     result = await ctx.ai.llm.chat([{"role": "user", "content": "Привет"}])  # type: ignore[attr-defined]
     assert result.content == "Запасной" and seen == ["gpt-5.4", "gpt-5.4-nano"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "url"),
+    [
+        ("https://\\gооgle.com\\login", "https://gооgle.com/login"),
+        ("https:///evil.example/?d=SECRET", "https://evil.example/?d=SECRET"),
+        ("https:\\\\evil.example", "https://evil.example"),
+        ("HTTPS:evil.example/x", "https://evil.example/x"),
+    ],
+)
+def test_extra_slashes_after_the_scheme_still_name_the_site(raw: str, url: str) -> None:
+    assert web_url(raw) == (url, "")  # браузер пропускает лишние «/» и «\\» — проверка видит тот же сайт
+
+
+def test_links_with_login_or_without_site_are_refused() -> None:
+    assert web_url("https:///google.com@evil.example/")[1] == USERINFO
+    assert web_url("https://")[1] == NO_HOST
+
+
+async def test_lookalike_behind_extra_slashes_is_asked(
+    ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked: list[str] = []
+
+    async def deny(env: Any, title: str, detail: str = "", **kw: Any) -> bool:
+        asked.append(f"{title} {detail}")
+        return False
+
+    monkeypatch.setattr(chat_tools, "confirm", deny)
+    env = chat_tools.ToolEnv(ctx, ctx.ai.web, "text", "", user_text="")  # type: ignore[attr-defined,arg-type]
+    tools = chat_tools.ToolRegistry(ctx).available("all")
+    out = await tools["open_url"].handler(env, {"url": "https:///gооgle.com/login"})
+    assert not out.ok and asked and "похоже на подделку" in asked[0]
+    assert not any(name == "open_url" for name, _ in ctx.platform.calls)  # type: ignore[attr-defined]
+
+
+async def test_window_change_to_hidden_window_names_no_title(ctx: AppContext) -> None:
+    from jarvis.ai.agent import AgentRun, WindowChanged
+    from jarvis.services import UserFacingError
+
+    platform: Any = ctx.platform
+    run = AgentRun(
+        id="r", task="Ответь в почте", source="text", chat_id="", turn_id="", reply_id="", speak=False
+    )
+    run.target = platform.windows[1]  # работал в Chrome
+    for w in platform.windows:
+        w.foreground = False
+    platform.windows.append(
+        WindowInfo(160, "Сбербанк — пароль — KeePass", "KeePass.exe", 9160, (0, 0, 800, 600), foreground=True)
+    )
+    try:
+        await ctx.agent._target(run)  # type: ignore[attr-defined]
+    except WindowChanged as e:
+        raise AssertionError(f"заголовок скрытого окна ушёл модели: {e}") from e
+    except UserFacingError as e:
+        assert "Сбербанк" not in str(e) and "скрыто от ИИ" in str(e)
+    else:
+        raise AssertionError("в скрытое окно не вводят")

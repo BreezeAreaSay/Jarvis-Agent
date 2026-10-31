@@ -401,10 +401,9 @@ async def _launch_app(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
             title=f"Открыть «{launched}»",
             detail="Окно пока не появилось",
         )
+    title = private_windows.shown_title(window, private_windows.settings_list(env.ctx))
     return ToolOutput(
-        f"Запущено: {launched} — открылось окно «{window.title}»",
-        title=f"Открыть «{launched}»",
-        detail="Открыто",
+        f"Запущено: {launched} — открылось окно «{title}»", title=f"Открыть «{launched}»", detail="Открыто"
     )
 
 

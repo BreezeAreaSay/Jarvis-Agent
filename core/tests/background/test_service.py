@@ -363,6 +363,13 @@ async def test_plan_edit_and_cancel_answers(bg: Bg) -> None:
         ("да, но сначала сравни цены на Ozon", None),  # оговорка — правка, а не «начинай»
         ("нет, лучше через Яндекс Маркет", None),  # и не «отмени задачу»
         ("добавь ещё М.Видео", None),
+        ("Нет возражений", True),  # не отмена
+        ("нет проблем", True),
+        ("Не надо менять", True),
+        ("нет, всё хорошо", True),
+        ("не надо", False),
+        ("дай подумать", None),
+        ("да, всё верно", True),
     ],
 )
 def test_plan_verdict_only_for_short_answers(answer: str, verdict: bool | None) -> None:
@@ -498,3 +505,14 @@ async def test_own_model_for_background_tasks(bg: Bg) -> None:
     task = service(ctx).create("Собери новости про ИИ")
     await until(lambda: task.status == "done")
     assert script.requests[0]["model"] == "gpt-5.4-mini"  # чат — на своей модели, долгая задача — на этой
+
+
+def test_task_model_of_another_provider_is_ignored(ctx: AppContext) -> None:
+    ctx.settings.patch({"background": {"model": "gpt-5.4-nano"}})
+    assert runner.task_model(ctx) == "gpt-5.4-nano"
+    ctx.settings.patch({"ai": {"provider": "deepseek"}})  # сменили провайдера — модель OpenAI ему не годится
+    assert runner.task_model(ctx) is None
+    ctx.settings.patch({"background": {"model": "deepseek-v4-flash"}})
+    assert runner.task_model(ctx) == "deepseek-v4-flash"
+    ctx.settings.patch({"background": {"model": "my-finetune-7b"}})  # своя, ни в одном списке — как есть
+    assert runner.task_model(ctx) == "my-finetune-7b"

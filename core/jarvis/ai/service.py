@@ -81,9 +81,20 @@ PRIVATE_PHRASE = re.compile(
     r"только\s+на\s+этом\s+(?:пк|компьютере))\s*[:,—–-]?\s*(?P<text>.+)$",
     re.I | re.S,
 )
-# в приватном ответе нет инструментов, которые ходят в интернет, и памяти: она уходит в каждый облачный запрос
+# в приватном ответе нет инструментов, которые ходят в интернет (картинки рисует облако), и тех, что пишут то,
+# что потом само уходит в каждый облачный запрос: память и дела на сегодня (Ai._active_context)
 NETWORK_TOOLS = frozenset(
-    {"web_search", "fetch_page", "get_weather", "get_news", "get_rates", "run_agent", "remember"}
+    {
+        "web_search",
+        "fetch_page",
+        "get_weather",
+        "get_news",
+        "get_rates",
+        "run_agent",
+        "remember",
+        "generate_image",
+        "add_task",
+    }
 )
 _IMAGE_URL = re.compile(r"^data:image/(?:png|jpe?g|webp|gif);base64,", re.I)
 
@@ -552,6 +563,22 @@ class Ai(BaseService):
             self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
             await self.ctx.dispatcher.stop()
             return {"chat_id": chat_id, "message_id": row["id"], "reply_id": run.reply_id}  # type: ignore[union-attr]
+        private = PRIVATE_PHRASE.match(text or "")
+        if private is not None and private["text"].strip(" .,:"):
+            # «приватно: …» из окна чата — как голосом и в Telegram: только модель на этом ПК, не агенту
+            problem = self.llm.private_problem()
+            if problem:
+                raise UserFacingError(problem)
+            turn = self._begin(
+                private["text"].strip(),
+                chat_id=chat_id,
+                source=source,
+                mode="chat",
+                images=images,
+                private=True,
+            )
+            self.ctx.spawn(self._spawn(turn), f"chat-{turn.chat_id}")
+            return {"chat_id": turn.chat_id, "message_id": turn.user_id, "reply_id": turn.reply_id}
         if working and agent.interject(text, source):  # type: ignore[union-attr]
             row = self.chats.add_message(chat_id, "user", text.strip())
             self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
@@ -622,7 +649,7 @@ class Ai(BaseService):
             raise UserFacingError("Пустое сообщение")
         chat = self._chat_for(chat_id, source, mode)
         agent_task = agent_task.strip()
-        found = AGENT_PHRASE.match(text)
+        found = AGENT_PHRASE.match(text) if not private else None  # агент работает облачной моделью
         if not agent_task and found and found["task"].strip():
             agent_task = found["task"].strip()
         if agent_task:

@@ -276,19 +276,34 @@ USERINFO = (
 )
 
 
+NO_HOST = "Ошибка: в адресе нет имени сайта"
+# «https:», за ним сколько угодно «/» и «\\» (и ни одного): браузер всё это пропускает — «https:///сайт»,
+# «https:\\\\сайт» и «https:сайт» для него «https://сайт»
+_WEB_HEAD = re.compile(r"^(https?):[\\/]*", re.IGNORECASE)
+
+
 def web_url(url: str) -> tuple[str, str]:
-    """Адрес http(s) так, как его поймёт браузер: «\\» — это «/» (иначе Python и браузер видят разные сайты:
-    «https://evil.example\\@google.com» — для браузера evil.example); «логин@» перед сайтом — ошибка.
-    Вернёт (адрес, ошибка)."""
-    head, sep, rest = url.partition("://")
-    if not sep:
-        return url, ""
-    url = head + sep + rest.replace("\\", "/")
+    """Адрес http(s) так, как его поймёт браузер: «\\» — это «/», лишние «/» после «https:» не в счёт (иначе
+    Python и браузер видят разные сайты: «https://evil.example\\@google.com» и «https:///evil.example» — для
+    браузера evil.example, а для проверки имени сайта — другое или пустое имя); «логин@» перед сайтом и адрес
+    без имени сайта — ошибка. Вернёт (адрес, ошибка)."""
+    text = url.strip()
+    head = _WEB_HEAD.match(text)
+    if head is not None:
+        url = f"{head.group(1).lower()}://" + text[head.end() :].replace("\\", "/")
+    else:
+        scheme, sep, rest = text.partition("://")
+        if not sep:
+            return url, ""
+        url = scheme + sep + rest.replace("\\", "/")
     try:
         parsed = urlparse(url)
+        host = parsed.hostname or ""
         userinfo = parsed.username is not None or parsed.password is not None
     except ValueError:
         return url, "Ошибка: адрес не разобрать"
+    if head is not None and not host:
+        return url, NO_HOST
     return url, USERINFO if userinfo else ""
 
 

@@ -588,9 +588,14 @@ class Executor:
         """Открытую программу — для «закрой его» и «отмени» (закрыть её). Уже работавшую до команды «отмени»
         не закрывает (undo=False): её открыли не сейчас."""
         self.undo.remember_app(value, name)
-        if not undo:
-            return
         key = self.undo.app_key(value)
+        if not undo:  # «отмени» — не закрывать её и не тянуться к программе, открытой раньше
+
+            async def keep() -> None:
+                return None
+
+            self.undo.push(f"{name} был открыт и до команды — закрывать не стал", keep, key, note=True)
+            return
 
         async def close() -> None:
             found = self.service.apps.resolve(value)
@@ -606,7 +611,20 @@ class Executor:
         target, _ = self._app_target(app.target, st)
         closed = await self._platform(self.ctx.platform.close_app, target)
         self.undo.forget_app()
-        self.undo.discard(self.undo.app_key(app.target))  # «отмени» не закроет её второй раз
+        key = self.undo.app_key(app.target)
+        self.undo.discard(key)  # «отмени» не закроет её второй раз — а откроет снова
+
+        async def reopen() -> None:
+            found = self.service.apps.resolve(app.target)
+            again = found.app_id if found is not None else app.target
+            if _URI.match(again) and not _DRIVE.match(again):
+                await self._platform(self.ctx.platform.open_url, again)
+            else:
+                await self._platform(self.ctx.platform.launch, again, "")
+            self.undo.remember_app(app.target, app.name)
+
+        if closed:
+            self.undo.push(f"{app.name} снова открыт", reopen, key)
         if not closed:
             raise UserFacingError(f"{app.name} уже закрыт")
         st.info(f"Закрыл {app.name}", "Закрыл")
@@ -620,7 +638,10 @@ class Executor:
             st.info("Отменил последнее действие в окне (Ctrl+Z)", "Отменил")
             return
         await step.revert()
-        st.info(f"Отменил: {step.title}", "Отменил")
+        if step.note:  # отменять нечего: программа была открыта и до «открой …»
+            st.info(step.title, "Нечего отменять")
+        else:
+            st.info(f"Отменил: {step.title}", "Отменил")
         st.data["undone"] = step.title
 
     def _app_target(self, value: str, st: RunState) -> tuple[str, str]:

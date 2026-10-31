@@ -68,6 +68,14 @@ def test_moment_night_and_long_phrases(text: str, moment: datetime) -> None:
     assert parse_text(text, FRIDAY) == moment
 
 
+def test_night_with_a_named_date_or_weekday_keeps_that_day() -> None:
+    late = datetime(2026, 10, 30, 3, 0)  # пятница, 3 часа ночи
+    assert when.moment(["30", "октября", "в", "2", "ночи"], late) == datetime(2026, 10, 30, 2, 0)  # прошло
+    assert parse_text("30 октября в 2 ночи", late) is None
+    assert parse_text("в пятницу в 2 ночи", late) == datetime(2026, 11, 6, 2, 0)  # следующая пятница
+    assert parse_text("сегодня в 2 ночи", FRIDAY) == datetime(2026, 10, 31, 2, 0)  # сказано днём
+
+
 def test_past_time_is_still_a_time_phrase() -> None:
     words = ["сегодня", "в", "9", "утра"]
     assert parse_moment(words, FRIDAY) is None and when.moment(words, FRIDAY) == datetime(2026, 10, 30, 9)
@@ -196,9 +204,11 @@ def test_journal_limits() -> None:
 
 async def test_undo_does_not_close_an_app_that_was_already_running(cmds: Commands, ctx: AppContext) -> None:
     assert ctx.platform.is_running("Spotify.exe")  # окно Spotify открыто до команды
+    await run(cmds, "открой блокнот")
     await run(cmds, "открой спотифай")
-    result = await run(cmds, "отмени")
-    assert result.message == "Отменил последнее действие в окне (Ctrl+Z)" and not calls(ctx, "close_app")
+    result = await run(cmds, "отмени")  # не закрывает ни Spotify, ни открытый раньше Блокнот
+    assert result.message == "Spotify был открыт и до команды — закрывать не стал"
+    assert not calls(ctx, "close_app")
     closed = await run(cmds, "закрой его")  # сказано прямо — закрываем
     assert closed.ok and calls(ctx, "close_app") == [("Spotify.exe",)]
 
@@ -206,9 +216,10 @@ async def test_undo_does_not_close_an_app_that_was_already_running(cmds: Command
 async def test_close_it_then_undo_does_not_close_again(cmds: Commands, ctx: AppContext) -> None:
     await run(cmds, "открой телеграм")
     await run(cmds, "закрой его")
-    result = await run(cmds, "отмени")
-    assert result.message == "Отменил последнее действие в окне (Ctrl+Z)"
-    assert calls(ctx, "close_app") == [("Telegram.exe",)]
+    launches = len(calls(ctx, "launch"))
+    result = await run(cmds, "отмени")  # «верни как было» — открыть снова, а не закрыть второй раз
+    assert result.message == "Отменил: Telegram снова открыт"
+    assert calls(ctx, "close_app") == [("Telegram.exe",)] and len(calls(ctx, "launch")) == launches + 1
 
 
 async def test_site_or_folder_after_app_is_not_it(cmds: Commands, ctx: AppContext) -> None:

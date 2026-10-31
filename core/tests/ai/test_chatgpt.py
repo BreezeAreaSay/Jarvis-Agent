@@ -83,7 +83,7 @@ async def test_install_then_existing_login_is_picked_up(ctx: AppContext, events:
         assert events.of("ai.configured")[-1] == {"configured": True}
         status = await gpt.status()
         assert status["installed"] and status["logged_in"] and status["version"] == "0.163.0"
-        assert status["account"] == "tony@stark.com (ChatGPT Plus)" and status["error"] == ""
+        assert status["account"] == "tony@stark.example (ChatGPT Plus)" and status["error"] == ""
         assert await gpt.install() == {"ok": True, "installed": True}
         config = world.runtime.config
         assert config.env["CODEX_HOME"].endswith("codex-home") and config.cwd.endswith("chatgpt")
@@ -133,7 +133,7 @@ async def test_login_in_browser_then_logout(ctx: AppContext, codex: Codexes, eve
 
     codex.login_result.put({"success": True, "loginId": "login-1"})
     await until(lambda: events.of("ai.chatgpt")[-1]["state"] == "logged_in")
-    assert events.of("ai.chatgpt")[-1]["account"] == "tony@stark.com (ChatGPT Plus)"
+    assert events.of("ai.chatgpt")[-1]["account"] == "tony@stark.example (ChatGPT Plus)"
     assert ctx.ai.configured is True
     status = await gpt.status()
     assert status["logged_in"] and "login_pending" not in status
@@ -637,8 +637,12 @@ async def test_agent_step_limit_and_screenshot(
         assert shot["contentItems"][0]["text"].startswith("Снимок окна приложен")
         t.call("ui_snapshot", {})
         t.call("ui_snapshot", {})
+        # лимит: ещё три вызова — просьба закончить, потом — остановка, и Codex прерывается
+        for _ in range(3):
+            assert text_of(t.call("ui_snapshot", {})).startswith("Лимит шагов исчерпан")
+        assert "не уложился в 3 шагов" in text_of(t.call("ui_snapshot", {}))
         refused = t.call("ui_snapshot", {})
-        assert text_of(refused) == "Лимит шагов (3) исчерпан"
+        assert text_of(refused) == "Лимит шагов (6) исчерпан"
         assert t.wait_interrupt()
 
     codex.add(answer('{"steps": []}'), work)
@@ -700,7 +704,7 @@ def test_chatgpt_api_routes(client: TestClient) -> None:
     assert client.post("/api/ai/chatgpt/login/cancel").json() == {"ok": True}
     world.account = dict(ACCOUNT)
     status = client.get("/api/ai/chatgpt").json()
-    assert status["logged_in"] is True and status["account"] == "tony@stark.com (ChatGPT Plus)"
+    assert status["logged_in"] is True and status["account"] == "tony@stark.example (ChatGPT Plus)"
     assert client.get("/api/status").json()["ai"]["configured"] is True
 
     providers = {p["id"]: p for p in client.get("/api/ai/providers").json()["items"]}

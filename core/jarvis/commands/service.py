@@ -74,7 +74,11 @@ class Commands(BaseService):
         self._apps_tried_at = 0.0  # последняя попытка прочитать «Пуск» (после ошибки — не чаще раза в минуту)
         self._desks: tuple[float, list[str]] = (0.0, [])
         self._matcher = Matcher(
-            {"app": self._resolve_app, "site": self._resolve_site, "desk": self._resolve_desk},
+            {
+                "app": self._resolve_app,
+                "site": self._resolve_site,
+                "desk": self._resolve_desk,
+            },
             self._wake_words,
         )
         self._rebuild()
@@ -124,7 +128,7 @@ class Commands(BaseService):
                 entries[e.id] = e
 
             for item in builtin_commands():
-                add(entry(item.command, "builtin", exclude=item.exclude))
+                add(entry(item.command, "builtin", exclude=item.exclude, no_question=item.no_question))
             for pack_id in settings.packs:
                 pack = self.packs.get(pack_id)
                 if pack is None:
@@ -216,7 +220,19 @@ class Commands(BaseService):
 
     def match(self, text: str) -> CommandMatch | None:
         self._refresh_apps_if_stale()
-        return self._matcher.match(self._index, text)
+        found = self._matcher.match(self._index, text)
+        if found is None or "?" not in text or all(self._informational(p.command_id) for p in found.parts):
+            return found
+        # «открыть браузер?», «выключить компьютер?», «можешь закрыть окно?» — вопрос, а не просьба: действие
+        # не выполняем, отвечает ИИ; справки («какая погода?», «сколько времени?») — как обычно
+        return None
+
+    def _informational(self, command_id: str) -> bool:
+        """Команда только сообщает (время, погода, громкость, напоминания) и ничего не меняет."""
+        entry = self._entries.get(command_id)
+        if entry is None or entry.handler is not None:
+            return False
+        return all(a.type in INFO_ACTIONS for a in entry.command.actions)
 
     # --- выполнение -------------------------------------------------------------------------------
     async def execute(self, match: CommandMatch, source: Source) -> ExecResult:
@@ -626,3 +642,20 @@ def _combine(results: list[ExecResult], parts: list[MatchedPart]) -> ExecResult:
     return ExecResult(
         ok, title, message, icon=results[0].icon, say=". ".join(says), command_ids=ids, data=data
     )
+
+
+# действия, которые только сообщают: такую команду можно и вопросом («какая погода?»)
+INFO_ACTIONS = frozenset(
+    {
+        "Info.Time",
+        "Info.Date",
+        "Info.Weather",
+        "Info.Volume",
+        "Info.Media",
+        "Info.Battery",
+        "Info.System",
+        "Jarvis.Reminders",
+        "Jarvis.Briefing",
+        "Speak",
+    }
+)

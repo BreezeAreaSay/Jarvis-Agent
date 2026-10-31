@@ -2,6 +2,7 @@
 import {
   CircleArrowUp,
   Download,
+  Stethoscope,
   ExternalLink,
   FolderOpen,
   Info,
@@ -23,6 +24,73 @@ import { RELEASES_URL, type UpdateState, updates, useUpdates } from "@/lib/updat
 import { useApp } from "@/store/app";
 import { Button, Card, Modal, notify, notifyError, Setting, Toggle } from "@/ui";
 import { CopyButton, KeyCapture, ProgressBar, useApi, useSettingsPatch } from "../kit";
+
+interface DiagnosticsItem {
+  id: string;
+  title: string;
+  status: "ok" | "warn" | "fail" | "off";
+  detail: string;
+  hint: string;
+  action: string;
+}
+
+/** «Диагностика»: состояние частей Jarvis и отчёт для сообщения о проблеме (GET /api/diagnostics). */
+function DiagnosticsCard() {
+  const q = useApi<{ items: DiagnosticsItem[]; report: string }>("/api/diagnostics");
+  const [busy, setBusy] = useState(false);
+  const items = q.data?.items ?? [];
+  const resetCrashes = async () => {
+    setBusy(true);
+    try {
+      await api.post("/api/diagnostics/crashes/reset");
+      await q.reload();
+      notify("Попробую снова: эти части загрузятся при следующем использовании");
+    } catch (e) {
+      notifyError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card
+      icon={<Stethoscope />}
+      title="Диагностика"
+      sub="Что работает и что нет. Отчёт без ключей и имени пользователя — для сообщения о проблеме"
+      actions={
+        <div className="row" style={{ gap: 6 }}>
+          {q.data && <CopyButton text={q.data.report} label="Скопировать отчёт" />}
+          <Button size="sm" variant="ghost" icon={<RefreshCw />} onClick={() => void q.reload()}>
+            Обновить
+          </Button>
+        </div>
+      }
+    >
+      {!q.data && !q.error && (
+        <div className="row faint small" style={{ padding: 10 }}>
+          <span className="spinner" /> Проверяю…
+        </div>
+      )}
+      {q.error && <div className="faint small">Диагностика недоступна: {q.error.message}</div>}
+      <div className="diag-list">
+        {items.map((i) => (
+          <div key={i.id} className={`diag-item diag-${i.status}`}>
+            <span className={`status-dot ${i.status === "ok" ? "ok" : i.status === "fail" ? "err" : i.status === "warn" ? "warn" : ""}`} />
+            <div className="grow">
+              <div className="diag-title">{i.title}</div>
+              <div className="diag-detail">{i.detail}</div>
+              {i.hint && <div className="diag-hint">{i.hint}</div>}
+            </div>
+            {i.action === "reset" && (
+              <Button size="sm" variant="ghost" icon={<RotateCcw />} disabled={busy} onClick={() => void resetCrashes()}>
+                Попробовать снова
+              </Button>
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
 
 interface Status {
   version: string;
@@ -230,6 +298,8 @@ const SECTION_NAMES: Record<string, string> = {
   disabled_commands: "Выключенные команды",
 };
 
+const LICENSE_URL = "https://polyformproject.org/licenses/noncommercial/1.0.0";
+
 function AboutCard() {
   const version = useApp((s) => s.version);
   const platform = useApp((s) => s.platform);
@@ -239,7 +309,7 @@ function AboutCard() {
       <div className="about">
         <LogoMark size={52} />
         <div className="grow">
-          <div className="about-name">Jarvis 2.0</div>
+          <div className="about-name">Jarvis</div>
           <div className="faint small">Голосовой ассистент для Windows</div>
         </div>
         <div className="about-grid">
@@ -251,6 +321,10 @@ function AboutCard() {
           <span>{PLATFORMS[platform] ?? (platform || "—")}</span>
           <span className="faint">Работает</span>
           <span>{status.data ? fmtUptime(status.data.uptime_s) : "—"}</span>
+          <span className="faint">Лицензия</span>
+          <button type="button" className="link-btn" onClick={() => bridge.openExternal(LICENSE_URL)} title="Бесплатно для некоммерческого использования">
+            PolyForm Noncommercial 1.0.0
+          </button>
         </div>
       </div>
     </Card>
@@ -437,6 +511,7 @@ export default function SystemSection() {
       </Card>
 
       <DataCard />
+      <DiagnosticsCard />
       <AboutCard />
     </div>
   );

@@ -73,6 +73,9 @@ class VoiceSettings(_Model):
     earcons: bool = True  # короткие звуки «слушаю», «готово», «ошибка»
     max_utterance_s: int = Field(15, ge=3, le=60)
     confirm_by_voice: bool = True  # «да/нет» голосом для подтверждений команд
+    # необратимое (отправить, оплатить, удалить, ввести пароль…) разрешать и голосовым «да» — по умолчанию
+    # только кнопкой: голос могут подслушать или распознать неверно (jarvis/confirm.py)
+    confirm_high_by_voice: bool = False
     speak_confirmations: Literal["short", "off"] = "short"  # озвучивать итог команд («Готово, сэр»)
     # приветствие, когда человек вернулся к компьютеру (jarvis.voice.presence): off — нет, news — только если
     # есть что сказать (напоминания), always — всегда; молчит над играми, в звонках и в тихом режиме
@@ -100,6 +103,7 @@ class TtsSettings(_Model):
     speed: float = Field(1.0, ge=0.5, le=2.0)
     pitch: float = Field(1.0, ge=0.8, le=1.2)
     effect: float = Field(0.35, ge=0.0, le=1.0)  # «электроника» в голосе
+    stress_dict: bool = True  # голос Jarvis (piper): ударения и «ё» по словарю Jarvis (jarvis.voice.stress)
     volume: int = Field(100, ge=0, le=100)
     output_device: str = ""
 
@@ -155,12 +159,23 @@ class AiSettings(_Model):
     agent_confirm: Literal["risky", "always"] = "risky"
     max_agent_steps: int = Field(25, ge=3, le=100)
     agent_notes: bool = True  # агент запоминает, что не сработало в программе (ai/lessons.py)
+    # пароли, ключи API, номера карт и закрытые ключи в тексте — маской, прежде чем он уйдёт облачной модели
+    # (ChatGPT, Claude, ключ API не на этом ПК); модели на этом ПК (Ollama, LM Studio) видят как есть
+    mask_secrets: bool = True
+    # окна, которые ИИ не видит и где агент не работает (кроме менеджеров паролей — они скрыты всегда):
+    # программа («keepass», «telegram.exe») или слово из заголовка окна (jarvis/ai/private_windows.py)
+    private_apps: list[str] = Field(default_factory=list)
     agent_journal: bool = True  # шаги агента и снимки экрана — в журнал на этом компьютере (ai/journal.py)
     # браузер Jarvis: свой профиль Chrome или Edge, агент работает со страницами по CDP (ai/browser)
     browser: bool = False
     browser_app: Literal["auto", "chrome", "edge"] = "auto"
     monthly_budget: float = Field(0.0, ge=0.0)  # лимит расходов в месяц, $; 0 — без лимита
     folder_id: str = ""  # ID каталога Yandex Cloud (для YandexGPT)
+    # запасной ИИ (по ключу API или на этом ПК): основной не отвечает (квота, лимит подписки, регион, сбой,
+    # нет связи) — отвечает он, основной какое-то время не зовётся (ai/llm.py, OUTAGE_COOLDOWN); "" — нет
+    fallback_provider: AiProvider | Literal[""] = ""
+    fallback_model: str = ""  # пусто — модель провайдера по умолчанию
+    fallback_base_url: str = ""  # пусто — адрес провайдера по умолчанию
     # разрешения инструментов ИИ по имени: allow / ask / deny; auto или нет записи — по риску (ai/policy.py)
     tool_policy: dict[str, Literal["auto", "allow", "ask", "deny"]] = Field(default_factory=dict)
 
@@ -180,6 +195,29 @@ class AiSettings(_Model):
         if value is False or value is None:
             return "auto"
         return value
+
+
+NotifyChannel = Literal["toast", "voice", "telegram"]
+
+
+class BackgroundSettings(_Model):
+    """Фоновые задачи (jarvis/background): хранилище заметок, очередь, самостоятельность, уведомления."""
+
+    vault: str = ""  # хранилище Obsidian (папка); пусто — найти самому, нет Obsidian — Документы\Jarvis
+    folder: str = "Jarvis"  # своя папка агента в хранилище: пишет он только сюда
+    read_vault: bool = True  # читать и искать всё хранилище (иначе — только свою папку)
+    inbox: bool = True  # строки в «Входящие.md» своей папки — новые задачи (jarvis.background.inbox)
+    parallel: int = Field(2, ge=1, le=4)  # сколько задач идёт одновременно
+    # самостоятельность: careful — спрашивать чаще, normal — неясное и необратимое, bold — деньги и вход
+    autonomy: Literal["careful", "normal", "bold"] = "normal"
+    # первый план задачи — человеку на утверждение: big — план из 4+ шагов или повторяющаяся задача
+    approve_plan: Literal["never", "big", "always"] = "big"
+    max_steps: int = Field(150, ge=10, le=1000)  # действий на задачу
+    max_hours: float = Field(4.0, ge=0.25, le=48.0)  # часов работы на задачу (без ожидания ответа)
+    # модель фоновых задач по ключу API (подешевле — для долгих задач); пусто — та же, что в чате
+    model: str = Field("", max_length=200)
+    notify_question: list[NotifyChannel] = Field(default_factory=lambda: ["toast"])  # есть вопрос
+    notify_done: list[NotifyChannel] = Field(default_factory=lambda: ["toast"])  # задача закончена
 
 
 class AvatarSettings(_Model):
@@ -233,6 +271,7 @@ class Settings(_Model):
     voice: VoiceSettings = Field(default_factory=VoiceSettings)
     tts: TtsSettings = Field(default_factory=TtsSettings)
     ai: AiSettings = Field(default_factory=AiSettings)
+    background: BackgroundSettings = Field(default_factory=BackgroundSettings)
     avatar: AvatarSettings = Field(default_factory=AvatarSettings)
     system: SystemSettings = Field(default_factory=SystemSettings)
     remote: RemoteSettings = Field(default_factory=RemoteSettings)
@@ -329,6 +368,7 @@ class SettingsStore:
 
 SECRET_NAMES = (
     "ai_api_key",  # ключ выбранного провайдера ИИ
+    "ai_fallback_api_key",  # ключ запасного провайдера ИИ (settings.ai.fallback_provider)
     "openai_api_key",  # ключ OpenAI для голоса (если ИИ — другой провайдер)
     "fish_api_key",
     "elevenlabs_api_key",  # голоса ElevenLabs

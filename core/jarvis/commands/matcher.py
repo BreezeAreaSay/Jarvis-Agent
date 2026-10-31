@@ -4,9 +4,10 @@
 слотов сравниваются целиком (точно, по основам слов и нечётко — rapidfuzz по заранее подготовленным строкам),
 шаблоны со слотами — выравниванием по словам: слова шаблона сравниваются нечётко, слот забирает часть фразы
 ({number} — число, {app} — программа, {site} — сайт, {desk} — стол, {text}/{query} — свободный хвост,
-{keys} — клавиши словами). Фраза из нескольких команд («сверни все окна и включи музыку») делится на части,
-только если каждая часть — команда со «Связывать»; без запятых и «и» («включи музыку открой вс код») — ещё и
-перед повелительным глаголом, если целиком фраза ни на что не похожа.
+{keys} — клавиши словами, {when} — время напоминания словами: «завтра в 9», jarvis.commands.when). Фраза
+из нескольких команд («сверни все окна и включи музыку») делится на части, только если каждая часть — команда
+со «Связывать»; без запятых и «и» («включи музыку открой вс код») — ещё и перед повелительным глаголом, если
+целиком фраза ни на что не похожа.
 
 Лишние слова снижают похожесть, поэтому вопросы и длинные просьбы уходят к ИИ.
 """
@@ -21,7 +22,7 @@ from typing import Any
 from rapidfuzz import fuzz, process
 
 from jarvis.commands import keys as keyops
-from jarvis.commands import numbers
+from jarvis.commands import numbers, when
 from jarvis.commands.model import Entry
 from jarvis.commands.textutil import (
     ANYWHERE_FILLERS,
@@ -47,7 +48,7 @@ FREE_SLOT_PENALTY = 5.0
 MAX_PARTS = 6
 
 SLOT_RE = re.compile(r"\{(\w+)\}")
-KNOWN_SLOTS = frozenset({"number", "app", "site", "desk", "text", "query", "keys"})
+KNOWN_SLOTS = frozenset({"number", "app", "site", "desk", "text", "query", "keys", "when"})
 FREE_SLOTS = frozenset({"text", "query"})
 NAMED_SLOTS = frozenset({"app", "site", "desk"})
 SOFT_WORDS = frozenset(
@@ -66,6 +67,28 @@ _VERB_SPLIT = re.compile(
     r"убавь|прибавь|увеличь|уменьши|выдели|скопируй|вставь|удали|сохрани|найди)(?!\w))",
     re.IGNORECASE,
 )
+
+# запрос поиска («найди {query}») не забирает составное дело: «найди отели и забронируй самый дешёвый»,
+# «найди файл и отправь его» — это задача агенту, а не поиск в браузере
+_TASK_TAIL = re.compile(
+    r"(?:^|\s)(?:и|а|потом|затем|после)\s+(?:перешли|отправь|пошли|скинь|напиши|позвони|удали|сохрани|"
+    r"забронируй|купи|закажи|оплати|переведи|открой|запусти|включи|выключи|закрой|скачай|установи|"
+    r"прочитай|сравни|выбери|запиши|добавь)(?!\w)"
+)
+
+
+# «напомни, что у меня завтра в 9», «напомни, во сколько встреча в пятницу» — это вопрос, а не текст
+# напоминания: такие фразы решает ИИ
+def _asks(text: str) -> bool:
+    words = text.split()
+    while words and words[0] in ("мне", "нам", "ну", "пожалуйста"):
+        words.pop(0)
+    if not words:
+        return False
+    return words[0] in QUESTION_WORDS or (
+        words[0] in ("в", "во") and len(words) > 1 and words[1] in QUESTION_WORDS
+    )
+
 
 # слот → (значения слотов, похожесть 0..100) или None
 SlotResolver = Callable[[str], tuple[dict[str, Any], float] | None]
@@ -111,8 +134,8 @@ def compile_template(phrase: str) -> Template | None:
     for i, part in enumerate(parts):
         if i % 2:
             name = part if part in KNOWN_SLOTS else "text"
-            if tokens and tokens[-1].kind == "slot":
-                continue  # два слота подряд не разделить — оставляем первый
+            if tokens and tokens[-1].kind == "slot" and "when" not in (name, tokens[-1].value):
+                continue  # два слота подряд не разделить — оставляем первый (время {when} знает свои границы)
             tokens.append(Token("slot", name))
         else:
             tokens.extend(Token("lit", w, w in SOFT_WORDS) for w in normalize(part).split())
@@ -291,6 +314,8 @@ class Matcher:
             entry = index.entries[cand.entry_idx]
             if entry.exclude and any(w.startswith(ex) for w in words for ex in entry.exclude):
                 continue
+            if entry.no_question and _asks(str(cand.slots.get("text") or "")):
+                continue
             limit = need if cand.score < 100 else 0.0
             if long_phrase and not cand.free_slot and cand.score < 100:
                 limit = max(limit, LONG_THRESHOLD)
@@ -427,13 +452,28 @@ class Matcher:
             return
         if name in FREE_SLOTS:
             for end in [n] if last else range(wi + 1, n):
-                yield end, {name: " ".join(words[wi:end])}, 100.0
+                value = " ".join(words[wi:end])
+                if name == "query" and _TASK_TAIL.search(value):
+                    continue
+                yield end, {name: value}, 100.0
             return
         if name == "keys":
             for end in [n] if last else range(wi + 1, min(n, wi + 6) + 1):
                 combo = keyops.parse_spoken(" ".join(words[wi:end]))
                 if combo:
                     yield end, {"keys": combo}, 100.0
+            return
+        if name == "when":
+            # время — только целиком: самая длинная фраза времени с этого слова («в 7 вечера», а не «в 7»)
+            key = ("when", wi, n)
+            if key not in cache:
+                end = when.longest_at(words, wi)
+                cache[key] = ({"when": " ".join(words[wi:end])}, float(end)) if end is not None else None
+            found = cache[key]
+            if found is not None:
+                end = int(found[1])
+                if not last or end == n:
+                    yield end, found[0], 100.0
             return
         resolver = self.resolvers.get(name)
         if resolver is None:

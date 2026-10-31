@@ -474,3 +474,55 @@ def test_elevenlabs_mode_needs_no_gigaam_download() -> None:
     settings = Settings.model_validate({"voice": {"asr_model": "elevenlabs"}})
     ids = ModelManager.required_ids(settings)
     assert "gigaam-v3" not in ids and "vosk-small" in ids and "silero-vad" in ids
+
+
+class FakeHook:
+    """Хук «держи и говори» без pynput: жив ли поток и сколько не слышал нажатий — как скажет тест."""
+
+    made: list["FakeHook"] = []
+
+    def __init__(self, key: str, *callbacks: Any) -> None:
+        self.down, self.running, self.quiet = False, True, 0.0
+        FakeHook.made.append(self)
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        self.running = False
+
+    def alive(self) -> bool:
+        return self.running
+
+    def silent_for(self) -> float:
+        return self.quiet
+
+
+async def test_ptt_hook_is_reinstalled_when_windows_drops_it(
+    rig: Rig, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis.voice import service as voice_service
+
+    voice = rig.voice
+    FakeHook.made.clear()
+    monkeypatch.setattr(voice_service, "PttHook", FakeHook)
+    monkeypatch.setattr(voice_service, "PTT_CHECK_S", 0.01)
+    ctx.settings.patch({"voice": {"ptt_key": "right ctrl"}})
+    await voice.start()  # хук и его сторож
+    first = FakeHook.made[-1]
+    await asyncio.sleep(0.05)
+    assert voice._ptt is first  # жив и человек не печатает — не трогаем
+    monkeypatch.setattr(ctx.platform, "idle_seconds", lambda: 1.0)  # человек печатает…
+    first.quiet = voice_service.PTT_SILENT_S + 1  # …а хук давно ничего не слышал — Windows его сняла
+    for _ in range(100):
+        if voice._ptt is not first:
+            break
+        await asyncio.sleep(0.01)
+    assert voice._ptt is not first and not first.running and voice._ptt is FakeHook.made[-1]
+    second = FakeHook.made[-1]
+    second.running = False  # поток хука умер
+    for _ in range(100):
+        if voice._ptt is not second:
+            break
+        await asyncio.sleep(0.01)
+    assert voice._ptt is not second

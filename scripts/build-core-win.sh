@@ -54,6 +54,17 @@ if command -v "$PYTHON_HOST" >/dev/null; then
   "$PYTHON_HOST" -m compileall -q -j 0 "$OUT/app/jarvis" || true
 fi
 
+# словарь ударений и «ё» голоса Jarvis (scripts/ru_dict, свои лицензии — LICENSE.md там же): собирается из
+# закреплённых по SHA-256 исходников; ядро ставит его голосу piper само. SKIP_RU_DICT=1 — без словаря
+if [ "${SKIP_RU_DICT:-}" != "1" ]; then
+  echo "==> Словарь ударений голоса"
+  PYTHON_DICT="$PYTHON_HOST"
+  command -v "$PYTHON_DICT" >/dev/null || PYTHON_DICT=python3
+  "$PYTHON_DICT" "$ROOT/scripts/ru_dict/build_ru_dict.py" --out "$CACHE/voice"
+  mkdir -p "$OUT/app/jarvis/resources/voice"
+  cp "$CACHE/voice/ru_dict" "$CACHE/voice/ru_dict.json" "$CACHE/voice/LICENSE.md" "$OUT/app/jarvis/resources/voice/"
+fi
+
 # удалить кэши байткода зависимостей другой платформы и лишнее (обёртки консольных скриптов — ядру не нужны)
 rm -rf "$OUT/python/Lib/site-packages/Scripts" "$OUT/python/Lib/site-packages/bin"
 find "$OUT/python/Lib/site-packages" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
@@ -61,3 +72,5 @@ find "$OUT/python/Lib/site-packages" -path '*/tests/*' -name '*.py' -delete 2>/d
 
 du -sh "$OUT/python" "$OUT/app" | sed 's/^/    /'
 echo "==> Готово: $OUT"
+# самопроверку (python -m jarvis --selftest --strict) запускает сборка на Windows — scripts/build-win.ps1:
+# здесь Python для Windows не запустить

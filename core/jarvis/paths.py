@@ -17,6 +17,11 @@ def set_data_dir(path: str | Path | None) -> None:
     _override = Path(path) if path else None
 
 
+def overridden() -> bool:
+    """Каталог данных задан явно (--data-dir, тесты): чужие папки человека (хранилище Obsidian) не трогаем."""
+    return _override is not None
+
+
 def data_dir() -> Path:
     if _override is not None:
         root = _override

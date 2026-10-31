@@ -51,6 +51,7 @@ from jarvis.ai.providers import PRESETS
 from jarvis.ai.tools import Tool, ToolEnv
 from jarvis.ai.web import site_name
 from jarvis.db import new_id
+from jarvis.redact import outgoing as _mask
 from jarvis.services import AskResult, UserFacingError
 
 if TYPE_CHECKING:
@@ -827,7 +828,7 @@ class ChatGpt:
             content = await ai._call_tool(turn, env, allowed, call)
         ai._status(turn, "thinking", "Формирую ответ…")
         return {
-            "contentItems": [{"type": "inputText", "text": content}],
+            "contentItems": [{"type": "inputText", "text": _mask(content)}],
             "success": not content.startswith("Ошибка"),
         }
 
@@ -841,7 +842,7 @@ class ChatGpt:
             "sandbox": "read-only",
             "cwd": str(component.work_dir()),
             "ephemeral": False,
-            "developerInstructions": developer,
+            "developerInstructions": _mask(developer),
             "dynamicTools": specs,
             "config": component.thread_config(web_search=native_search),
         }
@@ -970,7 +971,7 @@ class ChatGpt:
     # --- ход ----------------------------------------------------------------------------------------
     @staticmethod
     def _items(text: str, images: list[str]) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = [{"type": "text", "text": text or "Что на изображении?"}]
+        items: list[dict[str, Any]] = [{"type": "text", "text": _mask(text) or "Что на изображении?"}]
         items += [{"type": "image", "url": url} for url in images]
         return items
 
@@ -1111,8 +1112,10 @@ class ChatGpt:
         if out.abort_reason == "subagent":
             return errors.SUBAGENT
         if out.abort_reason == "region":
+            self.ai.llm.note_outage("chatgpt", "region")  # есть запасной провайдер — дальше отвечает он
             return errors.REGION
         if out.abort_reason == "network":
+            self.ai.llm.note_outage("chatgpt", "network")
             detail = errors.short((out.retry_error or {}).get("message") or errors.NO_DETAILS, 160)
             return errors.NETWORK.format(detail=detail)
         if out.status == "gone":
@@ -1120,6 +1123,7 @@ class ChatGpt:
         reason, text = errors.classify_turn_error(out.error or out.retry_error, model=model)
         if reason == "auth":
             self.ctx.spawn(self._refresh_account(), "chatgpt-account")
+        self.ai.llm.note_outage("chatgpt", reason)
         return text
 
     # --- чат ----------------------------------------------------------------------------------------
@@ -1165,11 +1169,12 @@ class ChatGpt:
                 apps=await apphints.chat_hints(self.ctx, turn.text, allowed),
             )
             sent = dict(state.sent)
+            # память, свои инструкции и история — в облако тоже через маску («запомни пароль …» — •••)
             context: dict[str, Any] = {
-                "jarvis": {"kind": "application", "value": prompt.context_text(sections, sent)}
+                "jarvis": {"kind": "application", "value": _mask(prompt.context_text(sections, sent))}
             }
             if state.history:
-                context["history"] = {"kind": "untrusted", "value": state.history}
+                context["history"] = {"kind": "untrusted", "value": _mask(state.history)}
             params: dict[str, Any] = {
                 "model": model,
                 "effort": self._effort(model, turn.source),
@@ -1280,9 +1285,9 @@ class ChatGpt:
             text = ("Предыдущие сообщения:\n" + "\n".join(lines) + "\n\n" + last) if lines else last
         developer = "\n\n".join(system) or "Отвечай по-русски, кратко и по делу."
         developer += "\n\nОтвечай сразу текстом: инструментов в этом запросе нет."
-        items: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        items: list[dict[str, Any]] = [{"type": "text", "text": _mask(text)}]
         items += [{"type": "image", "url": url} for url in images]
-        return developer, items
+        return _mask(developer), items
 
     async def complete(
         self,
@@ -1392,9 +1397,13 @@ class ChatGpt:
         first: str,
         specs: list[dict[str, Any]],
         images: list[str] | None = None,
+        rules: str | None = None,
+        web_search: bool = False,
+        limit: int | None = None,
     ) -> str:
         """Работа агента ходом Codex: инструменты — действия агента; вернёт итог (finish) для чата. images —
-        картинки экрана (data URL) к первому сообщению."""
+        картинки экрана (data URL) к первому сообщению. Фоновая задача (jarvis.background) зовёт со своими
+        правилами (rules), веб-поиском Codex (web_search) и своим лимитом действий (limit)."""
         from jarvis.ai.agent import AgentLimit
 
         problem = self.problem()
@@ -1402,7 +1411,8 @@ class ChatGpt:
             raise UserFacingError(problem)
         runtime = await self._runtime_for_use()
         model = self.resolve_model()
-        limit = self.ctx.settings.value.ai.max_agent_steps
+        if limit is None:
+            limit = self.ctx.settings.value.ai.max_agent_steps
         tools = []
         for spec in specs:
             fn = spec.get("function") or {}
@@ -1426,9 +1436,11 @@ class ChatGpt:
                     "sandbox": "read-only",
                     "cwd": str(component.work_dir()),
                     "ephemeral": True,
-                    "developerInstructions": f"{prompt.AGENT_RULES}\n\n{system}",
+                    "developerInstructions": _mask(
+                        f"{prompt.AGENT_RULES if rules is None else rules}\n\n{system}"
+                    ),
                     "dynamicTools": tools,
-                    "config": component.thread_config(web_search=False),
+                    "config": component.thread_config(web_search=web_search),
                 },
             ),
             CALL_TIMEOUT_S,
@@ -1443,12 +1455,12 @@ class ChatGpt:
                 return await act(params)
 
         def result(content: str, extras: list[dict[str, Any]]) -> dict[str, Any]:
-            items: list[dict[str, Any]] = [{"type": "inputText", "text": content}]
+            items: list[dict[str, Any]] = [{"type": "inputText", "text": _mask(content)}]
             for extra in extras:
                 parts = extra.get("content") if isinstance(extra.get("content"), list) else []
                 for part in parts:
                     if part.get("type") == "text" and part.get("text"):
-                        items.append({"type": "inputText", "text": str(part["text"])})
+                        items.append({"type": "inputText", "text": _mask(str(part["text"]))})
                     elif part.get("type") == "image_url":
                         url = (part.get("image_url") or {}).get("url")
                         if isinstance(url, str):
@@ -1469,7 +1481,7 @@ class ChatGpt:
                 return {"contentItems": [{"type": "inputText", "text": "ok"}], "success": True}
             if finish["summary"] is not None:
                 return tool_failure("Пропущено: работа уже завершена")
-            if run.count >= limit:
+            if run.count >= limit or getattr(run, "halt", ""):
                 finish["limit"] = True
                 current = run_ref["run"]
                 if current is not None:
@@ -1505,7 +1517,7 @@ class ChatGpt:
             _background(lambda: runtime.thread_unsubscribe(thread_id), "unsubscribe")
         run.usage.add(self._usage(out, model))
         if finish["limit"]:
-            raise AgentLimit(f"Агент не уложился в {limit} шагов")
+            raise AgentLimit(getattr(run, "halt", "") or f"Агент не уложился в {limit} шагов")
         if finish["summary"] is not None:
             return str(finish["summary"])
         if out.status == "completed":

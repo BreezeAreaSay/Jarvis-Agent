@@ -645,6 +645,15 @@ class WindowsPlatform:
             return
         self._input().combo([keys.VK_LWIN, ord("M")])
 
+    def _undo_minimize_all(self) -> None:
+        """Развернуть обратно окна, свёрнутые «сверни все окна» (как Win+Shift+M)."""
+        with contextlib.suppress(Exception):
+            import win32com.client  # type: ignore[import-not-found]
+
+            win32com.client.Dispatch("Shell.Application").UndoMinimizeALL()
+            return
+        self._input().combo([keys.VK_LWIN, keys.VK_SHIFT, ord("M")])
+
     def _show_desktop(self) -> None:
         with contextlib.suppress(Exception):
             import win32com.client  # type: ignore[import-not-found]
@@ -657,6 +666,9 @@ class WindowsPlatform:
     def window_action(self, action: WindowAction, target: int | str | None = None) -> None:
         if action == "minimize_all":
             self._minimize_all()
+            return
+        if action == "undo_minimize_all":
+            self._undo_minimize_all()
             return
         if action == "show_desktop":
             self._show_desktop()

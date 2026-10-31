@@ -34,7 +34,7 @@ async def _run(ctx: AppContext, llm: ScriptedLlm) -> tuple[str, dict[str, Any]]:
     llm.add(
         PLAN,
         calls(("ui_click", {"id": "e1"}), text="Нажму «Написать», чтобы открыть новое письмо."),
-        calls(("ui_type", {"id": "e1", "text": "Карта 4111 1111 1111 1111"})),
+        calls(("ui_type", {"id": "e3", "text": "Карта 4111 1111 1111 1111"})),
         calls(("finish", {"summary": "Открыл новое письмо."})),
         calls(("finish", {"summary": "Открыл новое письмо."})),  # после проверки по снимку
     )

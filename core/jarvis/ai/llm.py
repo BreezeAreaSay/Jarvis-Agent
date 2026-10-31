@@ -11,7 +11,9 @@ stream_options): известное описано в jarvis.ai.providers, ос�
 """
 
 import asyncio
+import collections
 import contextlib
+import dataclasses
 import hashlib
 import ipaddress
 import json
@@ -20,7 +22,7 @@ import random
 import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -32,6 +34,7 @@ import httpx
 from jarvis import __version__, netproxy
 from jarvis.ai.providers import PRESETS, ProviderPreset, estimate_cost, get_preset, price_for
 from jarvis.ai.vision import sees_images
+from jarvis.redact import redact_messages
 from jarvis.services import UserFacingError
 
 if TYPE_CHECKING:
@@ -81,12 +84,23 @@ _NOT_CHAT = (
 
 
 class LlmError(UserFacingError):
-    """Запрос к ИИ не удался; текст — для человека."""
+    """Запрос к ИИ не удался; текст — для человека. kind — вид сбоя (OUTAGE_KINDS и config, model, too_long,
+    rejected, format): по нему решается, звать ли запасной провайдер."""
 
-    def __init__(self, message: str, *, status: int = 0, code: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int = 0,
+        code: str = "",
+        kind: str = "",
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
+        self.kind = kind
+        self.retry_after = retry_after
 
 
 class LlmFormatError(LlmError):
@@ -110,6 +124,7 @@ class LlmConfig:
     local: bool  # сервер на этом ПК или в домашней сети: без ключа, без прокси, бесплатно
     folder_id: str = ""  # каталог Yandex Cloud (YandexGPT)
     speed: str = "balanced"  # settings.ai.speed: fast — думать меньше, deep — больше
+    backup: bool = False  # запасной провайдер (settings.ai.fallback_*)
 
     @property
     def chat_url(self) -> str:
@@ -180,6 +195,108 @@ def resolve_config(settings: "AiSettings", secrets: "Secrets", model: str | None
         folder_id=settings.folder_id.strip() if preset.folder else "",
         speed=str(getattr(settings, "speed", "balanced") or "balanced"),
     )
+
+
+def resolve_fallback(settings: "AiSettings", secrets: "Secrets") -> LlmConfig | None:
+    """Запасной провайдер (settings.ai.fallback_*, ключ — секрет ai_fallback_api_key; тот же провайдер, что
+    основной, — и его ключ) или None: не выбран, вход в аккаунт вместо ключа (подписка, программа) или не
+    настроен (нет ключа, адреса)."""
+    provider = str(getattr(settings, "fallback_provider", "") or "")
+    if provider not in PRESETS:
+        return None
+    preset = get_preset(provider)
+    if preset.login:
+        return None
+    base = (str(settings.fallback_base_url or "").strip() or preset.base_url).strip().rstrip("/")
+    key = secrets.get("ai_fallback_api_key") or (
+        secrets.get("ai_api_key") if provider == settings.provider else ""
+    )
+    model = str(settings.fallback_model or "").strip() or preset.default_model
+    local = preset.local or _is_local_url(base)
+    cfg = LlmConfig(
+        provider=preset.id,
+        preset=preset,
+        base_url=base,
+        api_key=key,
+        model=model,
+        temperature=settings.temperature,
+        proxy="" if local else settings.proxy.strip(),
+        vision=sees_images(preset.id, model, settings.vision),
+        enabled=settings.enabled,
+        local=local,
+        folder_id=settings.folder_id.strip() if preset.folder else "",
+        speed=str(getattr(settings, "speed", "balanced") or "balanced"),
+        backup=True,
+    )
+    return cfg if cfg.problem() is None else None
+
+
+PRIVATE_NONE = (
+    "Для «приватно: …» нужна модель на этом ПК — выберите её основной или запасной в настройках Jarvis AI "
+    "(Ollama или LM Studio)"
+)
+
+# --- запасной провайдер --------------------------------------------------------------------------------
+# сбой основного провайдера (ключ API, подписка ChatGPT, программа человека — у каждого свои причины) → вид
+OUTAGE_KINDS = {
+    "quota": "quota",
+    "limit": "quota",
+    "billing": "quota",
+    "plan": "quota",
+    "hold": "quota",
+    "auth": "auth",
+    "org": "auth",
+    "gemini_consumer": "auth",
+    "qwen_oauth": "auth",
+    "rate": "rate",
+    "server": "server",
+    "network": "network",
+    "timeout": "network",
+    "region": "region",
+}
+# сколько секунд после сбоя основной не звать (ответы — через запасной); потом — снова попробовать основной
+OUTAGE_COOLDOWN = {
+    "quota": 1800.0,
+    "auth": 600.0,
+    "region": 600.0,
+    "rate": 60.0,
+    "server": 120.0,
+    "network": 60.0,
+}
+OUTAGE_TEXT = {
+    "quota": "кончилась квота или лимит подписки",
+    "auth": "ключ или вход не действует",
+    "region": "недоступен из вашего региона",
+    "rate": "слишком много запросов",
+    "server": "серверы перегружены",
+    "network": "нет связи",
+}
+
+
+def _without_images(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Сообщения без картинок (для модели без зрения): картинка — пометкой «[картинка не передана]»."""
+    out: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list) and any(
+            isinstance(p, dict) and p.get("type") == "image_url" for p in content
+        ):
+            parts = [
+                {"type": "text", "text": "[картинка не передана: модель её не видит]"}
+                if isinstance(p, dict) and p.get("type") == "image_url"
+                else p
+                for p in content
+            ]
+            message = {**message, "content": parts}
+        out.append(message)
+    return out
+
+
+def _minutes(seconds: float) -> str:
+    """«30 мин», «1 мин», «45 с» — через сколько снова позвать основной провайдер."""
+    if seconds < 60:
+        return f"{round(seconds)} с"
+    return f"{round(seconds / 60)} мин"
 
 
 # --- результат ---------------------------------------------------------------------------------------
@@ -797,24 +914,49 @@ def _user_error(err: _ApiError, cfg: LlmConfig) -> LlmError:
         text = REGION
     else:
         text = f"Провайдер ИИ отклонил запрос: {err.message or f'ошибка {status}'}"
-    return LlmError(text, status=status, code=err.code)
+    return LlmError(
+        text, status=status, code=err.code, kind=_error_kind(text, status), retry_after=err.retry_after
+    )
+
+
+def _error_kind(text: str, status: int) -> str:
+    """Вид сбоя по уже выбранному тексту для человека (OUTAGE_KINDS — можно звать запасной)."""
+    if text == BAD_KEY:
+        return "auth"
+    if text == NO_CREDIT:
+        return "quota"
+    if text == RATE_LIMIT:
+        return "rate"
+    if text == REGION:
+        return "region"
+    if text == TOO_LONG:
+        return "too_long"
+    if status >= 500:
+        return "server"
+    if status in (403, 404):
+        return "model"
+    return "rejected"
 
 
 def _network_error(e: Exception, cfg: LlmConfig, system: str = "") -> LlmError:
     """system — системный прокси, через который шёл запрос ("" — свой прокси или напрямую)."""
     if isinstance(e, httpx.TimeoutException) and not isinstance(e, httpx.ConnectTimeout | httpx.PoolTimeout):
-        return LlmError(TIMEOUT)
+        return LlmError(TIMEOUT, kind="timeout")
     if cfg.local:
         name = cfg.preset.title.split(" (", 1)[0] if cfg.preset.local else "сервер ИИ"
-        return LlmError(f"{NETWORK} — проверьте, что {name} запущен на этом компьютере")
+        return LlmError(f"{NETWORK} — проверьте, что {name} запущен на этом компьютере", kind="network")
     if cfg.proxy:
         if isinstance(e, httpx.ProxyError):
-            return LlmError(f"{NETWORK} — прокси не отвечает, проверьте его в настройках Jarvis AI")
-        return LlmError(f"{NETWORK} — проверьте прокси в настройках Jarvis AI")
+            return LlmError(
+                f"{NETWORK} — прокси не отвечает, проверьте его в настройках Jarvis AI", kind="network"
+            )
+        return LlmError(f"{NETWORK} — проверьте прокси в настройках Jarvis AI", kind="network")
     if system:
         # VPN-программа включила системный прокси Windows, а сама не отвечает (выключена или упала)
-        return LlmError(f"{NETWORK} — запросы идут через системный прокси {system}: проверьте VPN")
-    return LlmError(NETWORK)
+        return LlmError(
+            f"{NETWORK} — запросы идут через системный прокси {system}: проверьте VPN", kind="network"
+        )
+    return LlmError(NETWORK, kind="network")
 
 
 _NO_TOOLS = re.compile(
@@ -945,13 +1087,140 @@ class LlmClient:
         # (прокси, локальный, транспорт) → (системный прокси на момент создания, клиент)
         self._clients: dict[tuple[str, bool, int], tuple[tuple[tuple[str, str], ...], httpx.AsyncClient]] = {}
         self._quirks: dict[tuple[str, str], set[str]] = {}
+        # провайдер на паузе после сбоя → (до какого monotonic не звать, вид сбоя)
+        self._outages: dict[str, tuple[float, str]] = {}
+        self.clock: Callable[[], float] = time.monotonic
+        # скорость последних запросов: {provider, model, seconds, ttft, completion_tokens} — для проверочных
+        # прогонов (evals: время до первого токена и токены в секунду) и диагностики
+        self.timings: collections.deque[dict[str, Any]] = collections.deque(maxlen=500)
 
     # --- настройки ------------------------------------------------------------------------------------
     def config(self, model: str | None = None) -> LlmConfig:
+        """Параметры запроса: основной провайдер, а пока он на паузе после сбоя — запасной."""
+        primary = self.primary_config(model)
+        if self.outage(primary.provider) or primary.preset.login:
+            # подписку (ChatGPT, программы) клиент API не ведёт: сюда её зовут, только пока она на паузе, — и
+            # долгая работа (агент, фоновая задача) не должна сломаться, когда пауза кончится посреди неё
+            backup = self.fallback_config()
+            if backup is not None:
+                return backup
+        return primary
+
+    def primary_config(self, model: str | None = None) -> LlmConfig:
+        """Основной провайдер, даже если он на паузе (проверка связи и список моделей в настройках)."""
         return resolve_config(self.ctx.settings.value.ai, self.ctx.secrets, model)
+
+    def fallback_config(self) -> LlmConfig | None:
+        return resolve_fallback(self.ctx.settings.value.ai, self.ctx.secrets)
+
+    def private_config(self) -> LlmConfig | None:
+        """Модель на этом ПК для «приватно: …»: основная, если она на этом ПК, иначе запасная, если она на
+        этом ПК (Ollama, LM Studio, свой сервер в домашней сети); нет такой — None."""
+        primary = self.primary_config()
+        if primary.local and primary.problem() is None:
+            return primary
+        backup = self.fallback_config()
+        return backup if backup is not None and backup.local else None
+
+    def private_problem(self) -> str | None:
+        if self.private_config() is None:
+            return PRIVATE_NONE
+        return None
+
+    # --- запасной провайдер ---------------------------------------------------------------------------
+    def outage(self, provider: str) -> str:
+        """Вид сбоя, после которого провайдер на паузе (не зовётся), или "" — можно звать."""
+        found = self._outages.get(provider)
+        if found is None:
+            return ""
+        if found[0] <= self.clock():
+            self._outages.pop(provider, None)
+            log.info("ИИ: пауза %s закончилась — снова основной провайдер", provider)
+            return ""
+        return found[1]
+
+    def note_outage(self, provider: str, reason: str, retry_after: float | None = None) -> bool:
+        """Основной провайдер не ответил (reason — причина: quota, limit, auth, rate, server, network,
+        region…): есть запасной — основной на паузе (OUTAGE_COOLDOWN), ответы идут через запасной; True —
+        пауза поставлена. Без запасного пауза не ставится: без основного не останется ничего."""
+        kind = OUTAGE_KINDS.get(reason, "")
+        backup = self.fallback_config()
+        if not kind or backup is None:
+            return False
+        if backup.provider == provider:
+            primary = self.primary_config()
+            if (backup.base_url, backup.model, backup.api_key) == (
+                primary.base_url,
+                primary.model,
+                primary.api_key,
+            ):
+                return False  # запасной — тот же самый: пауза оставила бы без ответа совсем
+        seconds = OUTAGE_COOLDOWN[kind]
+        if kind == "rate" and retry_after:
+            seconds = min(max(float(retry_after), 10.0), 600.0)
+        fresh = not self.outage(provider)
+        self._outages[provider] = (self.clock() + seconds, kind)
+        log.warning(
+            "ИИ: %s — %s; %.0f с отвечает запасной %s", provider, OUTAGE_TEXT[kind], seconds, backup.provider
+        )
+        if fresh:
+            primary = get_preset(provider).title if provider in PRESETS else provider
+            data = {
+                "active": True,
+                "provider": provider,
+                "backup": backup.provider,
+                "reason": kind,
+                "text": OUTAGE_TEXT[kind],
+                "seconds": seconds,
+            }
+            self.ctx.bus.publish("ai.fallback", data)
+            self.ctx.bus.publish(
+                "toast",
+                {
+                    "title": f"Отвечает запасной ИИ — {backup.preset.title}",
+                    "message": f"{primary}: {OUTAGE_TEXT[kind]}. Снова попробую его через "
+                    f"{_minutes(seconds)}.",
+                    "status": "warn",
+                    "icon": "ai",
+                    "ts": time.time(),
+                },
+            )
+        return True
+
+    def clear_outages(self) -> None:
+        """Настройки или ключи ИИ изменились — паузы снимаются: основной снова зовётся первым."""
+        if self._outages:
+            self._outages.clear()
+            self.ctx.bus.publish("ai.fallback", {"active": False})
+
+    def fallback_status(self) -> dict[str, Any]:
+        """Для настроек и диагностики: какой запасной (если настроен) и кто сейчас на паузе."""
+        backup = self.fallback_config()
+        now = self.clock()
+        paused = [
+            {
+                "provider": p,
+                "reason": kind,
+                "text": OUTAGE_TEXT.get(kind, kind),
+                "seconds": round(until - now),
+            }
+            for p, (until, kind) in list(self._outages.items())
+            if until > now
+        ]
+        return {
+            "configured": backup is not None,
+            "provider": backup.provider if backup is not None else "",
+            "model": backup.model if backup is not None else "",
+            "paused": paused,
+        }
 
     def problem(self, model: str | None = None) -> str | None:
         return self.config(model).problem()
+
+    @property
+    def mask_secrets(self) -> bool:
+        ctx = getattr(self, "ctx", None)
+        return True if ctx is None else bool(getattr(ctx.settings.value.ai, "mask_secrets", True))
 
     @property
     def configured(self) -> bool:
@@ -999,6 +1268,9 @@ class LlmClient:
             headers["Authorization"] = f"{scheme} {cfg.api_key}"
         if cfg.preset.folder and cfg.folder_id:
             headers["OpenAI-Project"] = cfg.folder_id  # каталог Yandex Cloud
+        host = (urlparse(cfg.base_url).hostname or "").lower()
+        if cfg.provider == "yandex" or host.endswith(".api.cloud.yandex.net"):
+            headers["x-data-logging-enabled"] = "false"  # Yandex не сохраняет у себя запросы и ответы
         if cfg.provider == "openrouter":
             headers["X-Title"] = "Jarvis"
         return headers
@@ -1030,6 +1302,9 @@ class LlmClient:
         json_schema: dict[str, Any] | None,
         stream: bool,
     ) -> dict[str, Any]:
+        # облачной модели — без паролей и ключей из текста; модели Ollama «…:cloud» работают в облаке
+        if self.mask_secrets and (not cfg.local or "cloud" in cfg.model.casefold()):
+            messages = redact_messages(messages)
         body: dict[str, Any] = {
             "model": cfg.wire_model,
             "messages": adapt_messages(messages, cfg.preset),
@@ -1078,19 +1353,42 @@ class LlmClient:
         json_schema: dict[str, Any] | None = None,
         stream: bool = False,
         on_delta: DeltaFn | None = None,
+        speed: str | None = None,
+        private: bool = False,
     ) -> LlmResponse:
         """Один ответ модели (с вызовами инструментов, если они есть). on_delta — куски текста по ходу.
 
         tool_choice="none" — инструменты описаны (история с их вызовами остаётся понятной), но вызывать
-        их нельзя.
+        их нельзя. speed — сколько модели думать вместо settings.ai.speed (агенту «быстро» мало).
         """
-        cfg = self.config(model)
+        if private:  # «приватно: …» — только модель на этом ПК, без запасного в облаке
+            local = self.private_config()
+            if local is None:
+                raise LlmError(PRIVATE_NONE, kind="config")
+            cfg = dataclasses.replace(local, backup=True)
+        else:
+            cfg = self.config(model)
+        if speed and speed != cfg.speed:
+            cfg = dataclasses.replace(cfg, speed=speed)
         problem = cfg.problem()
         if problem:
-            raise LlmError(problem)
+            raise LlmError(problem, kind="config")
         self.check_budget(cfg)
         quirks = self._quirks_for(cfg)
         msgs = _with_json_instruction(messages, json_schema) if json_schema is not None else messages
+        if cfg.backup and not private and not cfg.vision:
+            # основной на паузе — отвечает запасной без зрения: снимки (агент, фоновая задача) — без картинок
+            msgs = _without_images(msgs)
+        shown = False  # часть ответа уже ушла на экран — запасной не зовём (ответ продублировался бы)
+        started, first = time.perf_counter(), 0.0
+
+        def relay(text: str) -> None:
+            nonlocal shown, first
+            first = first or time.perf_counter()
+            if on_delta is not None:
+                shown = True
+                on_delta(text)
+
         options: dict[str, Any] = {
             "tools": tools,
             "tool_choice": tool_choice,
@@ -1098,10 +1396,35 @@ class LlmClient:
             "max_tokens": max_tokens,
             "json_schema": json_schema,
             "stream": stream,
-            "on_delta": on_delta,
+            "on_delta": relay if stream or on_delta is not None else None,
         }
-        response = await self._request(cfg, msgs, quirks, **options)
-        self._record(cfg, response, msgs)
+        try:
+            response = await self._request(cfg, msgs, quirks, **options)
+        except LlmError as e:
+            # основной не ответил (квота, лимит, ключ, регион, сбой, нет связи) — тот же запрос запасному
+            if cfg.backup or shown or not self.note_outage(cfg.provider, e.kind, e.retry_after):
+                raise
+            backup = self.fallback_config()
+            if backup is None:
+                raise
+            cfg = dataclasses.replace(backup, speed=speed) if speed and speed != backup.speed else backup
+            self.check_budget(cfg)
+            quirks = self._quirks_for(cfg)
+            if not cfg.vision:  # запасная модель картинок не видит — не ронять ответ ошибкой 400
+                msgs = _without_images(msgs)
+            started, first = time.perf_counter(), 0.0
+            response = await self._request(cfg, msgs, quirks, **options)
+        elapsed = time.perf_counter() - started
+        self._record(cfg, response, msgs)  # и оценка токенов, если провайдер их не прислал
+        self.timings.append(
+            {
+                "provider": cfg.provider,
+                "model": cfg.model,
+                "seconds": round(elapsed, 3),
+                "ttft": round(first - started, 3) if first else None,
+                "completion_tokens": int(response.usage.completion_tokens or 0),
+            }
+        )
         if json_schema is None:
             return response
         parsed = _parse_json_answer(response.content, json_schema)
@@ -1113,7 +1436,7 @@ class LlmClient:
             response = retry
             parsed = _parse_json_answer(response.content, json_schema)
         if parsed is None:
-            raise LlmFormatError(BAD_FORMAT)
+            raise LlmFormatError(BAD_FORMAT, kind="format")
         response.parsed = parsed
         return response
 
@@ -1310,7 +1633,7 @@ class LlmClient:
     # --- сервисные запросы ------------------------------------------------------------------------------
     async def list_models(self) -> list[str]:
         """Модели провайдера (GET /models); при ошибке — список из пресета."""
-        cfg = self.config()
+        cfg = self.primary_config()
         fallback = list(cfg.preset.models) or ([cfg.model] if cfg.model else [])
         if not cfg.base_url or (cfg.preset.needs_key and not cfg.api_key):
             return fallback
@@ -1342,11 +1665,25 @@ class LlmClient:
 
     async def test(self) -> dict[str, Any]:
         """Проверка связи: крошечный запрос. {ok, error?, latency_ms, model}."""
-        cfg = self.config()
+        cfg = self.primary_config()
         started = time.perf_counter()
         try:
-            await self.chat(
-                [{"role": "user", "content": "Ответь одним словом: готов."}], max_tokens=64, stream=False
+            # только основной: без запасного и без паузы (иначе «Проверить» хвалит сломанный основной)
+            problem = cfg.problem()
+            if problem:
+                raise LlmError(problem, kind="config")
+            self.check_budget(cfg)
+            await self._request(
+                cfg,
+                [{"role": "user", "content": "Ответь одним словом: готов."}],
+                self._quirks_for(cfg),
+                tools=None,
+                tool_choice=None,
+                temperature=None,
+                max_tokens=64,
+                json_schema=None,
+                stream=False,
+                on_delta=None,
             )
         except LlmError as e:
             latency = int((time.perf_counter() - started) * 1000)
@@ -1358,3 +1695,36 @@ class LlmClient:
         for client in clients:
             with contextlib.suppress(Exception):
                 await client.aclose()
+
+
+def speed_stats(timings: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Скорость модели по запросам (LlmClient.timings): время до первого токена (медиана, с) и токены ответа в
+    секунду генерации (после первого токена; без потока — за весь запрос)."""
+    items = list(timings)
+    firsts = sorted(t["ttft"] for t in items if t.get("ttft") is not None)
+    tokens = sum(int(t.get("completion_tokens") or 0) for t in items)
+    generation = sum(max(0.001, float(t["seconds"]) - float(t.get("ttft") or 0.0)) for t in items)
+    return {
+        "requests": len(items),
+        "ttft_s": round(firsts[len(firsts) // 2], 3) if firsts else None,
+        "tokens_per_s": round(tokens / generation, 1) if items and tokens else None,
+    }
+
+
+# модели на этом ПК меньше стольких миллиардов параметров в долгих задачах (агент, фоновые задачи) часто
+# сбиваются: теряют план, путают инструменты, заканчивают раньше времени
+WEAK_LOCAL_B = 14.0
+_SIZE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*b(?![a-z])", re.I)
+
+
+def weak_local_model(cfg: LlmConfig) -> str:
+    """Предупреждение для долгой задачи, если модель на этом ПК маленькая («qwen3:8b»); иначе ""."""
+    if not cfg.local:
+        return ""
+    sizes = [float(m.group(1)) for m in _SIZE.finditer(cfg.model)]
+    if not sizes or max(sizes) >= WEAK_LOCAL_B:
+        return ""
+    return (
+        f"Модель на этом ПК ({cfg.model}) для долгих задач слабовата: она может потерять план или закончить "
+        "раньше времени. Для фоновых задач и агента лучше облачная модель или локальная от 30B."
+    )

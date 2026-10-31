@@ -130,6 +130,8 @@ class MainDispatcher:
         return item
 
     def _history_update(self, item: dict[str, Any], **fields: Any) -> None:
+        if fields.get("status", "pending") != "pending" and item.get("status") == "pending":
+            fields["ms"] = max(0, round((now() - float(item["ts"])) * 1000))  # сколько длилось — для истории
         item.update(fields)
         self.ctx.db.update("history", item["id"], {k: v for k, v in fields.items() if k != "id"})
         self.ctx.bus.publish("history.updated", {"item": item})
@@ -345,7 +347,7 @@ class MainDispatcher:
         """Фраза, пока агент работает: ему — ответом на вопрос, решением о разрешении или поправкой
         (на поправку — «Понял, учту» вслух)."""
         agent = self.ctx.agent
-        kind = str(agent.interject(raw) or "")
+        kind = str(agent.interject(raw, source) or "")
         delivered = bool(kind)
         detail = AGENT_REPLY.get(kind, "Агент уже закончил")
         item = self._history_add(source, raw, "ai", "ok" if delivered else "error", title=raw, detail=detail)

@@ -12,6 +12,7 @@ _GROUP = re.compile(r"\(([^()]*)\)")
 class Builtin:
     command: Command
     exclude: tuple[str, ...] = ()  # начала слов, при которых команда не подходит
+    no_question: bool = False  # {text}, начатый вопросом («что у меня завтра»), — не команда
 
 
 def variants(*patterns: str) -> list[str]:
@@ -41,6 +42,7 @@ def cmd(
     say: str = "",
     optional: tuple[str, ...] = (),
     exclude: tuple[str, ...] = (),
+    no_question: bool = False,
 ) -> Builtin:
     """Встроенная команда: id builtin.<id_>, фразы — уже раскрытые варианты."""
     return Builtin(
@@ -57,6 +59,7 @@ def cmd(
             say=say,
         ),
         exclude,
+        no_question,
     )
 
 

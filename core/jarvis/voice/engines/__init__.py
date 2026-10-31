@@ -36,7 +36,7 @@ __all__ = [
 
 def create_engines(ctx: "AppContext", models: "ModelManager") -> dict[str, Engine]:
     return {
-        "piper": PiperEngine(models),
+        "piper": PiperEngine(models, stress_dict=lambda: ctx.settings.value.tts.stress_dict),
         "windows": WindowsEngine(),
         "edge": EdgeEngine(),
         "openai": OpenAIEngine(ctx),

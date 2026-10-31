@@ -120,6 +120,12 @@ def _watch_parent(parent_pid: int, server: uvicorn.Server) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    args_in = sys.argv[1:] if argv is None else argv
+    if "--selftest" in args_in:
+        # самопроверка сборки (jarvis/selftest.py): без сервера, сети и настоящих данных; код выхода 0 / 1
+        from jarvis import selftest
+
+        sys.exit(selftest.main(args_in))
     parser = argparse.ArgumentParser(prog="jarvis-core", description="Ядро Jarvis")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=int(os.environ.get("JARVIS_CORE_PORT", "0")))

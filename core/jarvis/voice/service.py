@@ -50,6 +50,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+PTT_CHECK_S = 60.0  # как часто проверять хук «держи и говори»
+PTT_SILENT_S = 600.0  # хук столько не слышал нажатий, а человек печатает — его сняла Windows
+PTT_TYPING_S = 5.0  # «печатает» — ввод был не раньше стольких секунд назад
+
 LINGER_S = 8.0  # разовая просьба закончилась — микрофон ещё столько открыт (следующая — без задержки)
 QUESTION_FOLLOW_S = 8.0  # Jarvis спросил — ответ без «Джарвис» ждём не меньше стольких секунд
 NO_MODELS = "Голосовые модели не скачаны — скачайте их в настройках голоса"
@@ -119,6 +123,7 @@ class Voice(BaseService):
         self._download_task: asyncio.Task[None] | None = None
         self._linger: asyncio.TimerHandle | None = None
         self._ptt: PttHook | None = None
+        self._ptt_watcher: asyncio.Task[None] | None = None
         self._ptt_held = False
         self._published: tuple[str, str] | None = None
         self._user_deleted: set[str] = set()  # удалены человеком — сами заново не качаем
@@ -132,9 +137,13 @@ class Voice(BaseService):
         self._unsubs.append(self.models.add_listener(self._on_model_event))
         await self._apply()
         self._setup_ptt()
+        self._ptt_watcher = self.ctx.spawn(self._ptt_watch(), "voice-ptt-watch")
 
     async def stop(self) -> None:
         self._started = False
+        if self._ptt_watcher is not None:
+            self._ptt_watcher.cancel()
+            self._ptt_watcher = None
         for unsub in self._unsubs:
             with contextlib.suppress(Exception):
                 unsub()
@@ -757,6 +766,23 @@ class Voice(BaseService):
         hook, self._ptt = self._ptt, None
         if hook is not None:
             hook.stop()
+
+    async def _ptt_watch(self) -> None:
+        """Сторож хука «держи и говори»: поток хука умер или человек печатает, а хук PTT_SILENT_S не слышал ни
+        одного нажатия (Windows молча сняла его), — поставить заново."""
+        while self._started:
+            await asyncio.sleep(PTT_CHECK_S)
+            hook = self._ptt
+            if hook is None or hook.down:
+                continue
+            try:
+                idle = float(await self.ctx.run_platform(self.ctx.platform.idle_seconds))
+            except Exception:
+                idle = float("inf")
+            if hook.alive() and not (idle < PTT_TYPING_S and hook.silent_for() > PTT_SILENT_S):
+                continue
+            log.warning("голос: хук клавиши «держи и говори» перестал получать нажатия — ставлю заново")
+            self._setup_ptt()
 
     def _ptt_down(self) -> None:
         if not self.can_listen():

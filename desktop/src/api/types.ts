@@ -25,6 +25,9 @@ export type AiProvider =
   | "lmstudio"
   | "custom";
 
+/** Как сообщать о фоновой задаче. */
+export type NotifyChannel = "toast" | "voice" | "telegram";
+
 export interface Settings {
   version: number;
   onboarding_done: boolean;
@@ -60,6 +63,8 @@ export interface Settings {
     earcons: boolean;
     max_utterance_s: number;
     confirm_by_voice: boolean;
+    /** Необратимое (отправить, оплатить, удалить…) разрешать и голосовым «да» (по умолчанию — только кнопкой). */
+    confirm_high_by_voice: boolean;
     speak_confirmations: "short" | "off";
     /** Приветствие, когда человек вернулся к компьютеру: news — только если есть что напомнить. */
     presence_greeting: "off" | "news" | "always";
@@ -85,6 +90,8 @@ export interface Settings {
     speed: number;
     pitch: number;
     effect: number;
+    /** Голос Jarvis (piper): ударения и «ё» по словарю Jarvis; смена — со следующего запуска */
+    stress_dict: boolean;
     volume: number;
     output_device: string;
   };
@@ -93,6 +100,10 @@ export interface Settings {
     provider: AiProvider;
     base_url: string;
     folder_id: string;
+    /** Запасной ИИ по ключу или на этом ПК: основной не отвечает — отвечает он; "" — нет. */
+    fallback_provider: AiProvider | "";
+    fallback_model: string;
+    fallback_base_url: string;
     model: string;
     temperature: number;
     proxy: string;
@@ -113,12 +124,40 @@ export interface Settings {
     agent_notes: boolean;
     /** Шаги агента и снимки экрана — в журнал на этом компьютере. */
     agent_journal: boolean;
+    /** Пароли, ключи API, номера карт — маской, прежде чем текст уйдёт облачной модели. */
+    mask_secrets: boolean;
+    /** Окна, которые ИИ не видит (кроме менеджеров паролей — они скрыты всегда): программа или слово заголовка. */
+    private_apps: string[];
     /** Браузер Jarvis: свой профиль Chrome или Edge, агент работает со страницами по CDP. */
     browser: boolean;
     browser_app: "auto" | "chrome" | "edge";
     monthly_budget: number;
     /** Разрешения инструментов ИИ по имени; нет записи или auto — по риску. */
     tool_policy: Record<string, "auto" | "allow" | "ask" | "deny">;
+  };
+  /** Фоновые задачи: агент работает в фоне, итог — в хранилище заметок (Obsidian). */
+  background: {
+    /** Хранилище Obsidian (папка); пусто — найти самому, нет Obsidian — Документы\Jarvis. */
+    vault: string;
+    /** Своя папка агента в хранилище — пишет он только сюда. */
+    folder: string;
+    /** Читать и искать всё хранилище (иначе — только свою папку). */
+    read_vault: boolean;
+    /** Строки в «Входящие.md» своей папки — новые задачи. */
+    inbox: boolean;
+    /** Сколько задач идёт одновременно. */
+    parallel: number;
+    /** careful — спрашивать чаще, normal — неясное и необратимое, bold — только деньги и вход. */
+    autonomy: "careful" | "normal" | "bold";
+    /** Первый план задачи — на утверждение: big — план из 4+ шагов или повторяющаяся задача. */
+    approve_plan: "never" | "big" | "always";
+    max_steps: number;
+    max_hours: number;
+    /** Модель фоновых задач по ключу API; пусто — та же, что в чате. */
+    model?: string;
+    /** Как сообщать о вопросе и об итоге: всплывающее окно, голос, Telegram; пусто — тихо. */
+    notify_question: NotifyChannel[];
+    notify_done: NotifyChannel[];
   };
   avatar: {
     desktop: boolean;
@@ -162,6 +201,7 @@ export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartia
 
 export type SecretName =
   | "ai_api_key"
+  | "ai_fallback_api_key"
   | "openai_api_key"
   | "fish_api_key"
   | "elevenlabs_api_key"
@@ -190,6 +230,8 @@ export interface HistoryItem {
   detail: string;
   icon: string;
   command_id: string;
+  /** Сколько длилось от фразы до итога, мс (0 — сразу). */
+  ms?: number;
 }
 
 export interface ExecResult {
@@ -218,6 +260,8 @@ export interface Confirmation {
   source: string;
   created: number;
   timeout: number;
+  /** high — необратимое: разрешить только кнопкой, голосовое «да» не принимается. */
+  risk?: "normal" | "high";
 }
 
 // --- команды ---------------------------------------------------------------------------------------
@@ -805,4 +849,12 @@ export interface FileSearchCard {
   items: FoundFile[];
   total: number;
   ttl: number;
+}
+
+/** GET /api/ai/fallback — запасной провайдер и кто сейчас на паузе после сбоя. */
+export interface AiFallbackStatus {
+  configured: boolean;
+  provider: string;
+  model: string;
+  paused: { provider: string; reason: string; text: string; seconds: number }[];
 }

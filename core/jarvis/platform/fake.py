@@ -55,7 +55,7 @@ DEMO_FILES: list[tuple[str, int, tuple[str, float, float], bool, str]] = [
     (_HOME + r"\Documents\Договор с Ивановым.docx", 48_200, ("d", 1, 17), False, "договор поставки иванов"),
     (_HOME + r"\Documents\Бюджет 2026.xlsx", 64_800, ("ago", 0, 3), False, "бюджет расходы доходы"),
     (_HOME + r"\Documents\Презентация бюджет Q3.pptx", 5_600_000, ("d", 1, 12), False, "бюджет квартал"),
-    (_HOME + r"\Documents\Бюджет семьи — сентябрь.xlsx", 21_500, ("d", 30, 21), False, "бюджет"),
+    (_HOME + r"\Documents\Бюджет семьи — сентябрь.xlsx", 21_500, ("d", 29, 12), False, "бюджет"),
     (_HOME + r"\Documents\Отчёт за сентябрь.docx", 132_000, ("d", 18, 15), False, "отчет за сентябрь"),
     (_HOME + r"\Documents\Итоги квартала.docx", 88_000, ("d", 6, 13), False, "отчет о продажах за квартал"),
     (_HOME + r"\Documents\Резюме Анна Петрова.pdf", 240_000, ("d", 60, 10), False, ""),
@@ -125,6 +125,7 @@ class FakePlatform:
         self.index_available = True  # тесты выключают «службу индексирования»
         # тесты подставляют: сколько секунд без ввода, игра во весь экран, кто пишет микрофон (звонок)
         self.idle = 0.0
+        self.report_input = False  # idle — настоящий ввод человека (агент ждёт, пока человек работает мышью)
         self.fullscreen = False
         self.mic_users: list[str] = []
         self.gpu_temp: float | None = 54.0  # температура видеокарты (как nvidia-smi); None — неизвестна

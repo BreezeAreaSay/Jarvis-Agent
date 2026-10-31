@@ -15,3 +15,6 @@ desktop/release/
 
 # прогоны проверочных задач агента (core/evals)
 core/.evals/
+
+# словарь ударений голоса, собранный локально (scripts/ru_dict/build_ru_dict.py --out core/jarvis/resources/voice)
+core/jarvis/resources/voice/

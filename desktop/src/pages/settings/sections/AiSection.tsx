@@ -1,10 +1,96 @@
 // «Jarvis AI»: провайдер и подключение, характер, возможности, агент, рисование картинок, расходы.
-import { Bot, Brain, CircleDollarSign, Plug, Sparkles, Wand } from "lucide-react";
-import { Card, cx, Setting, Slider, Tabs, Toggle } from "@/ui";
-import { AccountPanel, AiConnection, isAccountProvider, ProviderCards, useAiConfigured } from "../ai";
+import { Bot, Brain, CircleDollarSign, LifeBuoy, Plug, Sparkles, Wand } from "lucide-react";
+import { useEffect } from "react";
+import { onEvent } from "@/api/events";
+import type { AiFallbackStatus, AiProvider } from "@/api/types";
+import { Card, cx, Select, Setting, Slider, Tabs, Toggle } from "@/ui";
+import { AccountPanel, AiConnection, isAccountProvider, ProviderCards, useAiConfigured, useProviders } from "../ai";
 import { ImagesCard } from "../ImagesCard";
-import { LazyText, NumberField, ProgressBar, useApi, useSettingsPatch } from "../kit";
+import { Combo, LazyText, NumberField, ProgressBar, SecretField, useApi, useSettingsPatch } from "../kit";
 import BrowserCard from "./BrowserCard";
+
+/** Запасной ИИ: основной не отвечает (квота, лимит подписки, регион, сбой, нет связи) — отвечает он. */
+function FallbackCard() {
+  const [settings, patch] = useSettingsPatch();
+  const providers = useProviders();
+  const status = useApi<AiFallbackStatus>("/api/ai/fallback");
+  const reload = status.reload;
+  useEffect(() => onEvent("ai.fallback", () => void reload()), [reload]);
+  const fb = settings?.ai;
+  // сменили провайдера, модель или адрес запасного — «готов ли он» узнать заново
+  useEffect(() => {
+    void reload();
+  }, [fb?.fallback_provider, fb?.fallback_model, fb?.fallback_base_url, fb?.folder_id, reload]);
+  if (!settings) return null;
+  const ai = settings.ai;
+  const choices = providers.items.filter((p) => !p.login && !isAccountProvider(p.id));
+  const chosen = choices.find((p) => p.id === ai.fallback_provider);
+  const titleOf = (id: string) => providers.items.find((p) => p.id === id)?.title ?? id;
+  const paused = status.data?.paused ?? [];
+  return (
+    <Card
+      icon={<LifeBuoy />}
+      title="Запасной ИИ"
+      sub="Основной не отвечает — кончилась квота или лимит подписки, не пускает регион, сбой, нет связи — отвечает запасной"
+    >
+      <Setting
+        name="Провайдер"
+        desc="По ключу API или модель на этом ПК (Ollama, LM Studio). Основной после сбоя какое-то время не зовётся — от минуты до получаса — и снова пробуется сам"
+      >
+        <Select<AiProvider | "">
+          value={ai.fallback_provider}
+          width={260}
+          options={[
+            { value: "", label: "Нет" },
+            ...choices.map((p) => ({ value: p.id, label: p.title })),
+          ]}
+          onChange={(v) => patch({ ai: { fallback_provider: v, fallback_model: "", fallback_base_url: "" } })}
+        />
+      </Setting>
+      {chosen && (
+        <>
+          <Setting name="Модель" desc={`Пусто — ${chosen.default_model || "модель провайдера по умолчанию"}`}>
+            <Combo
+              value={ai.fallback_model}
+              options={chosen.models.map((m) => ({ value: m }))}
+              placeholder={chosen.default_model}
+              width={260}
+              onCommit={(v) => patch({ ai: { fallback_model: v } })}
+            />
+          </Setting>
+          {chosen.needs_key && chosen.id !== ai.provider && (
+            <Setting name="Ключ API" desc="Хранится зашифрованным только на этом компьютере" wide>
+              <SecretField name="ai_fallback_api_key" placeholder={`Ключ ${chosen.title}`} onSaved={() => void reload()} />
+            </Setting>
+          )}
+          {chosen.folder && ai.provider !== chosen.id && (
+            <Setting name="ID каталога Yandex Cloud" desc="Тот же, что в консоли Yandex Cloud: b1g…" wide>
+              <LazyText value={ai.folder_id} placeholder="b1g…" width="100%" onCommit={(v) => patch({ ai: { folder_id: v } })} />
+            </Setting>
+          )}
+          {(chosen.local || chosen.id === "custom") && (
+            <Setting name="Адрес" desc={chosen.base_url ? `Пусто — ${chosen.base_url}` : "Адрес сервера, совместимого с OpenAI"} wide>
+              <LazyText
+                value={ai.fallback_base_url}
+                placeholder={chosen.base_url || "http://127.0.0.1:8000/v1"}
+                width="100%"
+                onCommit={(v) => patch({ ai: { fallback_base_url: v } })}
+              />
+            </Setting>
+          )}
+          {status.data && !status.data.configured && (
+            <div className="faint small">Запасной ещё не готов: нужен ключ{chosen.local || chosen.id === "custom" ? " или адрес" : ""}.</div>
+          )}
+        </>
+      )}
+      {paused.map((p) => (
+        <div key={p.provider} className="chip warn" style={{ marginTop: 8 }}>
+          Сейчас отвечает запасной: {titleOf(p.provider)} — {p.text}, ещё {Math.max(1, Math.round(p.seconds / 60))} мин
+        </div>
+      ))}
+    </Card>
+  );
+}
 
 interface Usage {
   month: { prompt_tokens: number; completion_tokens: number; cost: number };
@@ -109,6 +195,8 @@ export default function AiSection() {
           />
         </Setting>
       </Card>
+
+      <FallbackCard />
 
       <Card icon={<Wand />} title="Характер" sub="Как Jarvis разговаривает с вами">
         <div className="persona-grid">

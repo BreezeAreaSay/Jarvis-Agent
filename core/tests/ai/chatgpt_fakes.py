@@ -32,7 +32,7 @@ MODELS = [
     },
     {"id": "gpt-secret", "model": "gpt-secret", "isDefault": False, "hidden": True},
 ]
-ACCOUNT = {"type": "chatgpt", "email": "tony@stark.com", "planType": "plus"}
+ACCOUNT = {"type": "chatgpt", "email": "tony@stark.example", "planType": "plus"}
 
 
 def installed_sdk() -> SdkInfo:

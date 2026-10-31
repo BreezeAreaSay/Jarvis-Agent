@@ -59,6 +59,7 @@ export function ApprovalBox({ c, children }: { c: Confirmation; children?: React
         <div className="ov-approval-text">
           <div className="ov-approval-title">{c.title}</div>
           {c.detail && <div className="ov-approval-detail">{c.detail}</div>}
+          {c.risk === "high" && <div className="ov-approval-risk">Необратимое действие — разрешить только кнопкой</div>}
         </div>
       </div>
       {children}

@@ -240,6 +240,32 @@ async def test_shell_launch_needs_confirmation(ctx: AppContext) -> None:
     assert not any(c[0] == "launch" for c in ctx.platform.calls)  # type: ignore[attr-defined]
 
 
+async def test_lookalike_and_idn_links_show_the_real_name(ctx: AppContext) -> None:
+    asked: list[dict[str, Any]] = []
+
+    def deny(event: Any) -> None:
+        asked.append(event.data)
+        ctx.confirmations.resolve(event.data["id"], False)
+
+    ctx.bus.on("confirm.request", deny)
+    # «gооgle.com» с русскими «о» — спросить даже без данных в адресе, имя — настоящее, только кнопкой
+    out = await _call(ctx, "open_url", {"url": "https://gооgle.com/"}, user_text="открой gооgle.com")
+    assert not out.ok and asked[0]["title"] == "Открыть xn--ggle-55da.com?"
+    assert asked[0]["detail"].startswith("Осторожно: имя сайта «gооgle.com» похоже на подделку")
+    assert "Настоящее имя — xn--ggle-55da.com" in asked[0]["detail"] and asked[0]["risk"] == "high"
+    # имя по-русски с данными в адресе — в вопросе и настоящее имя (punycode)
+    await _call(ctx, "open_url", {"url": "https://пример.рф/поиск?q=1"})
+    assert asked[1]["title"] == "Открыть пример.рф?" and asked[1]["risk"] == "normal"
+    assert asked[1]["detail"] == (
+        "Настоящее имя сайта — xn--e1afmkfd.xn--p1ai. Адрес с данными: https://пример.рф/поиск?q=1"
+    )
+    # обычное имя по-русски без данных — без вопроса
+    await _call(ctx, "open_url", {"url": "https://президент.рф/"})
+    assert len(asked) == 2
+    assert ("open_url", ("https://президент.рф/",)) in ctx.platform.calls  # type: ignore[attr-defined]
+    assert not any("gооgle" in str(c) for c in ctx.platform.calls)  # type: ignore[attr-defined]
+
+
 async def test_mcp_tools_join_all_mode(ctx: AppContext) -> None:
     spec = {
         "type": "function",

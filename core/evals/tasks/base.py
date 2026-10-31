@@ -53,6 +53,8 @@ class Trace:
     cost: float = 0.0
     actions: list[str] = field(default_factory=list)
     timed_out: bool = False
+    ttft_s: float | None = None  # время до первого токена (медиана по запросам), с
+    tokens_per_s: float | None = None  # токены ответа в секунду генерации
 
     def denied(self) -> list[Approval]:
         return [a for a in self.approvals if not a.allowed]

@@ -63,6 +63,8 @@ desktop/ (Electron + React)                     core/ (Python 3.12, FastAPI)
 | `DELETE /api/history` | — | `{ok}` |
 | `GET /api/confirm` | — | `{items: Confirmation[]}` |
 | `POST /api/confirm/{id}` | `{allow: bool}` | `{ok}` |
+| `GET /api/diagnostics` | — | `{items: [{id, title, status: ok\|warn\|fail\|off, detail, hint, action}], report}` — «Система» → «Диагностика» (`jarvis/diagnostics.py`): ядро и свободное место, Jarvis AI и запасной ИИ, распознавание, голос и словарь ударений, заметки и браузер фоновых задач, пульт в Telegram, аварийные остановки, журналы; `report` — то же текстом без ключей и личной папки (`~`) |
+| `POST /api/diagnostics/crashes/reset` | — | то же, что `GET /api/diagnostics` — забыть аварийные остановки (`crashguard.reset()`; пункт с `action: "reset"`) |
 
 Settings — модель `jarvis/settings.py` (в интерфейсе — `desktop/src/api/types.ts`). Секреты:
 `ai_api_key, openai_api_key, fish_api_key, elevenlabs_api_key, telegram_token, ha_token, yandex_iot_token,
@@ -96,10 +98,26 @@ denied, detail, icon, command_id}` — `confirm`: итог подтвержде�
 отклонено, `cancelled` нет ответа или отменено «Стопом»; `detail` — «Разрешено · Будет отправлено: …», секреты
 замаскированы).
 
+Самопроверка сборки — `python -X utf8 -m jarvis --selftest [--strict] [--json]` (`jarvis/selftest.py`): без сети и
+настоящих данных (временный каталог, платформа `fake`) проверяет версию Python, импорт всех модулей `jarvis.*`,
+библиотеки с нативными частями (на Windows — ещё pywin32, comtypes, pycaw, uiautomation, pynput, soundcard, winrt),
+sherpa-onnx нужной версии и PortAudio, паки команд и словарь ударений (SHA-256 по `ru_dict.json`, рядом
+`LICENSE.md`; `--strict` — без словаря ✗), подъём ядра со всеми сервисами и ответы API с токеном и без него. Код
+выхода 0 — всё ✓; `scripts/build-win.ps1` запускает её встроенным Python после сборки ядра и без ✓ установщик не
+собирает.
+
 `ExecResult = {ok, title, message, icon, say, command_ids, data}`; `data.silent` — не показывать тост,
 `data.cancelled` — отменено человеком.
 
-`Confirmation = {id, title, detail, kind: command|agent|plugin, source, created, timeout}`.
+`Confirmation = {id, title, detail, kind: command|agent|plugin, source, created, timeout, risk: normal|high}`.
+`risk: high` — необратимое, которое решил сделать ИИ (агент, чат, фоновая задача): оплата, перевод, покупка,
+отправка, удаление, публикация, «Подтвердить»/«Submit», ввод пароля или данных карты, форматирование, выключение;
+имя сайта, похожее на подделку (`jarvis.confirm.high_risk` по заголовку и подробности). Голосовое «да» такое не
+разрешает — ни в окне ответа на вопрос, ни репликой агенту посреди работы (`Agent.interject(text, source)`:
+«да» голосом решает только обычные подтверждения, на необратимое Jarvis говорит «нажмите «Разрешить»»);
+напечатанное «да» и кнопка — разрешают; «нет» голосом работает всегда. `settings.voice.confirm_high_by_voice: true`
+— разрешать голосом и необратимое. Встроенные команды, которые человек сам сказал («выключи компьютер»), — как
+раньше: подтверждение голосом.
 
 ### События ядра
 
@@ -110,7 +128,7 @@ denied, detail, icon, command_id}` — `confirm`: итог подтвержде�
 | `settings.changed` | `{settings}` |
 | `secrets.changed` | `{name, set}` |
 | `dispatch.started` / `dispatch.done` | `{text, source}` / `{text, kind, ok?}` |
-| `history.added` / `history.updated` | `{item: HistoryItem}` |
+| `history.added` / `history.updated` | `{item: HistoryItem}` (`ms` — сколько длилось от фразы до итога; 0 — сразу) |
 | `history.cleared` | `{}` |
 | `command.executed` | `{text, source, result: ExecResult}` |
 | `toast` | `{title, message, status: ok\|error\|info, icon, ts}` — карточка в оверлее («Включить музыку — Выполнено ✓») |
@@ -173,8 +191,37 @@ System.Screenshot, System.EmptyRecycleBin, Media.PlayPause, Media.Next, Media.Pr
 Window.MinimizeAll, Window.Minimize, Window.Maximize, Window.Restore, Window.Close, Wait, Speak, Notify,
 Clipboard.Set, Web.Search, Info.Time, Info.Date, Info.Weather, Jarvis.OpenDesk, Jarvis.Ask, Jarvis.Command,
 Jarvis.Plugin, Jarvis.SilentMode, Jarvis.Microphone, Jarvis.ShowWindow` и для встроенных команд `Info.Volume, Info.Media,
-Info.Battery, Info.System, Jarvis.Timer, Jarvis.Reminder`. Каталог с описанием параметров —
-`GET /api/commands/actions`.
+Info.Battery, Info.System, Jarvis.Timer, Jarvis.Reminder, Jarvis.ReminderAt, Jarvis.Reminders, Jarvis.ReminderCancel,
+Jarvis.Undo, App.CloseLast`. Каталог с описанием параметров — `GET /api/commands/actions`.
+
+**Вопрос — не просьба.** Фраза со знаком «?» («открыть браузер?», «выключить компьютер?», «можешь закрыть
+окно?») команду-действие не запускает — отвечает ИИ; команды-справки (`Info.*`, `Jarvis.Reminders`,
+`Jarvis.Briefing`, `Speak`: «какая погода?», «сколько времени?») работают и вопросом (`Commands.match`). Запрос
+поиска (`{query}`) не забирает составное дело: «найди отели и забронируй», «найди файл и отправь его» — не поиск в
+браузере, а дело ИИ и агенту. Набор фраз с трудными отрицательными примерами — `core/evals/routing.py` (0 ложных
+запусков).
+
+**Время словами и «отмени».** Слот `{when}` (`jarvis/commands/when.py`) — время напоминания: «завтра в 9», «в
+18:30», «сегодня вечером», «в пятницу в 10 утра», «в эту субботу», «послезавтра в полдень», «31 октября в 15:00», «в
+девять тридцать вечера», «в следующую пятницу в 7 30 вечера», «в 2 ночи» и «сегодня в 2 ночи» (сказано днём —
+ближайшая ночь; с названной датой или днём недели — ровно тот день); слот
+берёт с начала самую длинную фразу времени (до 8 слов) — «в 7 вечера», а не «в 7»; не время — фраза уходит дальше,
+к ИИ; уже прошедшее («сегодня в 9 утра» в полдень) — ответ «Это время уже прошло»; час без «утра/вечера» — ближайший
+такой на часах («в 7» в 15:00 — 19:00); два слота подряд разделяются, если один из них `{when}`. Текст напоминания,
+начатый вопросом («напомни, что у меня завтра в 9», «напомни, во сколько встреча»), — не команда, а вопрос ИИ
+(`Entry.no_question`); «мне» в начале текста отбрасывается. `Jarvis.ReminderAt` — «когда | текст» («завтра в 9 |
+Позвонить маме»); `Jarvis.Reminders` — ближайшие напоминания (до 10 на экране, 3 голосом); `Jarvis.ReminderCancel` —
+пусто: только что поставленное (не раньше 10 минут назад, иначе Jarvis спрашивает, какое), «все» — все (только
+своей командой с подтверждением: «отмени напоминание про все» — отказ), иначе — то, в тексте которого есть эти слова
+(«про маму» ↔ «Позвонить маме»). «Отмени» (`Jarvis.Undo`, `jarvis/commands/undo.py`) возвращает последнее
+обратимое действие Jarvis не старше 5 минут: громкость (прежний уровень), звук, «сверни все окна»
+(`window_action("undo_minimize_all")`), свернуть/развернуть окно (окно — как было), таймер и напоминание (удалить),
+открытую программу (закрыть; программу, которая уже работала до «открой …», «отмени» не закрывает — отвечает,
+что закрывать не стал, и не тянется к программе, открытой раньше); шагов нет —
+Ctrl+Z в активном окне, как раньше («контрол зет» — всегда Ctrl+Z). `App.CloseLast` («закрой его») — программа,
+которую Jarvis открыл не раньше 5 минут назад и после которой не открывал сайт, папку или файл; нет такой — ошибка,
+а не закрытие чего попало; «отмени» после «закрой его» открывает программу снова. «Закрой его» и «отмени» не входят в
+цепочки («открой блокнот и закрой его» — не две команды).
 
 Значения: `Ui.Click` — название кнопки, ссылки или пункта окна впереди («Отправить»), `Ui.Type` — «поле | текст»
 («Кому | ivan@example.com»; содержимое поля заменится): элемент ищется UI Automation по названию (точное, начало,
@@ -198,7 +245,7 @@ screenshots`; `Launch.Shell` — только в своих командах; з
 `Jarvis.Command` — id команды или её фраза;
 `Jarvis.Plugin` — «плагин:действие» («dictation:toggle»), аргументы JSON после «|»; `Jarvis.SilentMode` и
 `Jarvis.Microphone` (микрофон Jarvis: «не слушай меня»; голосом обратно не включить) — `on`, `off`, `toggle`; `Jarvis.ShowWindow` — `show`, `hide` или страница (`settings`, `commands`, `chat`);
-`Jarvis.Timer` — «5m»; `Jarvis.Reminder` — «10m | Позвонить маме».
+`Jarvis.Timer` — «5m»; `Jarvis.Reminder` — «10m | Позвонить маме»; `Jarvis.ReminderAt` — «завтра в 9 | Позвонить маме».
 `Jarvis.Briefing` («Сводка дня», для сценариев) — `""` (утренняя сводка), `short`, `tasks`, `today`, `missed`,
 `welcome`, `hello` — см. §6.
 `Media.Close` («закрой музыку») — закрыть программу, которая играет (сеанс воспроизведения Windows), нет её —
@@ -310,6 +357,25 @@ label, placeholder?, options?, required}], description}`.
 у ElevenLabs Flash — ≈1,3 тыс. кредитов один раз). `Tts.is_ready(text)` — прозвучит ли фраза сразу (локальный голос
 или звук всех её предложений уже в памяти).
 
+Клавиша «держи и говори» (`voice/ptt.py`, глобальный хук pynput): Windows молча снимает низкоуровневый хук, если
+обработчик ответил слишком медленно, — клавиша перестаёт работать без ошибки. Сторож (`Voice._ptt_watch`, раз в
+`PTT_CHECK_S` = 60 с): поток хука умер или человек печатает (ввод не раньше 5 с назад), а хук `PTT_SILENT_S` = 10
+мин не слышал ни одного нажатия, — хук ставится заново.
+
+**Ударения и «ё» голоса piper** — словарь Jarvis (`jarvis/voice/stress.py`; сборка и лицензии — `scripts/ru_dict`:
+GPL-3.0-or-later и CC BY-SA 4.0, не PolyForm): согласие ударений с OpenRussian 94,2 → 99,6 %, «ё» в 106 тыс. слов,
+омографы по знаку ударения. Установщик несёт `jarvis/resources/voice/{ru_dict, ru_dict.json, LICENSE.md}`
+(`scripts/build-core-win.sh`, `scripts/build-win.ps1`; без сети — `SKIP_RU_DICT=1` / `-SkipStressDict`). Перед
+загрузкой голоса ядро ставит словарь в его `espeak-ng-data` (исходный — рядом, `ru_dict.orig`), если фонемные
+таблицы голоса (`phontab`, `phonindex`, `phondata`) — те, с которыми словарь собран (`ru_dict.json.phoneme_tables`);
+`settings.tts.stress_dict: false`, другие таблицы или вылет ядра при загрузке голоса с этим словарём (этап
+crashguard `ru-dict`) — исходный словарь. espeak-ng читает словарь один раз на процесс: смена — со следующего
+запуска. В ответе голосом модель пишет «ё» и знак ударения U+0301 в словах с двояким ударением
+(`prompts.SOURCE_VOICE`): на экран, в `chat.delta`/`chat.done` и в чат ответ уходит без знаков (`Ai._delta`), в речь —
+со знаками (`AskResult.spoken`); знак получает только piper со словарём Jarvis (`engine.accents`), остальным
+голосам — без него (`textprep.prepare(accents=False)`). `Tts.status().stress_dict = {bundled, loaded:
+jarvis|espeak|""}`.
+
 Характер Джарвиса (`jarvis/voice/character.py`, `ctx.character`) — с персоной «Джарвис» (`ai.persona: jarvis`):
 ответ голосом на встроенную команду в его духе, коротко и с обращением из профиля (`profile.address`; пусто — без
 обращения): «Сворачиваю все окна, сэр.», «Я здесь, сэр.», «Приятного просмотра, сэр.», «Библиотека игр будет доступна
@@ -387,6 +453,7 @@ Jarvis добавляет вопрос и открывает окно продо
 | `GET /api/ai/models` | — | `{items: [string]}` (с провайдера; у `chatgpt` — каталог Codex; ошибка — пресеты) |
 | `POST /api/ai/test` | — | `{ok, error?, latency_ms, model}` (у `chatgpt` — крошечный ход Codex) |
 | `GET /api/ai/usage` | — | `{month: {requests, prompt_tokens, completion_tokens, cost, since}, budget}` |
+| `GET /api/ai/fallback` | — | `{configured, provider, model, paused: [{provider, reason, text, seconds}]}` — запасной ИИ и кто сейчас на паузе |
 | `GET /api/ai/chatgpt` | — | `ChatGptState` (запускает Codex, если компонент есть) |
 | `POST /api/ai/chatgpt/install` | — | `{ok, installing: true}` — скачивание в фоне (события `ai.chatgpt`), или `{ok, installed: true}` |
 | `POST /api/ai/chatgpt/login` | `{device?: bool}` | `{ok, logged_in, opened?, auth_url?}` — ядро само открывает браузер (вход OAuth ChatGPT); `device: true` — `{verification_url, user_code}` для входа с другого устройства; итог — событием `ai.chatgpt`; 400 — нет компонента или вход не начался |
@@ -477,6 +544,7 @@ error|disabled, error, tools: [{name, description}]}` — секретные `en
 | `agent.pointer` | `{run_id, kind: click\|double\|right\|type\|keys\|scroll\|focus, x, y, label, rect?: [l,t,r,b], ts}` — куда агент жмёт и что вводит, в физических точках экрана (оверлей рисует «курсор агента»; основной монитор: точка оверлея = физическая / масштаб − начало рабочей области) |
 | `mcp.status` | `{server_id, status, error?, tools_count}` |
 | `ai.configured` | `{configured}` — изменилось «ИИ настроен» (ключ, провайдер, адрес, каталог, вход в ChatGPT или программу) |
+| `ai.fallback` | `{active: true, provider, backup, reason, text, seconds}` — основной не ответил, на паузе, отвечает запасной (и тост «Отвечает запасной ИИ — …»); `{active: false}` — паузы сняты (новые настройки или ключ) |
 | `ai.cli` | `{provider, state: installing\|log\|installed\|error\|login\|auth, line?, version?, error?, opened?, logged_in?}` — установка программы-провайдера, окно терминала для входа, смена состояния входа |
 | `ai.chatgpt` | `{state: installing\|installed\|login\|device\|logged_in\|logged_out\|error, error?, version?, account?, auth_url?, verification_url?, user_code?, opened?}` — компонент и вход ChatGPT |
 
@@ -628,7 +696,8 @@ Teams, Steam, OBS, плееры, Notion…) — `jarvis/ai/playbooks.py`, вме
 порт есть, но браузер не ответил за 3 с — «не отвечает», второй не запускается; закрыли браузер — `closed`,
 выключили настройку — подключение закрывается (скачивания — снова как обычно). Действия: `browser_open {url, new_tab?}`
 (только http/https; «ozon.ru» — https; javascript:, file:, chrome:, data: — нет; ссылка с данными в адресе на сайт,
-которого нет в задаче и среди поисковых, — с разрешения; ждёт загрузку до 10 с; переходит только во вкладке, которую
+которого нет в задаче и среди поисковых, — с разрешения, имя сайта, похожее на подделку, — с разрешения всегда (§7);
+ждёт загрузку до 10 с; переходит только во вкладке, которую
 открыл агент в этом прогоне, или в пустой — во вкладке человека открывает новую), `browser_click {id, double?}`,
 `browser_type {id, text, submit?}` (содержимое заменяется; в `select` — выбор варианта; `submit` — Enter),
 `browser_scroll {direction: down|up|top|bottom, amount?, id?}`, `browser_press {keys}` (события клавиатуры в страницу;
@@ -727,9 +796,53 @@ Claude Code — только официальным установщиком (`i
 сброса, модель недоступна, регион, нет связи). Расход записывается с ценой 0 (подписка). `ANTHROPIC_API_KEY` в
 окружение Claude Code не передаётся (иначе он платит ключом, а не подпиской).
 
+Агент на экране не мешает человеку: перед действием настоящей мышью и клавиатурой (`click_point`, `type_text`,
+`scroll`, `press_keys`; `agent.HUMAN_INPUT`) смотрит время последнего ввода (`platform.idle_seconds`): ввод был
+позже последнего ввода самого агента (больше чем на 0,3 с) и меньше 2 с назад — человек сам работает; агент ждёт
+(`agent.state` «Жду: вы работаете мышью или клавиатурой…») до 30 с; не затих — действие не выполняется, модель
+получает `HUMAN_BUSY` (подождать или спросить); такое ожидание не тратит шаг задачи и не считается хождением по
+кругу. Действия UI Automation (`ui_click`, `ui_type`) мышь не трогают — без ожидания. Платформа-заглушка о вводе
+человека не знает (`report_input`) — там не ждём.
+
+Модель на этом ПК меньше 14B (`qwen3:8b`, `gemma-3-12b`; `llm.weak_local_model`) для долгих задач слабовата:
+фоновая задача пишет предупреждение в свой ход и показывает тост (раз за запуск на модель), «Диагностика» — `warn`
+у Jarvis AI. `LlmClient.timings` — скорость последних 500 запросов (`{provider, model, seconds, ttft,
+completion_tokens}`), `speed_stats()` — медиана времени до первого токена и токены в секунду.
+
+**«Приватно: …»** (`Ai.ask`, `PRIVATE_PHRASE`: «приватно», «локально», «по секрету», «без облака», «только на этом
+ПК» в начале фразы) — ответ в режиме «Чат» только моделью на этом ПК (`LlmClient.private_config`: основная, если она
+на этом ПК, иначе запасная, если она на этом ПК), без инструментов, которые ходят в интернет (`NETWORK_TOOLS`:
+поиск, страницы, погода, новости, курсы, агент, картинки — их рисует облако), без памяти и дел (`remember`,
+`add_task` — память и дела на сегодня уходят в каждый облачный запрос), без серверов MCP и без запасного в облаке;
+«приватно: агент, …» — не агенту (он работает облачной моделью), а в тот же приватный ответ. Так и из окна чата
+(`POST /api/chats/{id}/messages`), и голосом, и в Telegram. Модели на этом ПК нет — ошибка `PRIVATE_NONE`, в облако
+ничего не уходит.
+Префикс в чат не пишется; сообщения хода помечены `meta.private` и в историю для облачной модели (`Ai._history`,
+история агента, ChatGPT и программ) не попадают — следующие приватные вопросы их видят.
+
+**Запасной ИИ** (`settings.ai.fallback_provider` — провайдер по ключу или на этом ПК, не подписка; `fallback_model` —
+пусто: модель по умолчанию; `fallback_base_url` — пусто: адрес пресета; ключ — секрет `ai_fallback_api_key`, у того
+же провайдера, что основной, — его ключ). `LlmError.kind` — вид сбоя: `auth`, `quota`, `rate`, `region`, `server`,
+`network`, `timeout` (запасной поможет) или `config`, `model`, `too_long`, `rejected`, `format` (не поможет — чинить
+запрос или настройки). Основной провайдер по ключу не ответил так, что поможет запасной (после своих повторов), и
+на экран ещё ничего не ушло — `LlmClient.chat` повторяет тот же запрос запасному, а основной ставит на паузу
+(`OUTAGE_COOLDOWN`: квота — 30 мин, ключ и регион — 10, сервер — 2, связь — 1, частота — по `Retry-After`, 10 с —
+10 мин): пока пауза, `LlmClient.config()` отдаёт запасной, и основной не зовётся вовсе. Подписка ChatGPT и
+программы (Claude Code, Gemini CLI, Qwen Code) после сбоя хода (лимит подписки, нет входа, регион, сбой, нет
+связи; `note_outage(provider, reason)`) тоже встают на паузу — `Ai.account_backend()` тогда `None`, и ответы,
+агент и фоновые задачи идут через запасной по ключу (настройки — проверка связи и список моделей —
+`account_backend(routed=False)` и `llm.primary_config()`: всегда основной; проверка связи — один запрос основному,
+без запасного и без паузы). Без запасного пауза не ставится; запасной того же провайдера — если он отличается
+адресом, моделью или ключом. Пока основной — подписка, клиент API всегда отвечает запасным (пауза кончилась посреди
+долгой работы — работа не ломается); инструменты и зрение агента и фоновой задачи — того, кто отвечает. Модель
+без зрения в запасных — картинки из запроса убираются пометкой: и при переходе на запасной, и во всех запросах,
+пока основной на паузе (снимки агента и фоновой задачи, начатой основным). Новые настройки ИИ или ключ снимают
+все паузы.
+
 Провайдеры по ключу — OpenAI-совместимый `/chat/completions` с особенностями пресета (`jarvis/ai/providers.py`):
 регионы (Qwen/Model Studio, Kimi, GLM, MiniMax, Doubao, SiliconFlow), YandexGPT — заголовки
-`Authorization: Api-Key <ключ>` (IAM-токен `t1.…` — `Bearer`) и `OpenAI-Project: <folder_id>`, модель
+`Authorization: Api-Key <ключ>` (IAM-токен `t1.…` — `Bearer`), `OpenAI-Project: <folder_id>` и
+`x-data-logging-enabled: false` (не сохранять запросы), модель
 `gpt://<folder_id>/<модель>` (`settings.ai.folder_id`); Mistral — id вызовов из 9 символов; Doubao — без ключей длины
 в схемах инструментов; Gemini — подписи рассуждений (`extra_content`) возвращаются вместе с вызовами; убранные
 провайдером модели (`deepseek-chat`, `deepseek-reasoner`) заменяются моделью по умолчанию.
@@ -965,7 +1078,43 @@ briefcase, battery, calendar, bell, music, home, rocket, heart, book, monitor` �
 
 Секреты не попадают в журналы: `jarvis.log.RedactFilter` прогоняет сообщение и текст исключения через
 `jarvis.redact.redact()` — номера карт (по Луну), CVV, «пароль: …», пин-коды, ключи (`sk-…`, `ghp_…`, `xox…`,
-`AIza…`, `y0_…`, токены ботов Telegram, `Bearer`/`Basic`, JWT) и `key=…`/`token: …`/`*_SESSION_STRING=…`.
+`AIza…`, `y0_…`, `glpat-…`, `hf_…`, Stripe `sk_live_…`, Yandex Cloud `AQVN…` и IAM `t1.…`, Google `ya29.…`, токены
+ботов Telegram, `Bearer`/`Basic`, JWT), закрытые ключи PEM целиком, пароль в адресе подключения
+(`postgres://user:•••@host`) и `key=…`/`token: …`/`*_SESSION_STRING=…` (имя ключа — до 100 знаков до `api_key`;
+«токены» выдачи частями — `nextPageToken`, `page_token`, `syncToken`, `continuationToken` — только этими именами
+целиком не маскируются: `FB_PAGE_TOKEN` маскируется).
+
+**Наружу — без секретов** (`settings.ai.mask_secrets`, по умолчанию `true`): тот же `redact()` проходит всё, что
+уходит облачной модели, — сообщения в API провайдера (`redact_messages`: текст и текстовые части, картинки как есть;
+модели на этом ПК и в локальной сети — без маски), запросы, инструкции и результаты инструментов подписки ChatGPT
+(Codex), задание и системный текст программ (Claude Code, Gemini CLI, Qwen Code), ответы MCP-сервера Jarvis.
+Модель видит `•••` вместо ключа; печатает и вводит Jarvis то, что сказал человек.
+YandexGPT получает заголовок `x-data-logging-enabled: false` — Yandex не сохраняет запросы и ответы у себя.
+
+**Окна, скрытые от ИИ** (`jarvis/ai/private_windows.py`): менеджеры паролей (KeePass, KeePassXC, 1Password,
+Bitwarden, LastPass, Dashlane, Enpass, RoboForm, Keeper, NordPass, Proton Pass, Password Safe, Kaspersky Password
+Manager), окно «Безопасность Windows» с вводом пароля и запрос UAC, а также программы и слова заголовка из
+`settings.ai.private_apps` («keepass» / «keepass.exe» / «Сбербанк Онлайн»). Агент такое окно не снимает и не читает
+(ни элементов, ни снимка — модели только «окно скрыто от ИИ»), в нём не кликает и не печатает; снимок всего экрана,
+на котором видно такое окно, не делается (лупа на его месте — тоже); «что на экране?» с таким окном впереди — без
+снимка, с пояснением.
+
+**Ссылки**: «\\» в адресе — это «/», а лишние «/» и «\\» после «https:» не в счёт, как у браузера
+(`policy.web_url`; иначе «https://evil.example\\@google.com» проверялась бы как google.com, а «https:///gооgle.com» —
+как адрес без сайта, а открылись бы evil.example и gооgle.com); адрес с «логин@» перед сайтом и адрес без имени
+сайта не открываются.
+Имя сайта не латиницей в вопросе «Открыть …?» показывается и в настоящем виде (punycode:
+`пример.рф` — `xn--e1afmkfd.xn--p1ai`); имя, похожее на подделку (буквы разных алфавитов в одном имени —
+`gооgle.com` с русскими «о»; имя целиком из русских двойников латинских букв вне русских зон — `аррӏе.com`),
+спрашивается всегда, даже без данных в адресе, с предупреждением и настоящим именем в заголовке, и только кнопкой
+(`jarvis.ai.policy.lookalike_host`, `link_note`) — в чате, у агента на экране, в браузере агента и у фоновой
+задачи. Заголовки скрытых от ИИ окон в списках окон для модели заменяются пометкой «(окно скрыто от ИИ)»
+(`private_windows.shown_title`) — и в ответе «окно сменилось» агента, и в итоге `launch_app` чата; `type_text` и
+`press_keys` чата в такое окно не печатают.
+
+`core/tests/test_hygiene.py` проверяет всё, что лежит в git: ни ключей и паролей (тесты с поддельными — не в счёт),
+ни личных путей (`C:\Users\<имя>` — только образцы вроде `me`), ни адресов почты не на `example.*`/`noreply`, ни
+программ, моделей, баз, журналов и ключевых файлов; текст — до 1 МБ, двоичный файл — до 512 КБ.
 
 | Маршрут | Тело | Ответ |
 |---|---|---|
@@ -986,3 +1135,167 @@ events, reminders, clipboard, summaries, screenshots, file_index, voice_cache, u
 | `data.purged` | `{removed: {memory?, history?, chats?, voice_chats?, tool_results?, summaries?, logs?}, ts}` |
 | `data.cleared` | `{cleared: {id: сколько}, ts}` |
 | `notes.changed` / `tasks.changed` / `events.changed` / `reminders.changed` | ещё и `{op: "clear"}` — удалены все |
+
+## 8. Фоновые задачи (`jarvis/background`, `jarvis/api/background.py`)
+
+Агент работает над большой задачей сам, в фоне: ищет, читает страницы, пишет итог в хранилище заметок
+(Obsidian). Экрана, мыши, клавиатуры, команд Jarvis и запуска программ у него нет. Устройство и план —
+`docs/BACKGROUND_TASKS.md`.
+
+- **Очередь**: одновременно идёт не больше `settings.background.parallel` задач; остальные — `queued`. Задача,
+  которая работала, когда Jarvis закрыли, при запуске снова встаёт в очередь и продолжается с плана и хода работы
+  (новый «заход»: `runs` + 1). Состояние — файлом `<данные>/background/<id>.json`.
+- **Провайдер** — как у Jarvis AI: ChatGPT (подписка) — ход Codex с его веб-поиском; Claude Code, Gemini CLI,
+  Qwen Code — запуск программы с её веб-поиском и чтением страниц (оболочка и файлы — выключены), инструменты
+  Jarvis — с сервера MCP ядра; ключ API — цикл Jarvis (`temperature` 0.2) с поиском DuckDuckGo/Bing.
+- **Инструменты задачи**: `web_search`, `web_read` (если у провайдера нет своих), `vault_search`, `vault_read`,
+  `vault_list`, `vault_write`, `measure_add`, `update_plan`, `report`, `ask_user`, `finish`, инструменты серверов MCP
+  (рискованные — с разрешения, см. ниже). Сорвалось действие — остальные действия того же хода модели не
+  выполняются (ответ «Не выполнено: предыдущее действие этого хода не удалось…»); одно и то же действие с тем же
+  ответом дважды подряд — подсказка сменить путь, пять раз — заход останавливается (`partial`); за 10, 5, 3, 2 и 1
+  действие до `settings.background.max_steps` — предупреждение модели; после лимита действий или времени
+  (`max_hours`, без ожидания ответа) — просьба вызвать `finish`, потом остановка (`partial`).
+- **Вопросы**: `ask_user` (и разрешение на рискованное — `kind: "approval"`, варианты «Разрешить» / «Отклонить»)
+  ставит задачу в `waiting` и ждёт ответа до 9 минут; дольше — заход заканчивается, задача ждёт, а ответ
+  (`POST …/answer`) запускает новый заход. Разрешение, данное после паузы, запоминается (`approved`) — то же
+  действие не спрашивается снова.
+- **Повторы** (`jarvis/background/repeat.py`): `repeat = {kind: "daily", at: "ЧЧ:ММ", weekdays: [0…6]}` (пусто —
+  каждый день) или `{kind: "hours", hours: 1…168}`; `{}` — не повторяется. При создании `repeat: null` — повтор
+  ищется в начале текста («каждый вечер …», «по будням в 10 …», «каждые 3 часа …»: остаток — название задачи).
+  Повторяющаяся задача между запусками — `scheduled` (`next_run` — когда следующий) или `paused`; раз в 15 с
+  ядро запускает те, чьё время пришло (пропущенное, пока Jarvis был закрыт, — один раз), запуск — новый `cycle`:
+  план, лимиты действий и времени и разрешения (`approved`: разрешённое в прошлом запуске снова спрашивается) —
+  заново, итог — в `history` (`{cycle, ts, status, summary, steps}`, до 60), потом снова `scheduled`; «каждые N
+  часов» — от начала прошлого запуска. Рассказ после повтора («каждый день я трачу…») — не повтор. Три неудачи подряд (`fails`) — `paused`. Отмена — повторы останавливаются
+  (`cancelled`); «Ещё раз» (`retry`) — запуск сейчас, дальше по расписанию; `resume` — снова по расписанию.
+- **Замеры** (`jarvis/background/measure.py`): `measure_add {table, values: [{column, value}]}` — строка в
+  `Замеры/<table>.md` своей папки («/» в названии — «-»; Markdown-таблица, первая колонка «Дата»: `ГГГГ-ММ-ДД`, у
+  задачи «каждые N часов» — `ГГГГ-ММ-ДД ЧЧ:00`, дата без часа — сегодня текущий час; та же дата — строка
+  заменяется; новая колонка — сама; `\|` в ячейке человека — не граница) и график
+  `Замеры/<table>.svg` рядом (числовые колонки, до трёх; в заметке — `![[…svg]]`). Таблицы задачи — `tables`.
+- **«Входящие»** (`jarvis/background/inbox.py`, `settings.background.inbox`): строки в `<папка агента>/Входящие.md`
+  (пункты «- …», «- [ ] …», «1. …» или просто строки; с отступом под пунктом — его подробности) становятся
+  задачами (`source: "vault"`, до 5 за раз), когда файл не правили 30 с (человек может ещё печатать), и
+  отмечаются «- [x] … — [[заметка задачи|задача]]» (не взялась — «- [x] … — ⚠️ не взято: причина»). Задача
+  поставлена, а строку отметить не вышло (файл занят) — помнится (`kv background:inbox_pending`): строка будет
+  отмечена позже, второй задачи не будет. ИИ не настроен — строки ждут; файл не в UTF-8 — не трогается. Агент
+  сам в «Входящие» и «Инструкции» не пишет (`vault_write` — ошибка «ведёт человек»).
+- **Хранилище** — `settings.background.vault`; пусто — открытое хранилище Obsidian из его списка (`obsidian.json`),
+  нет — `Документы\Jarvis`. Агент пишет только в свою папку (`settings.background.folder`, «Jarvis»): `README.md`,
+  `Инструкции.md` (указания человека — в промпт каждой задачи, если отличаются от шаблона), `Входящие.md`, `Задачи/` (заметка
+  задачи — её ведёт Jarvis: свойства `type: jarvis-task, status, created, updated, finished, sources, steps`, бриф,
+  итог, план, вопросы, ход работы, источники), `Исследования/`, `Замеры/`, `Журнал/<дата>.md` (строка на
+  законченную задачу). Читать и искать — всё хранилище (`read_vault`), кроме служебных папок (`.obsidian` и
+  других с точкой).
+- **Уведомления** — `settings.background.notify_question` / `notify_done`: список из `toast` (тост с `task_id`),
+  `voice` (вслух, кроме тихого режима), `telegram` (сообщение владельцу бота); пусто — тихо. Вопрос в Telegram —
+  с кнопками вариантов (`callback_data: "bq:<задача>:<вопрос>:<номер>"`; разрешение — «Разрешить» / «Отклонить»):
+  ответ — кнопкой или ответом на сообщение текстом (сообщение → задача и вопрос — `kv telegram:task_questions`,
+  последние 100); разрешение, нажатое или написанное, пока Jarvis был выключен, нужно дать заново.
+- **Запуск из чата и голосом**: «в фоне: …», «фоном …», «поставь задачу: …», «фоновая задача: …» (`ai.ask`, без
+  картинок) — сразу задача, в чат — просьба и «Принял — работаю в фоне: «…»» (`meta.background` — id задачи,
+  голосом — «Принял, сэр. Работаю в фоне.»); модель в режиме «Всё вместе» сама ставит большое дело в фон
+  инструментом `start_background_task {task, result?, repeat?}` (риск `act`); повторяющаяся — «Принял — буду
+  делать каждый день в 20:00: «…». Первый раз — сейчас…».
+- **Браузер агента** (`jarvis/ai/browser/agent_browser.py`, `ctx.agent_browser`): Chrome или Edge без окна
+  (`--headless=new`, подпись — как у обычного Chrome, флаг автоматизации снят), профиль `<данные>/agent-browser`,
+  своя вкладка у каждой задачи (`task_tabs`), скачивания запрещены. Запускается при первом сайте задачи или
+  открытии панели, закрывается вместе с Jarvis и через 10 минут без задач и зрителей. Действия задачи
+  (`jarvis/ai/browser/task_tools.py`): `browser_open, browser_click, browser_type, browser_scroll, browser_press,
+  browser_wait, browser_read` (и `browser_screenshot` — модели с картинками); ответ каждого — снимок страницы
+  (элементы `b1, b2…`). Разрешение (вопрос задачи): деньги, отправка и публикация — всегда; удаление — кроме
+  «Спрашивать реже»; остальное рискованное — при «Спрашивать чаще» (тогда и ввод текста). Пароли, коды и данные
+  карт задача не вводит (ответ модели — попросить человека), файлы не скачивает и не загружает. Вкладкой
+  управляет человек (`held`) — действие ждёт и не выполняется: «Пока человек управлял страницей, ничего не
+  сделано…». «Открыть окном» (`open_window`): тот же профиль обычным окном (`windowed`) — войти на сайт, который не
+  пускает браузер без окна; браузер без окна на это время закрыт (вкладки задач тоже), действия задач ждут до 30 с,
+  потом ответ модели «человек входит на сайт…»; окно закрыли — браузер снова без окна, а задача открывает
+  страницу заново.
+
+Настройки `background`: `vault`, `folder`, `read_vault`, `inbox` (`true`), `parallel` (1–4, 2), `autonomy` (`careful | normal | bold`),
+`max_steps` (10–1000, 150), `max_hours` (0.25–48, 4), `model` (`""` — та же модель, что в чате; иначе — модель
+фоновых задач по ключу API, например подешевле для долгих задач: `runner.task_model`; модель другого провайдера —
+после смены провайдера — не берётся, и интерфейс её сбрасывает; подписки и программы выбирают модель сами), `notify_question`, `notify_done` (`["toast"]`).
+
+| Маршрут | Тело | Ответ |
+|---|---|---|
+| `GET /api/background` | — | `{items: TaskCard[]}` — идущие первыми, потом повторяющиеся (ближайший запуск первым), потом новые |
+| `POST /api/background` | `{brief, deliverable?, title?, source?: ui\|text\|voice\|remote\|vault, repeat?: Repeat\|null, run_now?: true}` | `{task: TaskCard}`; ИИ не настроен или расписание неверное — 400 |
+| `POST /api/background/parse` | `{text}` | `{repeat, repeat_text, title}` — повтор в начале текста («каждый вечер …»): форма новой задачи показывает его до создания |
+| `GET /api/background/vault?refresh=` | — | `{path, folder, exists, obsidian, auto, vaults: [{path, name, open, ts}]}` |
+| `POST /api/background/vault/setup` | — | то же — после создания своей папки агента |
+| `GET /api/background/{id}` | — | `{task: Task}` — целиком: `brief, deliverable, plan[], log[], questions[], sources[], summary, note, result, error, steps, worked_s, runs, usage, provider, model, repeat, next_run, cycle, history[], fails, tables[], card, note_link, result_link` (`obsidian://…`) |
+| `POST /api/background/{id}/answer` | `{text, question_id?}` | `{task: TaskCard}`; вопроса нет — 400 |
+| `POST /api/background/{id}/cancel` | — | `{task: TaskCard}` |
+| `POST /api/background/{id}/retry` | — | `{task: TaskCard}` — снова в очередь, с тем же планом и ходом работы; повторяющаяся — новый запуск сейчас |
+| `POST /api/background/{id}/pause` | — | `{task: TaskCard}` — повторы на паузе; не повторяется или идёт — 400 |
+| `POST /api/background/{id}/resume` | — | `{task: TaskCard}` — снова по расписанию |
+| `PUT /api/background/{id}/repeat` | `{repeat: Repeat\|null}` | `{task: TaskCard}` — сменить расписание (обычная законченная задача становится повторяющейся; `null` или `{}` — повторы сняты); идёт — 400 |
+| `GET /api/background/{id}/tables` | — | `{items: [{path, name, columns, rows (последние 400, старые первыми), total, numeric: [номер колонки], link}]}` |
+| `DELETE /api/background/{id}` | — | `{ok}` — из списка Jarvis (заметки в хранилище остаются) |
+| `GET /api/agent-browser` | — | `{status: closed\|starting\|connected\|error, app, found, version, error, tasks: {задача: вкладка}, held: [вкладка], profile, windowed}` |
+| `POST /api/agent-browser/close` | — | то же — браузер агента закрыт |
+| `POST /api/agent-browser/window` | `{url?, task?}` | то же — открыт окном (адрес сайта `http(s)://…`, страница задачи `task` или страница «войдите в сайты»); Chrome и Edge нет или окно не открылось — 400 |
+| `POST /api/agent-browser/window/close` | — | то же — окно закрыто (бережно, через `Browser.close`) |
+
+WebSocket `/ws/agent-browser?token=&task=` — панель «Браузер агента»: смотрит вкладку задачи `task` (у задачи её
+ещё нет — `target: ""`, браузер не запускается) или, без `task`, свою новую вкладку (`task: "manual"`, стартовая
+страница со ссылками на входы популярных сайтов — войти на сайты; закрывается вместе с панелью). Страница
+сменилась сама (ссылка, действие агента) — снова `state`; после каждого перехода показ кадров включается заново,
+первый кадр — сразу снимком страницы. Браузер открыт окном — `state` с `windowed: true, target: ""` (кадров нет;
+окно закрыли — панель шлёт `watch` заново). От ядра: `{type: "state", data: {target, task, url, title, held, status, error, windowed}}`, `{type:
+"frame", data: {data: JPEG base64, metadata: {deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX,
+scrollOffsetY, timestamp}}}` (только последние кадры), `{type: "error", data: {text}}`. От панели: `{type: "watch",
+task?}`, `{type: "take"}` / `{type: "release"}`, ввод в страницу (координаты — CSS-точки, как в `metadata`):
+`{type: "mouse", event: mousePressed|mouseReleased|mouseMoved, x, y, button, clickCount, modifiers}`, `{type:
+"wheel", x, y, dx, dy}`, `{type: "key", event: keyDown|keyUp|rawKeyDown, key, code, keyCode, text, modifiers}`,
+`{type: "text", text}`, `{type: "navigate", url}`, `{type: "history", back: bool}`, `{type: "reload"}`. Панель
+закрылась — управление само возвращается агенту.
+
+`TaskCard = {id, title, brief, status: queued|running|waiting|done|partial|failed|cancelled|scheduled|paused, source,
+created, updated, finished, plan_done, plan_total, steps, progress: [{ts, text, kind}] (последние 3), question:
+Question|null, summary, error, note, result, sources, repeat: Repeat|{}, repeat_text («каждый день в 20:00»),
+next_run, cycle, last_run: {cycle, ts, status, summary, steps}|null, tables}`. `Question = {id, text, kind:
+question|approval, options, detail, key, asked, answer, answered}`. `Repeat = {kind: "daily", at, weekdays} |
+{kind: "hours", hours}`.
+
+| Событие | Данные |
+|---|---|
+| `background.updated` | `{task: TaskCard}` — по ходу работы не чаще раза в секунду |
+| `background.question` | `{task_id, question: Question}` |
+| `background.done` | `{task_id, status, summary, error, note, result, next_run, paused}` — у повторяющейся — итог запуска (`status`), когда следующий и не ушла ли на паузу |
+| `background.deleted` | `{id}` |
+| `agent_browser.state` | как `GET /api/agent-browser` |
+
+**Утверждение плана** (`settings.background.approve_plan`: `never` | `big` (по умолчанию) | `always`): первый план
+задачи (`update_plan`) из 4+ шагов, план повторяющейся задачи или любой при `always` уходит человеку вопросом
+`kind: "plan"` — «Утвердить план?» с шагами (шаг в строке), варианты «Начинай» / «Отмени задачу». Да или нет —
+только короткий ответ без оговорок (`tools.plan_approved`): «да», «начинай», «ок, давай», «нет возражений», «не надо
+менять» — утвердить; «нет», «стоп», «Отмени задачу» (сам отказ, без продолжения) — задача отменяется сразу (`cancelled`, итог «Отменено: план не утверждён.»; и во время паузы — нового
+захода нет); «да, но сначала сравни цены», «нет, лучше через Яндекс Маркет» и любой другой ответ словами — правка:
+модель составляет новый план, и он снова на утверждение (прежний неотвеченный вопрос плана закрывается —
+`supersede_plans`). Утвердили — `task.plan_ok`, дальше отметки по ходу без вопросов (ответ во время паузы тоже
+ставит `plan_ok`). В Telegram — с 📋.
+
+**Срок действия и ответ человека.** Срок инструмента задачи (`TaskTool.timeout`) не включает время, пока человек
+отвечает на его вопрос (разрешение, план) или идёт скачивание со своим сроком (`runner.run_tool`, `Session.held`):
+раньше вопрос из щелчка обрывался через минуту, хотя ответа ждут до `LIVE_WAIT_S`.
+
+**Поиск и чтение — параллельно.** Пачка вызовов модели только из `web_search`, `web_read`, `vault_search`,
+`vault_read` идёт одновременно (`runner.PARALLEL_TOOLS`); вперемешку с записью — по очереди.
+
+**Скачивание с разрешения.** `browser_click` по ссылке на файл (или Enter на ней) в браузере агента — вопрос
+«Скачать файл с <сайт>: «<ссылка>»?» (`approval`, ключ `download:<сайт>:<адрес ссылки>` — разрешение на эту
+ссылку, а не на все скачивания сайта); разрешили — браузер на время этого щелчка скачивает в `<Загрузки>\Jarvis`
+(нет такой папки — `<данные>/downloads`; `agent_browser.download_folder`) и снова запрещает скачивания. Берётся одно
+скачивание — из вкладки задачи (или открытой ею новой); начатое во вкладке другой задачи и второе подряд
+отменяются (`Browser.cancelDownload`). Браузер сохраняет файл под guid (`allowAndName`), Jarvis даёт ему имя с
+сайта, годное для Windows (`safe_file_name`: без «?», «:» и путей, не CON/NUL), не затирая лежащий там файл:
+«прайс.zip» → «прайс (2).zip». Не докачалось за 5 минут — скачивание отменяется. Модель получает путь, файл не
+открывается и не запускается; в ход задачи — «Скачан файл …». Загрузка файлов на сайты — по-прежнему только
+человеком.
+
+`POST /api/background/{id}/notebooklm` → `{path, link, urls}` — «Для NotebookLM»: итог, текст главной заметки и все
+источники задачи одним Markdown-файлом `Jarvis/NotebookLM/<задача>.md` (у NotebookLM нет открытого API для обычных
+аккаунтов — файл загружает человек: «Добавить источник» → «Загрузить»; ссылки — ещё и списком в конце файла и в
+буфер, для «Добавить источник» → «Сайт»); у задачи без итога и источников — 400.

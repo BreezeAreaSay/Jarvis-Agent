@@ -1,0 +1,17 @@
+name: Идея
+description: Предложить новую возможность или улучшение
+labels: ["идея"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: Что хочется
+      description: Какую задачу это решит — лучше на примере из жизни.
+      placeholder: Хочу сказать «каждый вечер записывай курс доллара в Obsidian», чтобы агент сам вёл таблицу.
+    validations:
+      required: true
+  - type: textarea
+    id: now
+    attributes:
+      label: Как сейчас
+      description: Как вы делаете это сейчас и что мешает.

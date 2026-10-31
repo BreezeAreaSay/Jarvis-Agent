@@ -30,18 +30,20 @@ spotify:, mailto:) и инструментами подключённых сер
 import asyncio
 import contextlib
 import copy
+import hashlib
+import json
 import logging
 import re
 import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from rapidfuzz import fuzz, process
 
-from jarvis.ai import apphints, journal, lessons, playbooks, vision
+from jarvis.ai import apphints, journal, lessons, playbooks, private_windows, vision
 from jarvis.ai.catalog import AGENT_ACTIONS
 from jarvis.ai.chats import ChatStore, ui_message
 from jarvis.ai.format import chat_title, now_text, one_line, speech_text
@@ -52,13 +54,17 @@ from jarvis.ai.policy import (
     RISKY_KEYS,
     SEARCH_HOSTS,
     SEND_KEYS,
+    ascii_host,
     decision,
     has_card_number,
     is_messenger,
     is_shell_window,
     jarvis_hotkeys,
+    link_note,
+    lookalike_host,
     normalize_combo,
     tool_risk,
+    web_url,
 )
 from jarvis.ai.tools import (
     SHELL_RE,
@@ -69,10 +75,18 @@ from jarvis.ai.tools import (
     untrusted,
     window_appeared,
 )
-from jarvis.ai.uia import SNAPSHOT_LIMIT, UiBackend, UiElement, UiSnapshot, create_ui, format_snapshot
+from jarvis.ai.uia import (
+    SNAPSHOT_LIMIT,
+    StableIds,
+    UiBackend,
+    UiElement,
+    UiSnapshot,
+    create_ui,
+    format_snapshot,
+)
 from jarvis.ai.web import site_name
 from jarvis.commands.validate import MAX_ACTIONS as MAX_RECIPE
-from jarvis.confirm import parse_yes_no
+from jarvis.confirm import NOT_BY_VOICE, high_risk, parse_yes_no
 from jarvis.db import new_id
 from jarvis.platform.base import PlatformError, WindowInfo
 from jarvis.redact import redact
@@ -104,6 +118,31 @@ RECENT_RECIPE_S = 15 * 60.0  # «запомни это» — про дело а�
 ASK_TIMEOUT_S = APPROVAL_TIMEOUT  # ask_user: ответ (голосом, в чате, фразой) ждём, как решение о разрешении
 MAX_MCP_TOOLS = 64  # больше инструментов провайдеры не принимают (вместе с действиями агента)
 STOPPED = "Ошибка: пользователь остановил работу — больше ничего не делай"
+TEMPERATURE = 0.2  # действиям на экране нужна аккуратность, а не разнообразие (модели без «раздумий»)
+# действие пришло так быстро после неудачного — оно из того же хода модели (Codex и программы зовут действия
+# хода по одному; свой цикл API знает ходы точно и сбрасывает отметку на каждом)
+BATCH_GAP_S = 0.5
+# действия настоящей мышью и клавиатурой: пока человек сам работает ими — не мешать, подождать
+HUMAN_INPUT = frozenset({"click_point", "type_text", "scroll", "press_keys"})
+HUMAN_QUIET_S = 2.0  # человек не трогал мышь и клавиатуру столько — можно действовать
+HUMAN_WAIT_S = 30.0  # дольше не ждём: действие не выполняется, модель узнаёт почему
+HUMAN_BUSY = (
+    "Ничего не сделано: человек сам работает мышью и клавиатурой — не мешай. Подожди (wait) и продолжи, или "
+    "спроси его (ask_user), можно ли продолжать."
+)
+SKIPPED = (
+    "Не выполнено: предыдущее действие этого хода не удалось — посмотри на его ответ и свежий снимок и реши "
+    "заново, что делать."
+)
+REPEAT_HINT = 2  # одно и то же действие с тем же итогом столько раз подряд — подсказка сменить путь
+REPEAT_STOP = 5  # …а столько — работа останавливается
+NO_REPEAT = frozenset({"wait", "ask_user", "ui_snapshot", "screenshot", "zoom", "finish"})
+LIMIT_GRACE = 3  # после лимита шагов ещё столько вызовов — успеть вызвать finish и честно подвести итог
+LIMIT_TEXT = (
+    "Лимит шагов исчерпан — больше ничего не делай: вызови finish (status=partial) и честно опиши, что "
+    "сделано, а что нет."
+)
+UNTRUSTED_TAG = re.compile(r"\[[0-9a-f]{6}\]")
 
 RISKY_NAME = re.compile(
     r"\b(send|submit|delete|remove|pay|buy|order|purchase|checkout|confirm|publish|post|transfer|uninstall|"
@@ -173,7 +212,7 @@ AGENT_PROMPT = """Ты — агент Jarvis: сам выполняешь зад
 
 Как видеть:
 - После каждого действия приходит свежий снимок: элементы окна впереди с id (e1, e2…), типом, именем \
-и координатами. После действия старые id устаревают.
+и координатами. id элемента не меняется, пока он в окне; исчез — его id больше не действует.
 - Если ты понимаешь картинки, к снимку прикладывается картинка всего экрана: окно впереди обведено, его \
 элементы подписаны метками e…, сетка координат через 100 точек; мониторов несколько — остальные следом, \
 мельче; окно впереди, если на снимке оно мелкое, — следом крупно (или крупно то, что изменилось): по \
@@ -293,6 +332,7 @@ class AgentRun:
     step: int = 0
     total: int = 0
     text: str = ""
+    last_input: float = 0.0  # monotonic последнего ввода самого агента (мышь, клавиатура)
     plan: list[str] = field(default_factory=list)
     actions: list[dict[str, Any]] = field(default_factory=list)  # карточки для чата: {title, ok, detail?}
     count: int = 0  # сколько действий сделано (лимит — ai.max_agent_steps)
@@ -302,7 +342,8 @@ class AgentRun:
     searching: bool = (
         False  # открыт поиск (ctrl+k, щелчок по полю поиска): набранное — запрос, а не сообщение
     )
-    snapshot: UiSnapshot | None = None
+    snapshot: UiSnapshot | None = None  # последний снимок окна — с id, которые видит модель
+    ids: StableIds = field(default_factory=StableIds)  # id элементов модели ↔ id снимка UI Automation
     target: WindowInfo | None = None  # окно, с которым агент работает
     shot: vision.Shot | None = None  # последний снимок окна картинкой — для click_point
     window_shot: vision.Shot | None = None  # окно впереди крупно к этому снимку — click_point on="window"
@@ -313,6 +354,12 @@ class AgentRun:
     vision: bool = False  # модель понимает картинки
     ask_all: bool = False  # после отказа спрашивать перед каждым действием, которое что-то меняет
     ask_once: bool = False  # это действие человек велел спрашивать всегда (разрешения инструментов)
+    failed_at: float = 0.0  # когда отдан ответ сорвавшегося действия: остальные действия того же хода — нет
+    repeats: dict[str, tuple[str, int]] = field(default_factory=dict)  # действие → (итог, сколько раз подряд)
+    over: int = 0  # вызовов после лимита шагов
+    halt: str = (
+        ""  # работа остановлена (лимит, хождение по кругу): почему — бэкенды подписки тоже останавливаются
+    )
     outcome: str = ""
     given: set[str] = field(default_factory=set)  # подсказки по программам, которые модель уже получила
     plan_sent: bool = False  # план (он составляется параллельно) уже показан модели
@@ -484,7 +531,7 @@ class Agent(BaseService):
         run = self._run
         return run is not None and not run.finished and run.question is not None and not run.question.done()
 
-    def interject(self, text: str) -> str:
+    def interject(self, text: str, source: str = "text") -> str:
         """Реплика человека, пока агент работает. Вернёт, чем она стала: "answer" — ответ на вопрос ask_user;
         "approval" — «да» / «нет», пока агент ждёт разрешения (как кнопка на карточке); "note" — поправка,
         модель получит её с ответом на ближайшее действие (и до итога); "" — агент не работает."""
@@ -496,21 +543,31 @@ class Agent(BaseService):
         if run.question is not None and not run.question.done():
             run.question.set_result(text)
             return "answer"
-        if run.status == "waiting" and self._decide(text):
+        if run.status == "waiting" and self._decide(text, source):
             if len(text.split()) > 2:  # «нет, напиши лучше Маше» — не только решение, но и поправка
                 run.notes.append(text)
             return "approval"
         run.notes.append(text)
         return "note"
 
-    def _decide(self, text: str) -> bool:
-        """«да» / «нет» на открытые подтверждения агента. False — это не ответ или подтверждений нет."""
+    def _decide(self, text: str, source: str = "text") -> bool:
+        """«да» / «нет» на открытые подтверждения агента. False — это не ответ или подтверждений нет.
+        Голосовое «да» необратимое (risk=high) не разрешает — только кнопка (или voice.confirm_high_by_voice);
+        «нет» — всегда."""
         allow = parse_yes_no(text)
         confirmations = getattr(self.ctx, "confirmations", None)
         if allow is None or confirmations is None:
             return False
-        ids = [c["id"] for c in confirmations.pending() if c.get("kind") == "agent"]
-        return sum(bool(confirmations.resolve(i, allow)) for i in ids) > 0
+        pending = [c for c in confirmations.pending() if c.get("kind") == "agent"]
+        by_voice = allow and source == "voice" and not self.ctx.settings.value.voice.confirm_high_by_voice
+        if by_voice and any(c.get("risk") == "high" for c in pending):
+            if self.ctx.loop is not None:
+                self.ctx.spawn(self.ctx.tts.say(NOT_BY_VOICE, interrupt=True), "agent-not-by-voice")
+            for c in pending:
+                if c.get("risk") != "high":
+                    confirmations.resolve(c["id"], allow)
+            return True  # «да» услышано, но необратимое ждёт кнопки — это не поправка к задаче
+        return sum(bool(confirmations.resolve(c["id"], allow)) for c in pending) > 0
 
     def _take_notes(self, run: AgentRun) -> str:
         notes, run.notes = run.notes, []
@@ -568,6 +625,9 @@ class Agent(BaseService):
         ai = self.ctx.settings.value.ai
         model = ai.model
         backend = self._chatgpt()
+        if backend is None:  # ключ API — или запасной, пока подписка на паузе: зрение — того, кто ответит
+            with contextlib.suppress(Exception):
+                return bool(self._llm().config().vision)
         resolve = getattr(backend, "resolve_model", None)
         if callable(resolve):
             with contextlib.suppress(Exception):
@@ -857,8 +917,10 @@ class Agent(BaseService):
             windows = await self.ctx.run_platform(self.ctx.platform.list_windows)
         except Exception as e:
             return f"(список окон недоступен: {e})"
+        hidden = private_windows.settings_list(self.ctx)
         lines = [
-            f"- «{w.title}» ({w.exe})" + (" — активное" if w.foreground else "")
+            f"- «{private_windows.shown_title(w, hidden)}» ({w.exe})"
+            + (" — активное" if w.foreground else "")
             for w in windows[:25]
             if w.title
         ]
@@ -912,6 +974,7 @@ class Agent(BaseService):
                 for r in self.chats.rows(run.chat_id)
                 if r["role"] in ("user", "assistant")
                 and not r["meta"].get("hidden")
+                and not r["meta"].get("private")  # «приватно: …» — только для модели на этом ПК
                 and r["id"] != run.turn_id
             ]
         except Exception:
@@ -979,7 +1042,13 @@ class Agent(BaseService):
             specs = self._specs(run)
             summary = str(
                 await chatgpt.run_agent(
-                    self, run, system=system, first=first, specs=specs, images=_image_urls(extras)
+                    self,
+                    run,
+                    system=system,
+                    first=first,
+                    specs=specs,
+                    images=_image_urls(extras),
+                    limit=limit + LIMIT_GRACE,
                 )
             )
             while run.notes and not run.closing and run.count < limit and time.monotonic() < run.deadline:
@@ -987,7 +1056,13 @@ class Agent(BaseService):
                 again, extras = await self._continuation(run)
                 summary = str(
                     await chatgpt.run_agent(
-                        self, run, system=system, first=again, specs=specs, images=_image_urls(extras)
+                        self,
+                        run,
+                        system=system,
+                        first=again,
+                        specs=specs,
+                        images=_image_urls(extras),
+                        limit=limit + LIMIT_GRACE,
                     )
                 )
             return summary
@@ -1003,7 +1078,13 @@ class Agent(BaseService):
                 raise AgentLimit(f"Агент работал дольше {int(RUN_DEADLINE_S // 60)} минут и остановлен")
             _prune(messages)
             try:
-                response = await llm.chat(messages, tools=self._specs(run), stream=False)
+                response = await llm.chat(
+                    messages,
+                    tools=self._specs(run),
+                    stream=False,
+                    temperature=TEMPERATURE,
+                    speed=_agent_speed(settings.ai.speed),
+                )
             except LlmError as e:
                 if run.vision and _image_refused(e):
                     if refused_once:
@@ -1035,6 +1116,7 @@ class Agent(BaseService):
             )
             extras = []
             summary: str | None = None
+            run.failed_at = 0.0  # новый ход модели: она уже видела, что прошлое не вышло
             for call in response.tool_calls:
                 if summary is not None:
                     messages.append(
@@ -1054,13 +1136,13 @@ class Agent(BaseService):
                     summary = self.finish_summary(run, finish_args)
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": "ok"})
                     continue
-                if run.count >= limit:
-                    raise AgentLimit(f"Агент не уложился в {limit} шагов")
                 content, extra = await self._act(run, call)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
                 extras.extend(extra)
             if summary is not None:
                 return summary
+            if run.halt:
+                raise AgentLimit(run.halt)
             messages.extend(extras)
 
     # --- удачный прогон → сценарий ---------------------------------------------------------------------
@@ -1227,6 +1309,19 @@ class Agent(BaseService):
     async def _act(self, run: AgentRun, call: ToolCall) -> tuple[str, list[dict[str, Any]]]:
         if run.stopping or run.finished:
             return STOPPED, []
+        now = time.monotonic()
+        if run.failed_at and now - run.failed_at < BATCH_GAP_S:
+            run.failed_at = now  # остальные действия того же хода — тоже не выполнять
+            return SKIPPED, []
+        if run.halt:
+            return f"Ошибка: {run.halt} — больше ничего не делай", []
+        limit = self.ctx.settings.value.ai.max_agent_steps
+        if run.count >= limit:
+            run.over += 1
+            if run.over > LIMIT_GRACE:
+                run.halt = f"Агент не уложился в {limit} шагов"
+                return f"Ошибка: {run.halt} — больше ничего не делай", []
+            return LIMIT_TEXT, []
         action = self._actions.get(call.name) or run.mcp.get(call.name)
         if action is None:
             return f"Ошибка: инструмента «{call.name}» нет", []
@@ -1268,7 +1363,7 @@ class Agent(BaseService):
             "agent.step", {"run_id": run.id, "index": index, "title": doing, "status": "running"}
         )
         self._set(run, "running", doing)
-        work = asyncio.ensure_future(action.run(run, args))
+        work = asyncio.ensure_future(self._perform(run, call.name, action, args))
         run.acting.add(work)
         look = False  # действие на экране сорвалось — модели свежий снимок: что там сейчас
         try:
@@ -1322,6 +1417,12 @@ class Agent(BaseService):
             result=outcome.content,
             images=_image_urls(outcome.extras),
         )
+        run.failed_at = time.monotonic() if not outcome.ok else 0.0
+        # ждали, пока человек отпустит мышь: шаг задачи не потрачен, и это не «хождение по кругу»
+        human = not outcome.ok and outcome.content == HUMAN_BUSY
+        if human:
+            run.count -= 1
+        repeat = "" if human else self._repeat(run, call.name, args, outcome)
         # реплика человека посреди работы (модель узнаёт сразу, с ответом на это действие) и план (составлялся
         # параллельно) — до снимка окна: устаревшие снимки вырезаются (_prune), а они должны остаться
         head: list[str] = []
@@ -1332,7 +1433,36 @@ class Agent(BaseService):
             run.plan_sent = True
             steps = "\n".join(f"{i}. {s}" for i, s in enumerate(run.plan, 1))
             head.append(f"План работы (номер шага — параметр step в действиях):\n{steps}")
-        return "\n\n".join([*head, outcome.content]), outcome.extras
+        tail = [repeat] if repeat else []
+        left = limit - run.count
+        if 0 < left <= 3:
+            tail.append(
+                f"Осталось шагов: {left} из {limit}. Доделай главное и вызови finish (status=partial, если "
+                "всё не успеть)."
+            )
+        return "\n\n".join([*head, outcome.content, *tail]), outcome.extras
+
+    def _repeat(self, run: AgentRun, name: str, args: dict[str, Any], outcome: Outcome) -> str:
+        """Одно и то же действие с тем же итогом (тот же снимок окна или снова ошибка) раз за разом — модель
+        ходит по кругу: подсказка сменить путь, а REPEAT_STOP раз — остановка (run.halt)."""
+        if name in NO_REPEAT:
+            return ""
+        key = name + json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)
+        plain = UNTRUSTED_TAG.sub("", outcome.content)
+        digest = hashlib.sha1(plain.encode("utf-8", "replace")).hexdigest()
+        last, times = run.repeats.get(key, ("", 0))
+        times = times + 1 if last and (not outcome.ok or digest == last) else 1
+        run.repeats[key] = (digest, times)
+        if times >= REPEAT_STOP:
+            run.halt = "Агент раз за разом повторял одно и то же действие без пользы и остановлен"
+            return f"Ошибка: {run.halt} — больше ничего не делай"
+        if times >= REPEAT_HINT:
+            return (
+                f"Это действие уже {times} раза подряд дало тот же итог — оно не помогает. Не повторяй его: "
+                "попробуй другой путь (клавиши, адрес, другой элемент, картинка экрана) или закончи (finish, "
+                "status=partial) и объясни, что мешает."
+            )
+        return ""
 
     # --- подтверждения ----------------------------------------------------------------------------------
     @property
@@ -1342,13 +1472,55 @@ class Agent(BaseService):
     def _ask(self, run: AgentRun, risky: bool = False) -> bool:
         return risky or self._always or run.ask_all or run.ask_once
 
+    async def _perform(self, run: AgentRun, name: str, action: Any, args: dict[str, Any]) -> Outcome:
+        """Действие; мышью и клавиатурой — только когда человек сам ими не работает (ждём до HUMAN_WAIT_S)."""
+        if name not in HUMAN_INPUT:
+            return cast(Outcome, await action.run(run, args))
+        if await self._human_busy(run):
+            return Outcome(False, HUMAN_BUSY, "Ждал, пока вы закончите")
+        try:
+            return cast(Outcome, await action.run(run, args))
+        finally:
+            run.last_input = time.monotonic()
+
+    async def _human_busy(self, run: AgentRun) -> bool:
+        """Человек двигает мышь или печатает (ввод был позже последнего ввода самого агента): подождать, пока
+        он не затихнет на HUMAN_QUIET_S; не затих за HUMAN_WAIT_S — True (действие не выполнять)."""
+        platform = self.ctx.platform
+        if not getattr(platform, "report_input", True):
+            return False  # заглушка не знает о вводе человека (тесты, демо, проверочные задачи) — не ждём
+        previous, waited = run.text, False
+        deadline = time.monotonic() + HUMAN_WAIT_S
+        try:
+            while not run.stopping:
+                try:
+                    idle = float(await self.ctx.run_platform(self.ctx.platform.idle_seconds))
+                except Exception:
+                    return False  # время ввода не узнать — как раньше, не ждём
+                human_at = time.monotonic() - idle
+                if idle >= HUMAN_QUIET_S or human_at <= run.last_input + 0.3:
+                    return False
+                if time.monotonic() >= deadline:
+                    return True
+                if not waited:
+                    waited = True
+                    self._set(
+                        run, "waiting", "Жду: вы работаете мышью или клавиатурой — продолжу, когда закончите"
+                    )
+                await asyncio.sleep(0.3)
+            return False
+        finally:
+            if waited and not run.stopping:
+                self._set(run, "running", previous)
+
     async def _approve(self, run: AgentRun, title: str, detail: str = "") -> None:
         """Спросить разрешения; отказ — Denied, и дальше в этом запуске спрашиваем обо всём."""
         previous = run.text
         self._set(run, "waiting", f"Жду вашего решения: {title}")
         source = "voice" if run.source == "voice" else "agent"
+        risk = high_risk(title, detail)  # необратимое — только кнопкой, не голосовым «да»
         allowed = await self.ctx.confirmations.request(
-            title, detail, kind="agent", source=source, timeout=APPROVAL_TIMEOUT
+            title, detail, kind="agent", source=source, timeout=APPROVAL_TIMEOUT, risk=risk
         )
         self._set(run, "running", previous)
         if not allowed:
@@ -1450,11 +1622,16 @@ class Agent(BaseService):
             raise WindowChanged(
                 "впереди нет окна программы — открой её (launch_app) или переключись на окно (focus_window)"
             )
+        extra = private_windows.settings_list(self.ctx)
+        hidden = private_windows.private_reason(fg, extra)
+        if hidden:  # менеджер паролей и окна из «Не показывать ИИ» — ни ввода, ни нажатий, ни заголовка
+            raise UserFacingError(private_windows.hidden_text(fg, hidden))
         seen = run.snapshot is not None and run.snapshot.pid == fg.pid and run.snapshot.hwnd in (0, fg.hwnd)
         if target is not None and fg.pid != target.pid and fg.hwnd != target.hwnd and not (explicit and seen):
+            was = private_windows.shown_title(target, extra)
             raise WindowChanged(
-                f"активное окно сменилось: было «{target.title}», сейчас «{fg.title}» — ничего не сделано. "
-                f"Работать здесь — сделай ui_snapshot; вернуться — focus_window «{target.title}»"
+                f"активное окно сменилось: было «{was}», сейчас «{private_windows.shown_title(fg, extra)}» — "
+                f"ничего не сделано. Работать здесь — сделай ui_snapshot; вернуться — focus_window «{was}»"
             )
         if not fg.foreground:  # впереди окно Jarvis (из него и дали задачу): вперёд — окно задачи
             await self.ctx.run_platform(self.ctx.platform.window_action, "focus", fg.hwnd)
@@ -1471,6 +1648,8 @@ class Agent(BaseService):
     async def _shot(self, run: AgentRun, fg: WindowInfo, snapshot: UiSnapshot | None) -> vision.Shot | None:
         rect = fg.rect
         if fg.minimized or rect[2] - rect[0] < 20 or rect[3] - rect[1] < 20:
+            return None
+        if private_windows.private_reason(fg, private_windows.settings_list(self.ctx)):
             return None
         try:
             png = await self.ctx.run_platform(self.ctx.platform.screenshot, fg.hwnd)
@@ -1537,22 +1716,34 @@ class Agent(BaseService):
         if fg is not None:
             previous = run.target
             if previous is not None and previous.pid != fg.pid:
+                names = private_windows.settings_list(self.ctx)
+                now_title = private_windows.shown_title(fg, names)
+                was_title = private_windows.shown_title(previous, names)
                 if keep_target:
                     parts.append(
-                        f"Впереди теперь окно «{fg.title}» ({fg.exe}), а работаешь ты с «{previous.title}»: "
+                        f"Впереди теперь окно «{now_title}» ({fg.exe}), а работаешь ты с «{was_title}»: "
                         "нажимать его кнопки (ui_click, click_point) можно, вводить вслепую (type_text, "
                         "клавиши) — нет; работать в нём — ui_snapshot, вернуться — focus_window."
                     )
                 else:
-                    parts.append(f"Впереди теперь окно «{fg.title}» ({fg.exe}); было «{previous.title}».")
+                    parts.append(f"Впереди теперь окно «{now_title}» ({fg.exe}); было «{was_title}».")
             if not keep_target or previous is None:
                 run.target = fg
             hint = self._new_playbook(run, fg)
             if hint:
                 parts.append(hint)  # до снимка: устаревшие снимки скрываются, подсказка остаётся
         parts.extend(change for change in changes if change)
+        hidden = private_windows.private_reason(fg, private_windows.settings_list(self.ctx))
+        if fg is not None and hidden:  # скрытое от ИИ окно: ни элементов, ни снимка
+            run.snapshot, run.shot = None, None
+            parts.append(f"{SNAPSHOT_HEADER}\n{private_windows.hidden_text(fg, hidden)}")
+            return "\n\n".join(parts), []
+        whole = run.vision and not force_shot
+        if whole and await self._private_on_screen():
+            whole = False  # на экране видно скрытое от ИИ окно — весь экран не снимать, только окно задачи
+            parts.append(private_windows.SCREEN_NOTE)
         # картинка экрана снимается (пул ввода-вывода), пока поток платформы читает элементы окна
-        area = await self._screen_area(fg) if run.vision and not force_shot else None
+        area = await self._screen_area(fg) if whole else None
         grab = asyncio.ensure_future(self._grab(area)) if area is not None else None
         snapshot: UiSnapshot | None = None
         try:
@@ -1560,11 +1751,12 @@ class Agent(BaseService):
             page = await self.browser.look(run, fg)
             if page is not None and page.hint:
                 parts.append(page.hint)  # до снимка: заметки о сайте не вырезаются со старыми снимками
-            snapshot = (
-                page.snapshot
-                if page is not None
-                else await self.ctx.run_platform(self.ui.snapshot, SNAPSHOT_LIMIT, fg.hwnd if fg else None)
-            )
+            if page is not None:
+                snapshot = page.snapshot
+                run.ids.forget()
+            else:
+                found = await self.ctx.run_platform(self.ui.snapshot, SNAPSHOT_LIMIT, fg.hwnd if fg else None)
+                snapshot = run.ids.assign(found)
         except PlatformError as e:
             parts.append(f"{SNAPSHOT_HEADER}\n(Элементы окна недоступны: {e}.)")
         except BaseException:
@@ -1598,6 +1790,14 @@ class Agent(BaseService):
         except Exception:
             log.exception("шаг не записан в журнал агента")
 
+    async def _private_on_screen(self, area: tuple[int, int, int, int] | None = None) -> bool:
+        """Видно ли на экране (или на его части area) окно, скрытое от ИИ."""
+        try:
+            windows = await self.ctx.run_platform(self.ctx.platform.list_windows)
+        except Exception:
+            return False
+        return bool(private_windows.visible_private(windows, private_windows.settings_list(self.ctx), area))
+
     async def _look_safely(self, run: AgentRun) -> tuple[str, list[dict[str, Any]]] | None:
         """Снимок вдобавок к ответу действия (оно сорвалось, человек ответил на вопрос); окно задачи —
         прежнее. Не вышло — None: ответ уходит модели и без снимка."""
@@ -1614,7 +1814,12 @@ class Agent(BaseService):
             windows = await self.ctx.run_platform(self.ctx.platform.list_windows)
         except Exception:
             return ""
-        current = {w.hwnd: f"«{one_line(w.title, 60)}» ({w.exe})" for w in windows if w.title}
+        hidden = private_windows.settings_list(self.ctx)
+        current = {
+            w.hwnd: f"«{one_line(private_windows.shown_title(w, hidden), 60)}» ({w.exe})"
+            for w in windows
+            if w.title
+        }
         seen, run.windows = run.windows, current
         if seen is None:
             return ""
@@ -1948,9 +2153,19 @@ class Agent(BaseService):
         # параметры Windows: переключатели и «Применить» меняют систему
         return self._settings_window(run) and (kind in TOGGLE_KINDS or bool(SETTINGS_CHANGE.search(name)))
 
+    def _backend_id(self, run: AgentRun, element_id: str) -> str:
+        """id элемента у UI Automation по id, который видела модель; элемента в окне уже нет — ошибка."""
+        found = run.ids.backend_id(element_id)
+        if found is None:
+            raise UserFacingError(
+                f"элемента {element_id} сейчас нет в окне (оно изменилось) — выбери элемент по свежему снимку"
+            )
+        return found
+
     async def _ui_click(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
         element_id = _arg(args, "id")
         double = bool(args.get("double"))
+        backend_id = self._backend_id(run, element_id)
         element = run.snapshot.find(element_id) if run.snapshot is not None else None
         name = (element.name if element is not None else "") or element_id
         fg = await self._target(run, explicit=True)
@@ -1973,7 +2188,7 @@ class Agent(BaseService):
             await self._mouse(element.center, "left", True)
             result = "двойной щелчок"
         else:
-            result = await self.ctx.run_platform(self.ui.click, element_id)
+            result = await self.ctx.run_platform(self.ui.click, backend_id)
         if SEND_NAME.search(name):
             run.unsent = []
         return await self._observe(run, self.settle_s, f"«{name}»: {result}")
@@ -1981,6 +2196,7 @@ class Agent(BaseService):
     async def _ui_type(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
         element_id = _arg(args, "id")
         text = str(args.get("text") or "")
+        backend_id = self._backend_id(run, element_id)
         element = run.snapshot.find(element_id) if run.snapshot is not None else None
         name = (element.name if element is not None else "") or element_id
         fg = await self._target(run, explicit=True)
@@ -2000,7 +2216,7 @@ class Agent(BaseService):
             await self._point(
                 run, "type", *element.center, "пароль" if password else one_line(text, 40), element.rect
             )
-        result = await self.ctx.run_platform(self.ui.set_text, element_id, text)
+        result = await self.ctx.run_platform(self.ui.set_text, backend_id, text)
         if not password:
             self._note_typed(run, text, name)
         detail = "пароль" if password else one_line(text, 60)
@@ -2186,14 +2402,20 @@ class Agent(BaseService):
             return Outcome(
                 False, "Ошибка: нужна ссылка https, tg:, ms-settings:, spotify:, mailto: или whatsapp:"
             )
+        if low.startswith(("http://", "https://")):
+            url, problem = web_url(url)
+            if problem:
+                return Outcome(False, problem)
         parsed = urlparse(url)
         host = (parsed.hostname or "").casefold()
         # ссылка с данными на незнакомый сайт может унести их наружу (инструкция из чужого текста) — спросить
         carries_data = bool(parsed.query) and low.startswith(("http://", "https://"))
         known = not host or bool(SEARCH_HOSTS.search(host)) or host in run.task.casefold()
-        name = site_name(url) or url
-        if self._ask(run, carries_data and not known):
-            await self._approve(run, f"Открыть {name}?", f"Адрес: {one_line(url, 160)}")
+        fake = lookalike_host(host)  # «gооgle.com» с русскими «о» — спросить всегда
+        name = ascii_host(host) if fake else (site_name(url) or url)
+        if self._ask(run, (carries_data and not known) or fake):
+            detail = f"{link_note(host)} Адрес: {one_line(url, 160)}".strip()
+            await self._approve(run, f"Открыть {name}?", detail)
         front = await self._foreground()
         await self.ctx.run_platform(self.ctx.platform.open_url, url)
         await self._await_front(front)  # браузер или программа по ссылке выходит вперёд не сразу
@@ -2260,6 +2482,8 @@ class Agent(BaseService):
         pixels = getattr(self.ctx.platform, "screen_pixels", None)
         if not callable(pixels):
             return Outcome(False, "Ошибка: лупа на этой платформе недоступна", "Недоступно")
+        if await self._private_on_screen(area):
+            return Outcome(False, "Ошибка: в этом месте экрана — окно, скрытое от ИИ; лупа его не показывает")
         bgra, width, height = await self.ctx.run_io(pixels, area)
         elements = run.snapshot.elements if run.snapshot is not None else []
         zoomed = await self.ctx.run_io(
@@ -2524,6 +2748,11 @@ class Agent(BaseService):
         finally:
             for task in waits:
                 task.cancel()
+
+
+def _agent_speed(speed: str) -> str:
+    """Сколько думать агенту: «быстро» в настройках — для чата; многошаговой работе — не меньше обычного."""
+    return "balanced" if speed == "fast" else speed
 
 
 def _cuts_off(text: str) -> bool:

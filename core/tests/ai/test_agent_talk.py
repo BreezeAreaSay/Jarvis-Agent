@@ -236,8 +236,8 @@ async def test_yes_or_no_phrase_answers_the_agent_approval(
         llm.add(
             PLAN,
             calls(("ui_click", {"id": "e1"})),
-            calls(("ui_type", {"id": "e3", "text": "Отчёт готов"})),
-            calls(("ui_click", {"id": "e4"})),
+            calls(("ui_type", {"id": "e5", "text": "Отчёт готов"})),
+            calls(("ui_click", {"id": "e6"})),
             calls(("finish", {"status": "partial", "summary": final})),
         )
 
@@ -268,7 +268,7 @@ async def test_late_plan_is_not_cut_with_old_snapshots(ctx: AppContext, llm: Scr
     agent: Any = ctx.agent
     steps = [
         calls(("ui_click", {"id": "e1"})),
-        calls(("ui_type", {"id": "e1", "text": "ivan@example.com"})),
+        calls(("ui_type", {"id": "e3", "text": "ivan@example.com"})),
         calls(("finish", {"summary": "Готово."})),
         calls(("finish", {"summary": "Готово."})),
     ]
@@ -329,7 +329,7 @@ async def test_codex_or_cli_run_continues_with_a_late_interjection(
             return {"steps": ["Открыть почту"]}
 
         async def run_agent(
-            self, agent: Any, run: Any, *, system: str, first: str, specs: Any, images: Any = None
+            self, agent: Any, run: Any, *, system: str, first: str, specs: Any, images: Any = None, **kw: Any
         ) -> str:
             self.firsts.append(first)
             self.images.append(list(images or []))

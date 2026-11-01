@@ -23,8 +23,8 @@ from tests.ai.fakes import ScriptedLlm, calls, completion, reply
 Call = tuple[str, dict[str, Any]]
 SNAPSHOT = "[Снимок окна]"
 # строка снимка (jarvis.ai.uia.format_snapshot): «e3 Button «Написать» = «значение» [x,y,w×h] фокус»; в имени
-# бывают свои кавычки («Бухгалтерия ООО «Ромашка», Счёт…»)
-ELEMENT = re.compile(r"^(e\d+) (\w+) (?:«(.*?)»(?: = «.*?»)?|\(без имени\)) \[-?\d", re.M)
+# бывают свои кавычки («Бухгалтерия ООО «Ромашка», Счёт…»); t3 Text «…» — строка, распознанная на картинке
+ELEMENT = re.compile(r"^([et]\d+) (\w+) (?:«(.*?)»(?: = «.*?»)?|\(без имени\)) \[-?\d", re.M)
 SCREEN_CAPTION = re.compile(r"Снимок экрана — (\d+)×(\d+) точек")
 ZOOM_CAPTION = re.compile(r"Лупа: кусок экрана (\d+)×(\d+) точек, ×[\d.]+ — картинка (\d+)×(\d+)")
 
@@ -49,8 +49,10 @@ class View:
         raise ScriptError("агент не прислал снимок окна")
 
     def element(self, name: str, kind: str = "") -> str:
-        """id элемента из последнего снимка: имя целиком, потом — начало имени."""
+        """id элемента из последнего снимка: имя целиком, потом — начало имени; сначала элементы UI Automation
+        (e…), потом распознанные строки (t…)."""
         found = [(m.group(1), m.group(2), m.group(3) or "") for m in ELEMENT.finditer(self.snapshot())]
+        found.sort(key=lambda f: f[0][0] != "e")
         want = norm(name)
         for test in (lambda n: n == want, lambda n: n.startswith(want)):
             for element_id, element_kind, element_name in found:

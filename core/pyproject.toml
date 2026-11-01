@@ -42,6 +42,9 @@ dependencies = [
   "winrt-Windows.UI.Notifications>=3.0; sys_platform == 'win32'",
   "winrt-Windows.UI.Notifications.Management>=3.0; sys_platform == 'win32'",
   "winrt-Windows.ApplicationModel>=3.0; sys_platform == 'win32'",
+  "winrt-Windows.Media.Ocr>=3.0; sys_platform == 'win32'",
+  "winrt-Windows.Graphics.Imaging>=3.0; sys_platform == 'win32'",
+  "winrt-Windows.Globalization>=3.0; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

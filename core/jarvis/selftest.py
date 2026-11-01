@@ -58,6 +58,9 @@ WINDOWS_LIBRARIES = (
     "winrt.windows.media.control",
     "winrt.windows.media.speechsynthesis",
     "winrt.windows.ui.notifications",
+    "winrt.windows.media.ocr",  # распознавание текста окна для агента
+    "winrt.windows.graphics.imaging",
+    "winrt.windows.globalization",
 )
 SHERPA_VERSION = "1.13.8"  # версии обёртки и ядра sherpa-onnx должны совпадать (ABI)
 

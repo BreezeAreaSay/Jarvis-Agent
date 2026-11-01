@@ -56,6 +56,11 @@ INTERACTIVE = {
 TEXTUAL = {"TextControl": "Text"}
 
 ToImage = Callable[[float, float], tuple[int, int]]  # точка экрана → точка картинки (vision.Shot.to_image)
+OCR_HEADER = (
+    "Текст в окне — распознан с картинки (UI Automation его не видит); ui_click по t… — щелчок мышью в "
+    "середину строки:"
+)
+OCR_NAME_LIMIT = 160
 
 
 class UiError(PlatformError):
@@ -74,6 +79,7 @@ class UiElement:
     value: str = ""
     page: bool = False  # элемент открытой страницы (окно браузера), а не самого браузера
     key: str = ""  # постоянный ключ элемента (RuntimeId UI Automation), если бэкенд его знает
+    ocr: bool = False  # строка текста, распознанная на картинке окна (id t…), а не элемент UI Automation
 
     @property
     def center(self) -> tuple[int, int]:
@@ -93,6 +99,7 @@ class UiSnapshot:
     mouse: bool = False  # последнее нажатие — настоящей мышью (у элемента нет шаблонов UIA)
     page: str = ""  # окно браузера: заголовок открытой страницы
     page_text: str = ""  # окно браузера: текст видимой части страницы (подписи ссылок и кнопок — в elements)
+    ocr_truncated: bool = False  # распознанных строк больше, чем показано
 
     def find(self, element_id: str) -> UiElement | None:
         return next((e for e in self.elements if e.id == element_id), None)
@@ -110,6 +117,7 @@ class StableIds:
     элемент — его просто нет в окне."""
 
     next: int = 1
+    prefix: str = "e"  # e… — элементы UI Automation, t… — строки, распознанные на картинке
     known: dict[str, str] = field(default_factory=dict)  # точный ключ элемента → id
     loose: dict[str, str] = field(default_factory=dict)  # тип и имя → последний id
     backend: dict[str, str] = field(default_factory=dict)  # id модели → id последнего снимка бэкенда
@@ -143,7 +151,7 @@ class StableIds:
             if same and same not in used:
                 ids[i] = same
             else:
-                ids[i] = f"e{self.next}"
+                ids[i] = f"{self.prefix}{self.next}"
                 self.next += 1
             used.add(ids[i])
         elements: list[UiElement] = []
@@ -202,31 +210,20 @@ def find_by_name(elements: list[UiElement], name: str) -> UiElement | None:
 
 def format_snapshot(snapshot: UiSnapshot, to_image: ToImage | None = None, coords: str = "") -> str:
     """Снимок окна для модели: строка на элемент — «e3 Button «Написать» [x,y,w×h] фокус». Окно браузера —
-    сначала его собственные кнопки, потом элементы страницы и текст её видимой части.
+    сначала его собственные кнопки, потом элементы страницы и текст её видимой части. Строки текста,
+    распознанные на картинке окна (ocr, id t…), — отдельным списком в конце.
 
     Прямоугольники элементов — в точках экрана; to_image переводит их в точки картинки, которую модель
     видит вместе со снимком (по ним же click_point), — одна система координат для модели; coords — строка
     об этом в шапке."""
-    head = f"Активное окно: «{snapshot.window}»" + (f" ({snapshot.app})" if snapshot.app else "")
-    lines = [head]
-    if coords and snapshot.elements:
-        lines.append(coords)
-    if not snapshot.elements:
-        lines.append("Интерактивных элементов не найдено.")
-    web = any(e.page for e in snapshot.elements)
-    if web and not snapshot.elements[0].page:
-        lines.append("Браузер (вкладки, адресная строка, кнопки):")
-    in_page = False
-    for element in snapshot.elements:
-        if element.page and not in_page:
-            in_page = True
-            title = f" «{one_line(snapshot.page, 100)}»" if snapshot.page else ""
-            lines.append(f"Страница{title} — видимая часть (дальше — scroll и новый снимок):")
+
+    def describe(element: UiElement) -> str:
         left, top, right, bottom = element.rect
         if to_image is not None:
             left, top = to_image(left, top)
             right, bottom = to_image(right, bottom)
-        name = f"«{one_line(element.name, 80)}»" if element.name else "(без имени)"
+        limit = OCR_NAME_LIMIT if element.ocr else 80
+        name = f"«{one_line(element.name, limit)}»" if element.name else "(без имени)"
         value = f" = «{one_line(element.value, 60)}»" if element.value and not element.password else ""
         flags = [
             flag
@@ -238,11 +235,35 @@ def format_snapshot(snapshot: UiSnapshot, to_image: ToImage | None = None, coord
             if on
         ]
         line = f"{element.id} {element.kind} {name}{value} [{left},{top},{right - left}x{bottom - top}]"
-        lines.append(line + (" " + ", ".join(flags) if flags else ""))
+        return line + (" " + ", ".join(flags) if flags else "")
+
+    head = f"Активное окно: «{snapshot.window}»" + (f" ({snapshot.app})" if snapshot.app else "")
+    lines = [head]
+    if coords and snapshot.elements:
+        lines.append(coords)
+    elements = [e for e in snapshot.elements if not e.ocr]
+    texts = [e for e in snapshot.elements if e.ocr]
+    if not elements:
+        lines.append("Интерактивных элементов не найдено.")
+    web = any(e.page for e in elements)
+    if web and not elements[0].page:
+        lines.append("Браузер (вкладки, адресная строка, кнопки):")
+    in_page = False
+    for element in elements:
+        if element.page and not in_page:
+            in_page = True
+            title = f" «{one_line(snapshot.page, 100)}»" if snapshot.page else ""
+            lines.append(f"Страница{title} — видимая часть (дальше — scroll и новый снимок):")
+        lines.append(describe(element))
     if snapshot.page_text:
         lines.append(f"Текст страницы на экране: {snapshot.page_text}")
     if snapshot.truncated:
         lines.append("(показаны не все элементы окна)")
+    if texts:
+        lines.append(OCR_HEADER)
+        lines.extend(describe(element) for element in texts)
+        if snapshot.ocr_truncated:
+            lines.append("(показаны не все строки текста)")
     return "\n".join(lines)
 
 

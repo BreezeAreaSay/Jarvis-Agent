@@ -30,6 +30,7 @@ spotify:, mailto:) и инструментами подключённых сер
 import asyncio
 import contextlib
 import copy
+import dataclasses
 import hashlib
 import json
 import logging
@@ -43,7 +44,7 @@ from urllib.parse import urlparse
 
 from rapidfuzz import fuzz, process
 
-from jarvis.ai import apphints, journal, lessons, playbooks, private_windows, vision
+from jarvis.ai import apphints, journal, lessons, ocr, playbooks, private_windows, vision
 from jarvis.ai.catalog import AGENT_ACTIONS
 from jarvis.ai.chats import ChatStore, ui_message
 from jarvis.ai.format import chat_title, now_text, one_line, speech_text
@@ -222,8 +223,11 @@ AGENT_PROMPT = """Ты — агент Jarvis: сам выполняешь зад
 уведомления, ошибки), что изменилось. Зелёным на ней обведено, что изменилось с прошлого снимка; «ничего \
 не изменилось» — действие, скорее всего, не сработало. Крупно одно окно — screenshot; мелкий текст или \
 значок не разобрать — zoom (лупа).
-- Нужного элемента нет в снимке (окно плохо видно UI Automation: Telegram, игры, нестандартные окна) — \
-смотри на картинку и жми click_point по координатам картинки.
+- Окно плохо видно UI Automation (Telegram, программы на Qt, игры, нестандартные окна) — Jarvis \
+распознаёт текст в нём: в конце снимка строки t1, t2… («Текст в окне — распознан с картинки»). ui_click по \
+t… щёлкает мышью в середину строки (чат в списке, надпись на кнопке); ввести в t… нельзя — щёлкни поле и \
+type_text. Нужного нет ни среди e…, ни среди t… — смотри на картинку и жми click_point по координатам \
+картинки.
 - Какие окна появились или закрылись и новые уведомления Windows приходят текстом рядом со снимком.
 
 Как действовать — от надёжного к запасному:
@@ -345,6 +349,9 @@ class AgentRun:
     )
     snapshot: UiSnapshot | None = None  # последний снимок окна — с id, которые видит модель
     ids: StableIds = field(default_factory=StableIds)  # id элементов модели ↔ id снимка UI Automation
+    # строки текста, распознанные на картинке окна (t…): id постоянные, как у элементов; окно, где распознаны
+    text_ids: StableIds = field(default_factory=lambda: StableIds(prefix="t"))
+    text_window: WindowInfo | None = None
     target: WindowInfo | None = None  # окно, с которым агент работает
     shot: vision.Shot | None = None  # последний снимок окна картинкой — для click_point
     window_shot: vision.Shot | None = None  # окно впереди крупно к этому снимку — click_point on="window"
@@ -477,6 +484,18 @@ def _args_detail(args: dict[str, Any], limit: int = 4) -> str:
     return " · ".join(parts)
 
 
+def _is_text_id(element_id: str) -> bool:
+    """id строки, распознанной на картинке окна (t3), а не элемента UI Automation (e3)."""
+    return element_id[:1] == "t" and element_id[1:].isdigit()
+
+
+def _by_mouse(name: str, args: dict[str, Any]) -> bool:
+    """Действие настоящей мышью или клавиатурой: пока человек сам ими работает — подождать."""
+    if name in HUMAN_INPUT:
+        return True
+    return name == "ui_click" and (_is_text_id(_arg(args, "id")) or bool(args.get("double")))
+
+
 def _center(rect: tuple[int, int, int, int]) -> tuple[int, int]:
     return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
 
@@ -495,6 +514,7 @@ class Agent(BaseService):
     def __init__(self, ctx: Any) -> None:
         super().__init__(ctx)
         self.ui: UiBackend = create_ui(ctx.platform)  # тесты подставляют свой
+        self.ocr: ocr.OcrBackend = ocr.create_ocr(ctx.platform)  # распознавание текста окна; тесты — свой
         self.chats = ChatStore(ctx)
         # пауза после действия, потом — пока окно впереди не перестанет меняться (_settle); 0 — без ожидания
         self.settle_s = 0.3
@@ -1168,6 +1188,8 @@ class Agent(BaseService):
         text = str(args.get("text") or "")
         if text and redact(text) != text:
             return None  # номер карты, пароль: в сценарий (он хранится на диске) не записываем
+        if name == "ui_click" and element is not None and element.ocr:
+            return self._recipe_steps(run, "click_point", args, None)  # щелчок мышью по строке t…
         if name == "ui_click":
             if element is None or not element.name or args.get("double"):
                 return None
@@ -1475,7 +1497,7 @@ class Agent(BaseService):
 
     async def _perform(self, run: AgentRun, name: str, action: Any, args: dict[str, Any]) -> Outcome:
         """Действие; мышью и клавиатурой — только когда человек сам ими не работает (ждём до HUMAN_WAIT_S)."""
-        if name not in HUMAN_INPUT:
+        if not _by_mouse(name, args):
             return cast(Outcome, await action.run(run, args))
         if await self._human_busy(run):
             return Outcome(False, HUMAN_BUSY, "Ждал, пока вы закончите")
@@ -1657,7 +1679,8 @@ class Agent(BaseService):
         except PlatformError as e:
             log.info("снимок окна для агента не получился: %s", e)
             return None
-        elements = snapshot.elements if snapshot is not None else []
+        # метки на картинке — только элементам UI Automation: строки t… — сам текст на ней
+        elements = [e for e in snapshot.elements if not e.ocr] if snapshot is not None else []
         try:
             shot = await self.ctx.run_io(
                 lambda: vision.render(png, rect, elements=elements, hwnd=fg.hwnd, title=fg.title)
@@ -1768,6 +1791,13 @@ class Agent(BaseService):
             raise
         else:
             run.snapshot = snapshot
+        if page is None and fg is not None:
+            # окно UI Automation почти не видит (Telegram, Qt, игры) — текст в нём распознаётся: строки t…
+            read = await self._read_text(run, fg, snapshot, grab, area)
+            if read is not snapshot and read is not None:
+                if failed:
+                    run.ids.forget()  # элементов UI Automation в этом снимке нет: старые e… не действуют
+                snapshot, failed, run.snapshot = read, "", read
         shots: list[vision.Shot] = []
         if run.vision:
             # весь экран — после каждого действия; крупно окно — по screenshot или когда экран не снять
@@ -1790,6 +1820,67 @@ class Agent(BaseService):
             parts.append(f"{SNAPSHOT_HEADER}\n{untrusted('Снимок окна', text)}")
         extras = [vision.message(shots[0], others=shots[1:])] if shots else []
         return "\n\n".join(parts), extras
+
+    async def _read_text(
+        self,
+        run: AgentRun,
+        fg: WindowInfo,
+        snapshot: UiSnapshot | None,
+        grab: "asyncio.Future[tuple[str, Any]] | None",
+        area: ScreenArea | None,
+    ) -> UiSnapshot | None:
+        """Окно UI Automation почти не видит (jarvis.ai.ocr.wants_ocr) — распознать текст в нём: строки
+        добавляются в снимок элементами t… (id постоянные, как у e…). Распознавать нечего или не вышло —
+        снимок как был."""
+        if fg.minimized or not ocr.wants_ocr(snapshot, fg.exe):
+            return snapshot
+        try:
+            piece = await self._window_pixels(fg, grab, area)
+            if piece is None:
+                return snapshot
+            lines = await self.ctx.run_io(self.ocr.recognize, *piece)
+        except Exception:
+            log.info("текст окна не распознан", exc_info=True)
+            return snapshot
+        found, cut = ocr.to_elements(lines, snapshot, piece[2])
+        if not found:
+            return snapshot
+        base = snapshot or UiSnapshot(fg.title, fg.exe, hwnd=fg.hwnd, pid=fg.pid, rect=fg.rect)
+        texts = run.text_ids.assign(dataclasses.replace(base, elements=found)).elements
+        run.text_window = copy.copy(fg)  # где было окно при распознавании: сдвинут — щелчок сдвинется с ним
+        return dataclasses.replace(base, elements=[*base.elements, *texts], ocr_truncated=cut)
+
+    async def _window_pixels(
+        self,
+        fg: WindowInfo,
+        grab: "asyncio.Future[tuple[str, Any]] | None",
+        area: ScreenArea | None,
+    ) -> tuple[bytes, tuple[int, int], vision.Rect] | None:
+        """Пиксели окна впереди для распознавания: из уже снятого монитора (картинка экрана), а без неё —
+        снять только окно (если его не закрывает окно, скрытое от ИИ)."""
+        if grab is not None and area is not None:
+            with contextlib.suppress(Exception):
+                kind, data = await grab
+                if kind == "pixels":
+                    (bgra, width, height), _others = data
+                    size = (int(width), int(height))
+                    piece = await self.ctx.run_io(ocr.crop, bgra, size, area[0], fg.rect)
+                    if piece is not None:
+                        return piece
+        pixels = getattr(self.ctx.platform, "screen_pixels", None)
+        if not callable(pixels):
+            return None
+        try:
+            left, top, width, height = (
+                int(v) for v in await self.ctx.run_platform(self.ctx.platform.virtual_screen)
+            )
+        except (PlatformError, AttributeError, TypeError, ValueError):
+            return None
+        rect = ocr.clip(fg.rect, (left, top, left + width, top + height))
+        if rect is None or await self._private_on_screen(rect):
+            return None
+        bgra, w, h = await self.ctx.run_io(pixels, rect)
+        return bgra, (int(w), int(h)), rect
 
     async def _journal(self, run: AgentRun, title: str, **step: Any) -> None:
         """Шаг — в журнал прогона (если он ведётся), с тем, что модель написала перед ним."""
@@ -1949,7 +2040,9 @@ class Agent(BaseService):
             log.info("снимок экрана для агента не получился: %s", e)
             return []
         part, virtual, _others = area
-        elements = snapshot.elements if snapshot is not None and fg is not None else []
+        elements = (
+            [e for e in snapshot.elements if not e.ocr] if snapshot is not None and fg is not None else []
+        )
         focus, title = (fg.rect, fg.title) if fg is not None else (None, "")
         # что изменилось — по сравнению с прошлой картинкой того же монитора
         previous = run.screen_sig[1] if run.screen_sig is not None and run.screen_sig[0] == part else b""
@@ -2178,6 +2271,8 @@ class Agent(BaseService):
     async def _ui_click(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
         element_id = _arg(args, "id")
         double = bool(args.get("double"))
+        if _is_text_id(element_id):  # строка, распознанная на картинке, — мышью
+            return await self._click_text(run, element_id, double)
         backend_id = self._backend_id(run, element_id)
         element = run.snapshot.find(element_id) if run.snapshot is not None else None
         name = (element.name if element is not None else "") or element_id
@@ -2209,6 +2304,11 @@ class Agent(BaseService):
     async def _ui_type(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
         element_id = _arg(args, "id")
         text = str(args.get("text") or "")
+        if _is_text_id(element_id):
+            raise UserFacingError(
+                f"{element_id} — текст, распознанный на картинке, а не поле: щёлкни по полю (ui_click по t… "
+                "или click_point), потом type_text"
+            )
         backend_id = self._backend_id(run, element_id)
         element = run.snapshot.find(element_id) if run.snapshot is not None else None
         name = (element.name if element is not None else "") or element_id
@@ -2282,10 +2382,61 @@ class Agent(BaseService):
         button = _arg(args, "button") or "left"
         if button not in ("left", "right", "middle"):
             button = "left"
-        double = bool(args.get("double"))
-        what = _arg(args, "what")
         fg = await self._target(run, explicit=True)
         sx, sy = self._point_of(run, fg, x, y, _arg(args, "on"))
+        return await self._click_screen(
+            run,
+            fg,
+            (sx, sy),
+            _arg(args, "what"),
+            button,
+            bool(args.get("double")),
+            f"точка ({int(x)}, {int(y)})",
+        )
+
+    async def _click_text(self, run: AgentRun, element_id: str, double: bool) -> Outcome:
+        """ui_click по строке t…, распознанной на картинке окна: настоящий щелчок мышью в её середину (окно
+        сдвинули после снимка — точка сдвигается с ним)."""
+        element = run.snapshot.find(element_id) if run.snapshot is not None else None
+        if element is None or not element.ocr:
+            raise UserFacingError(
+                f"строки {element_id} сейчас нет в окне (оно изменилось) — выбери строку по свежему снимку"
+            )
+        fg = await self._target(run, explicit=True)
+        self._check_snapshot(run, fg)
+        sx, sy = element.center
+        seen = run.text_window
+        if seen is not None and seen.hwnd and fg.hwnd != seen.hwnd:
+            raise WindowChanged("строка распознана в другом окне — сделай ui_snapshot")
+        if seen is not None and fg.rect != seen.rect and fg.rect[2] > fg.rect[0]:
+            same_size = (fg.rect[2] - fg.rect[0], fg.rect[3] - fg.rect[1]) == (
+                seen.rect[2] - seen.rect[0],
+                seen.rect[3] - seen.rect[1],
+            )
+            if not same_size:
+                raise WindowChanged("окно изменило размер после снимка — сделай ui_snapshot ещё раз")
+            sx, sy = sx + fg.rect[0] - seen.rect[0], sy + fg.rect[1] - seen.rect[1]
+        return await self._click_screen(
+            run, fg, (sx, sy), element.name, "left", double, element_id, text=True
+        )
+
+    async def _click_screen(
+        self,
+        run: AgentRun,
+        fg: WindowInfo,
+        point: tuple[int, int],
+        what: str,
+        button: str,
+        double: bool,
+        place: str,
+        *,
+        text: bool = False,
+    ) -> Outcome:
+        """Настоящий щелчок в точку экрана окна задачи (click_point, ui_click по строке t…): не в чужое окно,
+        отправка и рискованное — с разрешения (по имени элемента под точкой и по тому, что модель или
+        распознавание говорят о нём: what), курсор человека — обратно. text — щелчок по распознанной строке:
+        её текст и есть название."""
+        sx, sy = point
         run.searching = bool(SEARCH_FIELD.search(what))
         run.pointer, run.pointer_window = (sx, sy), fg
         owner_pid, owner_title = await self.ctx.run_platform(self.ui.owner_at, sx, sy)
@@ -2294,20 +2445,21 @@ class Agent(BaseService):
                 f"в этой точке окно «{owner_title}» — другая программа; нужна она — сначала focus_window"
             )
         name, kind = await self.ctx.run_platform(self.ui.element_at, sx, sy)
-        label = name or what
+        label = (what or name) if text else (name or what)
         window = self._window(run)
         message = self._pending_message(run)
-        if message and (not name or SEND_NAME.search(label)):
+        names = [n for n in dict.fromkeys((label, name, what)) if n]
+        if message and (not name or any(SEND_NAME.search(n) for n in names)):
             await self._approve_send(run, f"Нажать «{label or 'кнопку'}»")
-        elif self._ask(run, self._click_risky(run, label, kind)):
+        elif self._ask(run, any(self._click_risky(run, n, kind) for n in names or [""])):
             where = f" в «{window}»" if window else ""
-            await self._approve(run, f"Нажать «{label or f'точку {int(x)}, {int(y)}'}»{where}?")
+            await self._approve(run, f"Нажать «{label or place}»{where}?")
         kind_name = "double" if double else ("right" if button == "right" else "click")
         await self._point(run, kind_name, sx, sy, label)
         await self._mouse((sx, sy), button, double)
         if SEND_NAME.search(label):
             run.unsent = []
-        target = f"«{label}»" if label else f"точка ({int(x)}, {int(y)})"
+        target = f"«{label}»" if label else place
         return await self._observe(run, self.settle_s, f"Нажато: {target}")
 
     async def _type_text(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
@@ -2533,9 +2685,10 @@ class Agent(BaseService):
             ),
             Action(
                 "ui_click",
-                "Нажать на элемент окна по id из последнего снимка (double — двойной щелчок).",
+                "Нажать на элемент окна по id из последнего снимка: e… — элемент UI Automation, t… — строка "
+                "текста, распознанная на картинке (щелчок мышью в её середину); double — двойной щелчок.",
                 {
-                    "id": _s("id элемента, например e12"),
+                    "id": _s("id элемента или строки текста, например e12 или t3"),
                     "double": {"type": "boolean", "description": "Двойной"},
                 },
                 ["id"],

@@ -606,7 +606,8 @@ Telegram через MCP по настоящим именам инструмен�
 открывает и адреса программ: `tg:`, `ms-settings:`, `spotify:`, `mailto:`, `whatsapp:` (место в программе, сами
 ничего не отправляют).
 
-Агент (`jarvis/ai/agent.py`). Действия: `ui_snapshot`, `screenshot`, `focus_window`, `ui_click` (`double`),
+Агент (`jarvis/ai/agent.py`). Действия: `ui_snapshot`, `screenshot`, `focus_window`, `ui_click` (`double`; id `e…` —
+элемент UI Automation, `t…` — распознанная строка, ниже),
 `browser_*` (браузер Jarvis — ниже),
 `ui_type`, `click_point {x, y, what, button?, double?}` (координаты картинки последнего снимка окна → экран;
 окно сдвинули — пересчёт), `type_text {text, field?}` (туда, где фокус), `scroll {direction, amount, x?, y?}`,
@@ -632,7 +633,19 @@ UI Automation (окно браузера — одним запросом `FindAl
 (`format_snapshot(snapshot, to_image, coords)`) — точки той картинки, что пришла с этим снимком (снимок экрана, а
 `screenshot` — окна; в шапке — «Координаты [x,y,ш×в] — точки картинки экрана W×H», `Shot.coords_note`), те же, что у
 сетки и `click_point`; в точки экрана их переводит только щелчок (`Shot.to_screen`). Модель без картинок
-`click_point` не получает — у неё координаты в точках экрана. Пикселями без PNG (`platform.screen_pixels` — в пуле ввода-вывода, мониторы
+`click_point` не получает — у неё координаты в точках экрана. Распознавание текста — запасной путь, когда UI
+Automation почти ничего не видит в окне (`jarvis/ai/ocr.py` `wants_ocr`: элементов с именем, кроме кнопок заголовка,
+меньше 6, или программа из `NO_UIA_EXES` — Telegram и его клоны, Viber, OBS, VLC, Zoom…): текст окна впереди
+распознаётся (`Agent.ocr.recognize(bgra, size, area)` → строки в точках экрана; на Windows —
+`jarvis/platform/windows/ocr.py`, `Windows.Media.Ocr` в своём потоке MTA, язык профиля пользователя, иначе ru, потом en;
+не вышло — пауза 60 с; не Windows — `NoOcr`) по пикселям окна из уже снятого монитора, а без картинки — по снимку
+только окна (окно, скрытое от ИИ, поверх него — не распознаётся). Строки — в конец снимка окна после «Текст в окне —
+распознан с картинки…» элементами `t1, t2…` (`UiElement.ocr`, id постоянные, как у `e…`; до 80 строк, без строк внутри
+элементов UI Automation мельче четверти окна, без строк вне окна); моделям без картинок тоже. На картинке у строк
+меток нет. `ui_click` по `t…` — настоящий щелчок мышью в середину строки с теми же проверками, что у `click_point`
+(чужое окно под точкой, разрешение по тексту строки, имени элемента под точкой и `what`, человек работает мышью —
+ждать); окно сдвинули после снимка — точка сдвигается, изменило размер — `WindowChanged`; в сценарий —
+`Mouse.MoveInWindow` + щелчок. `ui_type` по `t…` — ошибка («щёлкни поле, потом type_text»). Пикселями без PNG (`platform.screen_pixels` — в пуле ввода-вывода, мониторы
 параллельно, пока поток платформы читает элементы окна; платформа без них — PNG всех мониторов, обрезанный до
 нужного). Окно задачи меняют только действия, которые для того и нужны: `launch_app`, `open_url`, `run_command`,
 `focus_window`, `ui_snapshot`, клавиши Win+…/Alt+Tab (после `launch_app` агент ждёт окно программы до 15 с и выводит
@@ -760,7 +773,8 @@ UI Automation страницу видимой вкладки (`jarvis/ai/browser
 `agent_journal`).
 
 Проверочные задачи агента (`core/evals`, [EVALS.md](EVALS.md)) — вне программы (в сборку не входят), но держатся
-за такие точки агента: `Agent.ui` (`snapshot`, `click`, `set_text`, `element_at`, `owner_at`), `Agent.toast_source`
+за такие точки агента: `Agent.ui` (`snapshot`, `click`, `set_text`, `element_at`, `owner_at`), `Agent.ocr`
+(`recognize`), `Agent.toast_source`
 (`access`, `fetch`, `close`), `settle_s`, `launch_settle_s`, `pointer_delay_s`; `run`, `wait`, `stop_run`, `interject`,
 `waiting_answer`, `current` (`AgentRun.usage`, `count`, `journal.dir`); события `agent.step` (`index`, `status`),
 `agent.state` (`waiting` с текстом «Жду ответа: …»), `confirm.request`; строка снимка окна (`format_snapshot`) и

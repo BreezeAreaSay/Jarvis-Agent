@@ -1,5 +1,5 @@
-"""UI Automation имитатора (агенту — вместо jarvis.ai.uia.WindowsUi) и уведомления Windows (вместо
-WinNotificationSource).
+"""UI Automation имитатора (агенту — вместо jarvis.ai.uia.WindowsUi), распознавание текста (вместо
+jarvis.platform.windows.ocr.WindowsOcr) и уведомления Windows (вместо WinNotificationSource).
 
 Снимок окна — виджеты сцены с uia=True: id e1…eN по порядку, прямоугольники в точках экрана, значение
 полей, фокус. Чего нет в UI Automation (список чатов Telegram, обложки плейлистов, мелкие подписи «Облака»),
@@ -10,7 +10,8 @@ WinNotificationSource).
 from dataclasses import dataclass
 from typing import Any
 
-from evals.sim.world import World
+from evals.sim.world import LIST_KINDS, Widget, Window, World
+from jarvis.ai.ocr import OcrLine
 from jarvis.ai.uia import SNAPSHOT_LIMIT, UiElement, UiError, UiSnapshot
 
 
@@ -101,6 +102,48 @@ class SimUi:
                 return 1, "Новое уведомление"
             window = self.world.window_at(x, y)
             return (window.pid, window.title) if window is not None else (0, "")
+
+
+class SimOcr:
+    """Распознавание текста имитатора: читает из мира то, что нарисовано в куске экрана (подписи, текст
+    полей, строки списков, сообщения), а не пиксели — детерминированно и без модели распознавания. Видно
+    только то, что не закрыто окном выше или уведомлением; значки без подписи не читаются — как у
+    настоящего."""
+
+    def __init__(self, world: World) -> None:
+        self.world = world
+
+    def recognize(self, bgra: bytes, size: tuple[int, int], area: tuple[int, int, int, int]) -> list[OcrLine]:
+        world = self.world
+        out: list[OcrLine] = []
+        with world.lock:
+            for window in reversed(world.windows):
+                if window.minimized:
+                    continue
+                for widget in window.widgets():
+                    for text, rect in _drawn(window, widget):
+                        cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+                        inside = area[0] <= cx < area[2] and area[1] <= cy < area[3]
+                        if inside and world.window_at(cx, cy) is window and world.toast_at(cx, cy) is None:
+                            out.append(OcrLine(text, rect))
+        return out
+
+
+def _drawn(window: Window, widget: Widget) -> list[tuple[str, tuple[int, int, int, int]]]:
+    """Какой текст нарисован у виджета и где (точки экрана): у поля — его текст или подсказка, у строки
+    списка — имя и вторая строка, у прочих — подпись."""
+    if widget.kind == "Pane" or widget.style == "chrome":
+        return []
+    left, top, right, bottom = window.screen_rect(widget.rect)
+    if widget.kind in ("Edit", "ComboBox", "Document"):
+        text = window.values.get(widget.key, widget.value) or widget.placeholder
+        return [(text, (left, top, right, bottom))] if text and not widget.password else []
+    if not widget.text:
+        return []
+    if widget.kind in LIST_KINDS and widget.value.strip() and bottom - top >= 40:
+        middle = (top + bottom) // 2
+        return [(widget.text, (left, top, right, middle)), (widget.value, (left, middle, right, bottom))]
+    return [(widget.text, (left, top, right, bottom))]
 
 
 @dataclass

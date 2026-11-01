@@ -1,12 +1,12 @@
 """Имитатор рабочего стола (core/evals/sim): окна и фокус, ввод с клавиатуры и мышью, UI Automation,
-картинка экрана, адреса, звук и музыка, медленная папка, «Сохранить как»."""
+распознавание текста, картинка экрана, адреса, звук и музыка, медленная папка, «Сохранить как»."""
 
 import pytest
 
 from evals.sim.apps.notepad import resolve_path
 from evals.sim.desktop import Desktop
 from evals.sim.platform import SimPlatform
-from evals.sim.ui import SimToasts, SimUi
+from evals.sim.ui import SimOcr, SimToasts, SimUi
 from evals.sim.world import HOME, norm
 from jarvis.ai.uia import UiError
 
@@ -299,3 +299,23 @@ def test_mail_compose_send_and_delete(desktop: Desktop) -> None:
 def test_norm() -> None:
     assert norm(" «Буду  в 7.» ") == "буду в 7"
     assert norm("Отчёт") == "отчет"
+
+
+def test_recognized_text_is_what_is_drawn_and_not_covered(desktop: Desktop) -> None:
+    """Распознавание имитатора: подписи, текст полей, строки списков — того окна, что видно в этой точке."""
+    world = desktop.world
+    team = desktop.teamchat.open_main()
+    reader = SimOcr(world)
+    lines = {line.text: line.rect for line in reader.recognize(b"", (0, 0), team.rect)}
+    assert "Отправить" in lines and "Удалить черновик" in lines and "Олег Петров" in lines
+    assert "Итоги встречи: релиз переносим на пятницу, тесты берёт Аня." in lines  # черновик в поле
+    assert "Свернуть" not in lines  # кнопки заголовка — значки, а не текст
+    send = team.screen_rect(team.widget("send").rect)  # type: ignore[union-attr]
+    assert lines["Отправить"] == send
+    # UI Automation в этом окне видит только кнопки заголовка
+    assert [e.name for e in SimUi(world).snapshot().elements] == ["Свернуть", "Развернуть", "Закрыть"]
+    # окно выше закрывает часть: того, что под ним, не видно; что выглядывает — видно
+    desktop.notepad.open_main()  # (300, 120)–(1400, 860): список чатов под ним, кнопки внизу — нет
+    covered = {line.text for line in reader.recognize(b"", (0, 0), team.rect)}
+    assert "Отдел продаж" not in covered and "Олег Петров" not in covered
+    assert "Отправить" in covered

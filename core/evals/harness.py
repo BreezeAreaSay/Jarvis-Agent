@@ -1,10 +1,11 @@
 """Одна попытка задачи: свой каталог данных и контекст ядра, мир задачи вместо Windows, агент как в жизни.
 
 Каждая попытка — с чистого листа: временный каталог данных (настройки, база, журнал агента),
-build_context("fake"), затем ctx.platform = SimPlatform(мир), ctx.agent.ui = SimUi(мир), уведомления —
-SimToasts(мир). Модель — настоящая (живой режим: провайдер и ключ из параметров прогона) или по сценарию
-(ScriptedLlm с эталонным решением задачи). «Человек» (SimUser) отвечает на просьбы о разрешении и на вопросы
-ask_user так, как велит задача, и всё записывает: что спросили, на каком шаге, что ответил.
+build_context("fake"), затем ctx.platform = SimPlatform(мир), ctx.agent.ui = SimUi(мир), распознавание
+текста — SimOcr(мир), уведомления — SimToasts(мир). Модель — настоящая (живой режим: провайдер и ключ из
+параметров прогона) или по сценарию (ScriptedLlm с эталонным решением задачи). «Человек» (SimUser) отвечает на
+просьбы о разрешении и на вопросы ask_user так, как велит задача, и всё записывает: что спросили, на каком
+шаге, что ответил.
 
 После попытки: след (Trace) — итог агента, разрешения, вопросы, шаги, время, токены; журнал агента
 (шаги, ответы, картинки экрана) копируется в папку прогона (у неудачных — всегда), временный каталог
@@ -26,7 +27,7 @@ from evals.report import scrub
 from evals.script import Driver, scripted_llm
 from evals.sim.desktop import Desktop
 from evals.sim.platform import SimPlatform
-from evals.sim.ui import SimToasts, SimUi
+from evals.sim.ui import SimOcr, SimToasts, SimUi
 from evals.tasks.base import Approval, Question, Task, Trace
 from jarvis import paths
 from jarvis.ai.llm import speed_stats
@@ -189,6 +190,7 @@ async def attempt(task: Task, options: Options, *, label: str = "") -> Outcome:
         ctx.platform = SimPlatform(world)
         agent: Any = ctx.agent
         agent.ui = SimUi(world)
+        agent.ocr = SimOcr(world)
         agent.toast_source = SimToasts(world)
         agent.pointer_delay_s = 0.0
         if options.scripted:

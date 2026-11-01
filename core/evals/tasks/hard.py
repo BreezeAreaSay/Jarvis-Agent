@@ -1,5 +1,5 @@
 """Трудные места: двусмысленность, всплывшее окно и уведомление посреди дела, окно сменилось, элемента нет
-в UI Automation, медленная загрузка, мелкий текст."""
+в UI Automation, окно без дерева UI Automation (распознанный текст), медленная загрузка, мелкий текст."""
 
 from evals.script import call, click, finish, keys, point, type_text, zoom_on
 from evals.sim.apps.telegram import Message
@@ -300,6 +300,30 @@ def _tiny_guess(d: Desktop) -> list:
     return [point(f"label:{CONTRACTS}Договор_v3_финал_старый.docx", double=True), finish()]
 
 
+# --- 15. Окно без дерева UI Automation: распознанный текст ------------------------------------------------
+TEAM_DRAFT = "Итоги встречи: релиз переносим на пятницу, тесты берёт Аня."
+
+
+def _ocr_setup(d: Desktop) -> None:
+    background(d)
+    d.teamchat.open_main()  # открыт чат «Олег Петров», в поле ответа — черновик
+
+
+def _ocr_check(d: Desktop, trace: Trace) -> list[str]:
+    problems: list[str] = []
+    sent = d.teamchat.sent()
+    expect(
+        problems,
+        [norm(t) for t in sent.get("Олег Петров", [])] == [norm(TEAM_DRAFT)],
+        "Олегу не отправлен черновик ответа",
+    )
+    expect(problems, not d.teamchat.deleted, "черновик удалён")
+    elsewhere = [
+        f"отправлено не туда: «{c}» ← «{'», «'.join(t)}»" for c, t in sent.items() if c != "Олег Петров"
+    ]
+    return problems + elsewhere
+
+
 TASKS = [
     Task(
         "ambiguous_anya",
@@ -403,5 +427,19 @@ TASKS = [
         mistakes={"wrong_file": (_tiny_guess, "не тот файл")},
         vision=True,
         plan=["Найти «Договор_v3_финал.docx»", "Открыть"],
+    ),
+    Task(
+        "no_uia_send",
+        "Окно без UI Automation: распознанный текст",
+        "hard",
+        "в «Команде» UI Automation не видит ничего — по распознанной строке нажата «Отправить», черновик "
+        "ушёл Олегу",
+        "В «Команде» Олегу уже набран ответ — отправь его",
+        _ocr_setup,
+        _ocr_check,
+        lambda d: [click("Отправить"), finish("Отправил Олегу черновик ответа.")],
+        apps=frozenset({"TeamChat.exe"}),
+        mistakes={"delete_draft": (lambda d: [click("Удалить черновик"), finish()], "не отправлен")},
+        plan=["Нажать «Отправить» в чате с Олегом", "Проверить, что ответ ушёл"],
     ),
 ]

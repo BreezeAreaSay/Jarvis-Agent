@@ -13,6 +13,7 @@ from evals.sim.apps.misc import Browser, Cloud, Feedback, Generic, Start
 from evals.sim.apps.music import Music
 from evals.sim.apps.notepad import Notepad
 from evals.sim.apps.settings import Settings
+from evals.sim.apps.teamchat import TeamChat, TeamChatRoom
 from evals.sim.apps.telegram import Chat, Message, Telegram
 from evals.sim.world import HOME, World
 
@@ -27,6 +28,18 @@ def chats() -> list[Chat]:
         Chat("Папа", "", [Message("Машину забрал из сервиса", time="09:30")]),
         Chat("Аня Смирнова", "anya_sm", [Message("Ок, договорились!", out=True, time="вчера")]),
         Chat("Избранное", "", [Message("Номер полиса: 7700 1234 5678", out=True, time="пн")]),
+    ]
+
+
+def team_rooms() -> list[TeamChatRoom]:
+    return [
+        TeamChatRoom(
+            "Олег Петров",
+            [("Олег Петров", "Пришли, пожалуйста, итоги встречи до вечера")],
+            draft="Итоги встречи: релиз переносим на пятницу, тесты берёт Аня.",
+        ),
+        TeamChatRoom("Отдел продаж", [("Мария", "Коллеги, план на неделю — в общей папке")]),
+        TeamChatRoom("Аня Смирнова", [("Аня Смирнова", "Тесты возьму на себя")]),
     ]
 
 
@@ -104,6 +117,7 @@ class Desktop:
     browser: Browser
     zoom: Feedback
     cloud: Cloud
+    teamchat: TeamChat
 
     @classmethod
     def build(cls, speed: float = 1.0) -> "Desktop":
@@ -123,6 +137,7 @@ class Desktop:
             browser=Browser(world),
             zoom=Feedback(world),
             cloud=Cloud(world, contracts),
+            teamchat=TeamChat(world, team_rooms()),
         )
         for app in (
             desktop.telegram,
@@ -135,6 +150,7 @@ class Desktop:
             desktop.browser,
             desktop.zoom,
             desktop.cloud,
+            desktop.teamchat,
         ):
             world.install(app)
         for name, exe in (

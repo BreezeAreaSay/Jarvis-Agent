@@ -15,6 +15,7 @@ import functools
 import logging
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -53,6 +54,8 @@ INTERACTIVE = {
     "SpinnerControl": "Spinner",
 }
 TEXTUAL = {"TextControl": "Text"}
+
+ToImage = Callable[[float, float], tuple[int, int]]  # точка экрана → точка картинки (vision.Shot.to_image)
 
 
 class UiError(PlatformError):
@@ -197,11 +200,17 @@ def find_by_name(elements: list[UiElement], name: str) -> UiElement | None:
     return best[1] if best is not None and best[0] >= 85 else None
 
 
-def format_snapshot(snapshot: UiSnapshot) -> str:
+def format_snapshot(snapshot: UiSnapshot, to_image: ToImage | None = None, coords: str = "") -> str:
     """Снимок окна для модели: строка на элемент — «e3 Button «Написать» [x,y,w×h] фокус». Окно браузера —
-    сначала его собственные кнопки, потом элементы страницы и текст её видимой части."""
+    сначала его собственные кнопки, потом элементы страницы и текст её видимой части.
+
+    Прямоугольники элементов — в точках экрана; to_image переводит их в точки картинки, которую модель
+    видит вместе со снимком (по ним же click_point), — одна система координат для модели; coords — строка
+    об этом в шапке."""
     head = f"Активное окно: «{snapshot.window}»" + (f" ({snapshot.app})" if snapshot.app else "")
     lines = [head]
+    if coords and snapshot.elements:
+        lines.append(coords)
     if not snapshot.elements:
         lines.append("Интерактивных элементов не найдено.")
     web = any(e.page for e in snapshot.elements)
@@ -214,6 +223,9 @@ def format_snapshot(snapshot: UiSnapshot) -> str:
             title = f" «{one_line(snapshot.page, 100)}»" if snapshot.page else ""
             lines.append(f"Страница{title} — видимая часть (дальше — scroll и новый снимок):")
         left, top, right, bottom = element.rect
+        if to_image is not None:
+            left, top = to_image(left, top)
+            right, bottom = to_image(right, bottom)
         name = f"«{one_line(element.name, 80)}»" if element.name else "(без имени)"
         value = f" = «{one_line(element.value, 60)}»" if element.value and not element.password else ""
         flags = [

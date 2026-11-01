@@ -216,7 +216,8 @@ AGENT_PROMPT = """Ты — агент Jarvis: сам выполняешь зад
 - Если ты понимаешь картинки, к снимку прикладывается картинка всего экрана: окно впереди обведено, его \
 элементы подписаны метками e…, сетка координат через 100 точек; мониторов несколько — остальные следом, \
 мельче; окно впереди, если на снимке оно мелкое, — следом крупно (или крупно то, что изменилось): по \
-ним проверяй мелкое — ушло ли сообщение, галочки, текст ошибки. Смотри на картинки после каждого действия, \
+ним проверяй мелкое — ушло ли сообщение, галочки, текст ошибки. Координаты элементов в снимке — точки \
+этой картинки, те же, что у сетки и click_point. Смотри на картинки после каждого действия, \
 и неудачного тоже: что открылось, что всплыло (окна, \
 уведомления, ошибки), что изменилось. Зелёным на ней обведено, что изменилось с прошлого снимка; «ничего \
 не изменилось» — действие, скорее всего, не сработало. Крупно одно окно — screenshot; мелкий текст или \
@@ -1746,6 +1747,8 @@ class Agent(BaseService):
         area = await self._screen_area(fg) if whole else None
         grab = asyncio.ensure_future(self._grab(area)) if area is not None else None
         snapshot: UiSnapshot | None = None
+        page = None
+        failed = ""
         try:
             # впереди браузер Jarvis — страница по CDP (jarvis.ai.browser), иначе — UI Automation
             page = await self.browser.look(run, fg)
@@ -1758,24 +1761,34 @@ class Agent(BaseService):
                 found = await self.ctx.run_platform(self.ui.snapshot, SNAPSHOT_LIMIT, fg.hwnd if fg else None)
                 snapshot = run.ids.assign(found)
         except PlatformError as e:
-            parts.append(f"{SNAPSHOT_HEADER}\n(Элементы окна недоступны: {e}.)")
+            failed = str(e)
         except BaseException:
             if grab is not None:
                 grab.cancel()
             raise
         else:
             run.snapshot = snapshot
-            body = page.text if page is not None else untrusted("Снимок окна", format_snapshot(snapshot))
-            parts.append(f"{SNAPSHOT_HEADER}\n{body}")
-        extras: list[dict[str, Any]] = []
+        shots: list[vision.Shot] = []
         if run.vision:
             # весь экран — после каждого действия; крупно окно — по screenshot или когда экран не снять
             shots = await self._screen(run, fg, snapshot, grab, area) if grab is not None and area else []
             if not shots and fg is not None:
                 shot = await self._shot(run, fg, snapshot)
                 shots = [shot] if shot is not None else []
-            if shots:
-                extras.append(vision.message(shots[0], others=shots[1:]))
+        if failed:
+            parts.append(f"{SNAPSHOT_HEADER}\n(Элементы окна недоступны: {failed}.)")
+        elif page is not None:
+            parts.append(f"{SNAPSHOT_HEADER}\n{page.text}")
+        elif snapshot is not None:
+            # координаты элементов — точки той картинки, что пришла с этим снимком (по ней и click_point)
+            main = shots[0] if shots else None
+            text = format_snapshot(
+                snapshot,
+                main.to_image if main is not None else None,
+                main.coords_note() if main is not None else "",
+            )
+            parts.append(f"{SNAPSHOT_HEADER}\n{untrusted('Снимок окна', text)}")
+        extras = [vision.message(shots[0], others=shots[1:])] if shots else []
         return "\n\n".join(parts), extras
 
     async def _journal(self, run: AgentRun, title: str, **step: Any) -> None:

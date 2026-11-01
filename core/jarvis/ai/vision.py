@@ -86,6 +86,14 @@ class Shot:
     def contains(self, x: float, y: float) -> bool:
         return 0 <= x < self.width and 0 <= y < self.height
 
+    def coords_note(self) -> str:
+        """Строка к тексту снимка окна: в каких точках там координаты элементов (точки этой картинки)."""
+        what = "картинки окна" if self.hwnd else "картинки экрана"
+        return (
+            f"Координаты [x,y,ш×в] — точки {what} {self.width}×{self.height}: те же, что у сетки и "
+            "click_point."
+        )
+
     def caption(self) -> str:
         if self.detail == "window":
             return (

@@ -227,6 +227,22 @@ async def test_click_follows_the_window_moved_after_the_snapshot(
     assert ("mouse_click", (455 + 100, 215 + 50, "left", False)) in platform.calls
 
 
+def test_drawn_label_of_an_unnamed_element_is_kept() -> None:
+    """Кнопка без имени в UI Automation (Qt, свой рисунок): распознанная подпись на ней — не повтор, а её
+    имя."""
+    snapshot = UiSnapshot(
+        "OBS",
+        "obs64.exe",
+        [
+            UiElement("e1", "", "Button", (1000, 800, 1200, 840)),
+            UiElement("e2", "Сцены", "Button", (100, 800, 300, 840)),
+        ],
+    )
+    lines = [ocr.OcrLine("Начать запись", (1020, 810, 1180, 830)), ocr.OcrLine("Сцены", (120, 810, 280, 830))]
+    found, _ = ocr.to_elements(lines, snapshot, (0, 0, 1920, 1080))
+    assert [e.name for e in found] == ["Начать запись"]
+
+
 def test_wants_ocr_crop_and_lines() -> None:
     chrome = [UiElement("e1", n, "Button", (0, 0, 10, 10)) for n in ("Свернуть", "Развернуть", "Закрыть")]
     few = UiSnapshot("Окно", "app.exe", [*chrome, UiElement("e4", "Поиск", "Edit", (0, 0, 50, 20))])
@@ -299,3 +315,96 @@ def test_windows_lines_from_words_and_pause_after_failure() -> None:
     assert backend.recognize(b"\0" * 16, (2, 2), (0, 0, 2, 2)) == []  # пауза: поток WinRT не дёргаем
     assert Broken.calls == 1
     assert isinstance(ocr.create_ocr(object()), ocr.NoOcr)
+
+
+@pytest.mark.parametrize("policy", ["deny", "ask"])
+async def test_mouse_click_permission_covers_text_lines(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, reader: FakeOcr, policy: str
+) -> None:
+    """ui_click по t… — настоящая мышь: запрет или «спрашивать» у «Щелчок мышью» действует и на него."""
+    ctx.settings.patch({"ai": {"vision": "off", "tool_policy": {"agent.click_point": policy}}})
+    asked = _approve(ctx) if policy == "ask" else []
+
+    def click_mama(request: httpx.Request, body: dict[str, Any]) -> httpx.Response:
+        found = re.search(r"^(t\d+) Text «Мама»", _texts(body), re.M)
+        assert found is not None
+        return httpx.Response(200, json=completion(calls(("ui_click", {"id": found.group(1)}))))
+
+    llm.add(PLAN, click_mama, calls(("finish", {"status": "partial", "summary": "Готово."})))
+    agent: Any = ctx.agent
+    await agent.wait(await agent.run("Открой чат «Мама»"))
+    platform: Any = ctx.platform
+    clicked = any(c[0] == "mouse_click" for c in platform.calls)
+    if policy == "deny":
+        assert not clicked
+        tools = [str(m.get("content")) for m in llm.requests[-1]["messages"] if m.get("role") == "tool"]
+        assert "запрещено в настройках" in tools[0]
+    else:
+        assert asked and "«Мама»" in asked[0] and clicked
+
+
+async def test_lookalike_letters_still_ask_before_sending(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, reader: FakeOcr
+) -> None:
+    """Распознавание прочло «0тправить» (ноль) и «Удaлить» (латинская a) — разрешение всё равно
+    спрашивается."""
+    ctx.settings.patch({"ai": {"vision": "off"}})
+    reader.lines = [ocr.OcrLine("0тправить", SEND), ocr.OcrLine("Удaлить", (1300, 930, 1440, 960))]
+    asked = _approve(ctx)
+
+    def click(name: str) -> Any:
+        def respond(request: httpx.Request, body: dict[str, Any]) -> httpx.Response:
+            found = re.search(rf"^(t\d+) Text «{name}»", _texts(body), re.M)
+            assert found is not None
+            return httpx.Response(200, json=completion(calls(("ui_click", {"id": found.group(1)}))))
+
+        return respond
+
+    llm.add(
+        PLAN, click("0тправить"), click("Удaлить"), calls(("finish", {"status": "partial", "summary": "."}))
+    )
+    agent: Any = ctx.agent
+    await agent.wait(await agent.run("Отправь"))
+    assert len(asked) == 2 and "0тправить" in asked[0] and "Удaлить" in asked[1]
+
+
+async def test_window_under_jarvis_is_not_recognized(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, reader: FakeOcr
+) -> None:
+    """Задачу дали из окна Jarvis: оно впереди и закрывает окно задачи — на его пикселях чат Jarvis, а не
+    текст окна. Не распознаём, а говорим модели, как увидеть текст."""
+    ctx.settings.patch({"ai": {"vision": "off"}})
+    platform: Any = ctx.platform
+    platform.windows[-1].foreground = False  # впереди — окно Jarvis (платформа его не показывает)
+    platform.foreground_window = lambda: platform.windows[-1]
+    llm.add(PLAN, calls(("finish", {"status": "partial", "summary": "Посмотрел."})))
+    agent: Any = ctx.agent
+    await agent.wait(await agent.run("Посмотри Telegram"))
+    assert reader.calls == []
+    from jarvis.ai.agent import OCR_COVERED
+
+    assert OCR_COVERED in _texts(llm.requests[1])
+
+
+async def test_zoom_has_no_labels_for_text_lines(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, reader: FakeOcr, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis.ai import vision
+
+    ctx.settings.patch({"ai": {"vision": "on"}})
+    labelled: list[list[str]] = []
+    real = vision.render_zoom
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        labelled.append([e.id for e in kwargs.get("elements") or []])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(vision, "render_zoom", spy)
+    llm.add(
+        PLAN,
+        calls(("zoom", {"x": 40, "y": 20, "width": 120, "height": 80})),
+        calls(("finish", {"status": "partial", "summary": "Посмотрел."})),
+    )
+    agent: Any = ctx.agent
+    await agent.wait(await agent.run("Посмотри Telegram"))
+    assert labelled == [["e1"]]  # строки t… на лупе без меток — как и на снимке экрана

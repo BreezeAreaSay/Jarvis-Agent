@@ -40,9 +40,12 @@ def main() -> None:
         raise SystemExit("окно слишком мелкое или за пределами экрана")
     bgra, w, h = platform.screen_pixels(rect)
     reader = WindowsOcr()
-    reader.recognize(bgra, (w, h), rect)  # первый раз — создание движка
     started = time.monotonic()
-    lines = reader.recognize(bgra, (w, h), rect)
+    first = reader.recognize(bgra, (w, h), rect)  # первый раз — ещё и создание движка
+    first_s = time.monotonic() - started
+    first_failed = reader.paused  # не вышло — распознавание отдыхает минуту: второй замер был бы пустым
+    started = time.monotonic()
+    lines = first if first_failed else reader.recognize(bgra, (w, h), rect)
     ocr_s = time.monotonic() - started
     elements, cut = ocr.to_elements(lines, snapshot, rect)
     data = {
@@ -55,11 +58,19 @@ def main() -> None:
         "uia_с_именем_без_заголовка": ocr.named_elements(snapshot),
         "агент_распознаёт": ocr.wants_ocr(snapshot, window.exe),
         "язык": reader.language,
+        "ocr_первый_раз_секунд": round(first_s, 3),
+        "ocr_ошибка": "распознавание не удалось — текст ошибки в журнале выше (WARNING)"
+        if first_failed
+        else "",
         "ocr_секунд": round(ocr_s, 3),
         "ocr_строк": len(lines),
         "строк_в_снимке": len(elements),
         "обрезано": cut,
-        "найдено": {
+        # в распознанном (до отбора) и в снимке агента (повторы элементов UI Automation отброшены)
+        "найдено_распознано": {
+            word: any(word.casefold() in line.text.casefold() for line in lines) for word in args.expect
+        },
+        "найдено_в_снимке": {
             word: any(word.casefold() in e.name.casefold() for e in elements) for word in args.expect
         },
     }

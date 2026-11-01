@@ -125,6 +125,10 @@ TEMPERATURE = 0.2  # действиям на экране нужна аккур�
 BATCH_GAP_S = 0.5
 # действия настоящей мышью и клавиатурой: пока человек сам работает ими — не мешать, подождать
 HUMAN_INPUT = frozenset({"click_point", "type_text", "scroll", "press_keys"})
+OCR_COVERED = (
+    "(Текст этого окна не распознан: поверх него окно Jarvis. Первое действие в окне выведет его вперёд — "
+    "или focus_window, и в новом снимке будут строки t….)"
+)
 HUMAN_QUIET_S = 2.0  # человек не трогал мышь и клавиатуру столько — можно действовать
 HUMAN_WAIT_S = 30.0  # дольше не ждём: действие не выполняется, модель узнаёт почему
 HUMAN_BUSY = (
@@ -218,8 +222,8 @@ AGENT_PROMPT = """Ты — агент Jarvis: сам выполняешь зад
 элементы подписаны метками e…, сетка координат через 100 точек; мониторов несколько — остальные следом, \
 мельче; окно впереди, если на снимке оно мелкое, — следом крупно (или крупно то, что изменилось): по \
 ним проверяй мелкое — ушло ли сообщение, галочки, текст ошибки. Координаты элементов в снимке — точки \
-этой картинки, те же, что у сетки и click_point. Смотри на картинки после каждого действия, \
-и неудачного тоже: что открылось, что всплыло (окна, \
+этой картинки, те же, что у сетки и click_point (после zoom, до нового снимка, click_point — по картинке \
+лупы). Смотри на картинки после каждого действия, и неудачного тоже: что открылось, что всплыло (окна, \
 уведомления, ошибки), что изменилось. Зелёным на ней обведено, что изменилось с прошлого снимка; «ничего \
 не изменилось» — действие, скорее всего, не сработало. Крупно одно окно — screenshot; мелкий текст или \
 значок не разобрать — zoom (лупа).
@@ -1356,6 +1360,12 @@ class Agent(BaseService):
         if call.name in self._actions:
             risk = AGENT_RISK.get(call.name, "act")
             choice = decision(self.ctx.settings.value.ai, f"agent.{call.name}", risk)
+            if call.name == "ui_click" and _is_text_id(_arg(args, "id")):
+                # щелчок по строке t… — настоящая мышь, как click_point: действует и запрет «Щелчок мышью»
+                point = decision(
+                    self.ctx.settings.value.ai, "agent.click_point", AGENT_RISK.get("click_point", "act")
+                )
+                choice = max(choice, point, key=("allow", "ask", "deny").index)
             if choice == "deny":
                 return (
                     "Ошибка: это действие агенту запрещено в настройках (Jarvis AI → Инструменты и "
@@ -1791,9 +1801,10 @@ class Agent(BaseService):
             raise
         else:
             run.snapshot = snapshot
+        unread = ""
         if page is None and fg is not None:
             # окно UI Automation почти не видит (Telegram, Qt, игры) — текст в нём распознаётся: строки t…
-            read = await self._read_text(run, fg, snapshot, grab, area)
+            read, unread = await self._read_text(run, fg, snapshot, grab, area)
             if read is not snapshot and read is not None:
                 if failed:
                     run.ids.forget()  # элементов UI Automation в этом снимке нет: старые e… не действуют
@@ -1805,6 +1816,9 @@ class Agent(BaseService):
             if not shots and fg is not None:
                 shot = await self._shot(run, fg, snapshot)
                 shots = [shot] if shot is not None else []
+            if not shots:
+                # картинки нет: координаты в тексте — точки экрана, а прежняя картинка (её масштаб) устарела
+                run.shot = run.window_shot = None
         if failed:
             parts.append(f"{SNAPSHOT_HEADER}\n(Элементы окна недоступны: {failed}.)")
         elif page is not None:
@@ -1817,6 +1831,8 @@ class Agent(BaseService):
                 main.to_image if main is not None else None,
                 main.coords_note() if main is not None else "",
             )
+            if unread:
+                text += f"\n{unread}"
             parts.append(f"{SNAPSHOT_HEADER}\n{untrusted('Снимок окна', text)}")
         extras = [vision.message(shots[0], others=shots[1:])] if shots else []
         return "\n\n".join(parts), extras
@@ -1828,27 +1844,31 @@ class Agent(BaseService):
         snapshot: UiSnapshot | None,
         grab: "asyncio.Future[tuple[str, Any]] | None",
         area: ScreenArea | None,
-    ) -> UiSnapshot | None:
+    ) -> tuple[UiSnapshot | None, str]:
         """Окно UI Automation почти не видит (jarvis.ai.ocr.wants_ocr) — распознать текст в нём: строки
         добавляются в снимок элементами t… (id постоянные, как у e…). Распознавать нечего или не вышло —
-        снимок как был."""
+        снимок как был. Второе — строка модели, почему текст не распознан (окно закрыто окном Jarvis), или
+        ""."""
         if fg.minimized or not ocr.wants_ocr(snapshot, fg.exe):
-            return snapshot
+            return snapshot, ""
+        if not fg.foreground:
+            # впереди окно Jarvis (задачу дали из него): пиксели экрана здесь — его чат, а не текст этого окна
+            return snapshot, OCR_COVERED
         try:
             piece = await self._window_pixels(fg, grab, area)
             if piece is None:
-                return snapshot
+                return snapshot, ""
             lines = await self.ctx.run_io(self.ocr.recognize, *piece)
         except Exception:
             log.info("текст окна не распознан", exc_info=True)
-            return snapshot
+            return snapshot, ""
         found, cut = ocr.to_elements(lines, snapshot, piece[2])
         if not found:
-            return snapshot
+            return snapshot, ""
         base = snapshot or UiSnapshot(fg.title, fg.exe, hwnd=fg.hwnd, pid=fg.pid, rect=fg.rect)
         texts = run.text_ids.assign(dataclasses.replace(base, elements=found)).elements
         run.text_window = copy.copy(fg)  # где было окно при распознавании: сдвинут — щелчок сдвинется с ним
-        return dataclasses.replace(base, elements=[*base.elements, *texts], ocr_truncated=cut)
+        return dataclasses.replace(base, elements=[*base.elements, *texts], ocr_truncated=cut), ""
 
     async def _window_pixels(
         self,
@@ -2449,6 +2469,8 @@ class Agent(BaseService):
         window = self._window(run)
         message = self._pending_message(run)
         names = [n for n in dict.fromkeys((label, name, what)) if n]
+        if text:  # распознавание путает похожие буквы: «0тправить», «Oтправить» — тоже «Отправить»
+            names = list(dict.fromkeys(v for n in names for v in ocr.spellings(n)))
         if message and (not name or any(SEND_NAME.search(n) for n in names)):
             await self._approve_send(run, f"Нажать «{label or 'кнопку'}»")
         elif self._ask(run, any(self._click_risky(run, n, kind) for n in names or [""])):
@@ -2650,7 +2672,7 @@ class Agent(BaseService):
         if await self._private_on_screen(area):
             return Outcome(False, "Ошибка: в этом месте экрана — окно, скрытое от ИИ; лупа его не показывает")
         bgra, width, height = await self.ctx.run_io(pixels, area)
-        elements = run.snapshot.elements if run.snapshot is not None else []
+        elements = [e for e in run.snapshot.elements if not e.ocr] if run.snapshot is not None else []
         zoomed = await self.ctx.run_io(
             lambda: vision.render_zoom(bgra, (int(width), int(height)), area, elements=elements)
         )

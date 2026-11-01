@@ -3,8 +3,8 @@
 
 Распознаёт сама Windows (языки распознавания ставятся вместе с языковыми пакетами): быстро (на окно — сотые
 доли секунды на Windows 11), без сети и без своих моделей. Мелкий шрифт не увеличиваем: 12 пт читается без
-ошибок. Язык — из профиля пользователя (Windows сама берёт первый, для которого есть распознавание); его нет —
-русский, потом английский из доступных.
+ошибок. Язык — русский, если он есть среди языков распознавания (интерфейс программ человека, скорее всего,
+русский, а латиницу русский движок тоже читает); нет — язык профиля пользователя, потом английский.
 
 Всё WinRT — в своём фоновом потоке MTA (MtaWorker, как у медиасессий): в STA ждать асинхронные операции
 нельзя. Зависло или упало — у вызывающего пустой список, а распознавание отдыхает минуту (агент работает и без
@@ -22,9 +22,11 @@ from jarvis.platform.windows.media import MtaWorker, wait_async
 
 log = logging.getLogger(__name__)
 
-CALL_TIMEOUT_S = 3.0  # распознавание окна целиком — в сотых долях секунды; дольше — что-то не так
+RECOGNIZE_TIMEOUT_S = 3.0  # распознавание окна целиком — в сотых долях секунды; дольше — что-то не так
+CALL_TIMEOUT_S = 6.0  # весь вызов: ещё импорт WinRT и создание движка в первый раз, копии пикселей
 PAUSE_S = 60.0  # не вышло — столько не пробовать (агент работает и без распознавания)
-LANGUAGES = ("ru", "en")  # если в профиле нет языка с распознаванием — по порядку из доступных
+PREFERRED = "ru"  # есть русский среди языков распознавания — он; нет — язык профиля, потом английский
+FALLBACK = "en"
 
 # строка распознавания: текст и прямоугольники её слов (x, y, ширина, высота — точки картинки)
 RawLine = tuple[str, Sequence[tuple[float, float, float, float]]]
@@ -75,8 +77,13 @@ class WindowsOcr:
         """Язык распознавания (тег BCP-47) — для журнала и проверок; пока не распознавали — ""."""
         return self._language
 
+    @property
+    def paused(self) -> bool:
+        """Распознавание недавно не удалось и отдыхает (PAUSE_S)."""
+        return time.monotonic() < self._paused_until
+
     def recognize(self, bgra: bytes, size: tuple[int, int], area: Rect) -> list[OcrLine]:
-        if time.monotonic() < self._paused_until or size[0] < 1 or size[1] < 1:
+        if self.paused or size[0] < 1 or size[1] < 1:
             return []
         started = time.monotonic()
         try:
@@ -98,22 +105,25 @@ class WindowsOcr:
         return lines
 
     def _engine_or_none(self) -> Any:
-        """Движок распознавания: язык профиля пользователя, иначе ru, потом en из доступных; нет — None."""
+        """Движок распознавания: русский из доступных, иначе язык профиля пользователя, потом английский;
+        нет ни одного — RuntimeError."""
         if self._engine is not None:
             return self._engine
         from winrt.windows.media.ocr import OcrEngine  # type: ignore[import-not-found]
 
-        engine = OcrEngine.try_create_from_user_profile_languages()
+        available = list(OcrEngine.available_recognizer_languages or [])
+
+        def by_prefix(prefix: str) -> Any:
+            language = next(
+                (lang for lang in available if str(lang.language_tag).casefold().startswith(prefix)), None
+            )
+            return OcrEngine.try_create_from_language(language) if language is not None else None
+
+        engine = by_prefix(PREFERRED)
         if engine is None:
-            available = list(OcrEngine.available_recognizer_languages or [])
-            for prefix in LANGUAGES:
-                language = next(
-                    (lang for lang in available if str(lang.language_tag).casefold().startswith(prefix)), None
-                )
-                if language is not None:
-                    engine = OcrEngine.try_create_from_language(language)
-                    if engine is not None:
-                        break
+            engine = OcrEngine.try_create_from_user_profile_languages()
+        if engine is None:
+            engine = by_prefix(FALLBACK)
         if engine is None:
             raise RuntimeError("в Windows нет языка для распознавания текста (Параметры → Язык и регион)")
         self._engine = engine
@@ -142,11 +152,13 @@ class WindowsOcr:
         writer = DataWriter()
         writer.write_bytes(bgra)
         buffer = writer.detach_buffer()
-        bitmap = SoftwareBitmap.create_copy_from_buffer(
+        # с режимом альфы — отдельный метод (у create_copy_from_buffer в pywinrt 3.x только четыре аргумента);
+        # альфа снимка экрана не нужна: IGNORE
+        bitmap = SoftwareBitmap.create_copy_with_alpha_from_buffer(
             buffer, BitmapPixelFormat.BGRA8, width, height, BitmapAlphaMode.IGNORE
         )
         try:
-            result = wait_async(engine.recognize_async(bitmap), CALL_TIMEOUT_S)
+            result = wait_async(engine.recognize_async(bitmap), RECOGNIZE_TIMEOUT_S)
         finally:
             bitmap.close()
         lines: list[RawLine] = []

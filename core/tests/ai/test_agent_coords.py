@@ -113,3 +113,40 @@ def test_format_snapshot_maps_rectangles_to_the_picture() -> None:
     text = format_snapshot(snapshot, window.to_image, window.coords_note())
     assert "e1 Button «Кнопка» [280,220,100x40]" in text and "точки картинки окна 800×600" in text
     assert format_snapshot(snapshot).count("[1280,720,100x40]") == 1
+
+
+async def test_look_without_a_picture_forgets_the_old_one(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Снимок без картинки (экран не снялся): координаты в тексте — точки экрана, а прежняя картинка с её
+    масштабом больше не действует — click_point по ней не попадёт мимо."""
+    from jarvis.platform.base import PlatformError
+
+    ctx.settings.patch({"ai": {"vision": "on"}})
+    platform = _wide_screen(ctx, monkeypatch)
+    ui.elements = [UiElement("e1", "Найти", "Button", (2300, 700, 2400, 740))]
+    seen: list[str] = []
+
+    def broken(*args: Any) -> Any:
+        raise PlatformError("экран не снять")
+
+    def break_screen(request: httpx.Request, body: dict[str, Any]) -> httpx.Response:
+        assert ctx.agent.current.shot is not None  # type: ignore[attr-defined]
+        monkeypatch.setattr(platform, "screen_pixels", broken)
+        monkeypatch.setattr(platform, "screenshot", broken)
+        return httpx.Response(200, json=completion(calls(("wait", {"seconds": 0.5}))))
+
+    def after(request: httpx.Request, body: dict[str, Any]) -> httpx.Response:
+        seen.append(
+            "\n".join(str(m.get("content")) for m in body["messages"] if isinstance(m.get("content"), str))
+        )
+        seen.append(repr(ctx.agent.current.shot))  # type: ignore[attr-defined]
+        return httpx.Response(
+            200, json=completion(calls(("click_point", {"x": 100, "y": 50, "what": "кнопка"})))
+        )
+
+    llm.add(PLAN, break_screen, after, calls(("finish", {"status": "partial", "summary": "Не вышло."})))
+    await ctx.agent.wait(await ctx.agent.run("Нажми «Найти»"))  # type: ignore[attr-defined]
+    assert seen[1] == "None"
+    assert "e1 Button «Найти» [2300,700,100x40]" in seen[0].rsplit("[Снимок окна]", 1)[-1]
+    assert not any(name == "mouse_click" for name, _ in platform.calls)  # по устаревшей картинке не жмём

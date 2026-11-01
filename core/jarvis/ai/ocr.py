@@ -7,8 +7,12 @@ Windows.Media.Ocr, jarvis.platform.windows.ocr) и добавляет строк
 строки.
 
 Когда распознавать (wants_ocr): в снимке окна мало элементов с именем (кнопки заголовка окна не в счёт) или
-программа из списка «без доступности» (NO_UIA_EXES). Строки, которые повторяют элементы UI Automation (текст
-поля, подпись кнопки), отбрасываются (to_elements).
+программа из списка «без доступности» (NO_UIA_EXES). Строки внутри элементов UI Automation, у которых есть имя
+или значение (текст поля, подпись кнопки), — повтор: отбрасываются (to_elements); внутри безымянных — нет,
+распознанная подпись и есть их имя.
+
+Распознавание путает похожие буквы латиницы и кириллицы («Oтправить», «0тправить»): проверка, рискованно ли
+нажатие, смотрит и варианты написания строки (spellings).
 
 Бэкенд синхронный, работает в пуле ввода-вывода (ctx.run_io): на вход — пиксели куска экрана (BGRA) и где этот
 кусок на экране; строки — в точках экрана. Не Windows — NoOcr (строк нет); тесты и проверочные задачи
@@ -59,7 +63,9 @@ WINDOW_CHROME = frozenset(
 MIN_NAMED = 6  # элементов с именем меньше — окно UI Automation почти не видит: распознать текст
 MAX_LINES = 80  # строк в снимке окна
 MIN_SIDE = 40  # окно уже стольких точек — распознавать нечего
-DUP_AREA = 0.25  # строка внутри элемента UI Automation мельче четверти окна — его же подпись или текст
+DUP_AREA = (
+    0.25  # строка внутри элемента UI Automation мельче четверти окна (с именем) — его же подпись или текст
+)
 TEXT_LIMIT = 200
 
 
@@ -166,7 +172,10 @@ def to_elements(
     known = [
         e.rect
         for e in (snapshot.elements if snapshot is not None else [])
-        if not e.ocr and e.kind != "Document" and _area(e.rect) < DUP_AREA * window_area and _area(e.rect) > 0
+        if not e.ocr
+        and (e.name.strip() or (e.value.strip() and not e.password))
+        and e.kind != "Document"
+        and 0 < _area(e.rect) < DUP_AREA * window_area
     ]
     out: list[UiElement] = []
     for line in sorted(lines, key=lambda line: (line.rect[1], line.rect[0])):
@@ -178,3 +187,14 @@ def to_elements(
             continue
         out.append(UiElement("", text, "Text", line.rect, ocr=True))
     return out[:MAX_LINES], len(out) > MAX_LINES
+
+
+# похожие буквы: латиница → кириллица (и цифры, которые распознавание ставит вместо букв) и обратно
+_TO_CYRILLIC = str.maketrans("AaBCcEeHKkMOoPpTXxYy03", "АаВСсЕеНКкМОоРрТХхУуОЗ")
+_TO_LATIN = str.maketrans("АаВСсЕеНКкМОоРрТХхУу", "AaBCcEeHKkMOoPpTXxYy")
+
+
+def spellings(text: str) -> list[str]:
+    """Строка и её варианты, где похожие буквы приведены к кириллице и к латинице: «Oтправить» (латинская O)
+    и «0тправить» распознаются как «Отправить» — для проверок, рискованно ли нажатие."""
+    return list(dict.fromkeys((text, text.translate(_TO_CYRILLIC), text.translate(_TO_LATIN))))

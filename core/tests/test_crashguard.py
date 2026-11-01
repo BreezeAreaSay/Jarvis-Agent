@@ -72,9 +72,13 @@ def test_espeak_data_gets_an_ascii_path_on_windows(tmp_path: Path, monkeypatch: 
     for name, size in (("phontab", 10), ("phondata", 20), ("ru_dict", 30)):
         (src / name).write_bytes(b"x" * size)
     (src / "ru" / "voice").write_text("ru", encoding="utf-8")
+    if not str(tmp_path).isascii():  # имя пользователя кириллицей: временной папки латиницей нет
+        pytest.skip("путь временной папки не латиницей — проверка идёт там, где он латиницей (CI)")
     program_data = tmp_path / "ProgramData"
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    monkeypatch.setenv("PUBLIC", str(tmp_path / "Public"))  # настоящие папки системы не трогаем
+    monkeypatch.setenv("SYSTEMDRIVE", str(tmp_path / "Drive"))
 
     first = piper.ascii_espeak_dir(src)
     assert str(first).isascii() and first.parent == program_data / "Jarvis"

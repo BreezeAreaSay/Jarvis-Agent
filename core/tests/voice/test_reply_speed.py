@@ -118,7 +118,7 @@ async def test_without_ready_phrases_reply_waits_for_network(rig: Rig, capsys: A
     seconds = await rig.latency("сверни все окна")
     with capsys.disabled():
         print(f"\nбез подготовки: «сверни все окна» — {seconds * 1000:.0f} мс до первого звука")
-    assert seconds >= NETWORK_S
+    assert seconds >= NETWORK_S - 0.02  # таймер Windows идёт шагами по 15,6 мс: сон 0,4 с бывает чуть короче
 
 
 async def test_first_launch_budget_covers_first_variants(rig: Rig) -> None:

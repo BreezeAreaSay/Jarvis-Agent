@@ -15,6 +15,15 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'Нужен Node.js 22+: https://nodejs.org' }
 
 Push-Location (Join-Path $Root 'core')
+# Python из Microsoft Store — «упакованное» приложение: его записи в AppData видны только ему (Codex не находит
+# своих папок), а микрофон ему Windows может не дать. Ядру — Python от uv; окружение на Python из Store —
+# пересоздать.
+$env:UV_PYTHON_PREFERENCE = 'only-managed'
+$venvCfg = Join-Path (Get-Location) '.venv\pyvenv.cfg'
+if ((Test-Path $venvCfg) -and (Select-String -Path $venvCfg -Pattern 'WindowsApps' -SimpleMatch -Quiet)) {
+    Write-Host 'Окружение ядра — на Python из Microsoft Store: пересоздаю на Python от uv…'
+    Remove-Item -Recurse -Force (Join-Path (Get-Location) '.venv')
+}
 uv sync
 Pop-Location
 

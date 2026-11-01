@@ -386,10 +386,11 @@ class MicInput:
         most = _input_channels(api, target)
         if target is not None and most == 0:  # «по умолчанию» в Windows указывает на устройство без входа
             raise AudioError("микрофон не найден — подключите микрофон или выберите его в настройках голоса")
-        # моно; у микрофонных решёток (2–4 канала) и в WASAPI — столько каналов, сколько у устройства
-        attempts = [(RATE, 1), (native, 1), (native, 2), (native, most)] if most > 2 else []
-        attempts = attempts or [(RATE, 1), (native, 1), (native, 2)]
-        last: Exception | None = None
+        # моно; у микрофонных решёток (2–4 канала) и в WASAPI — столько каналов, сколько у устройства (больше,
+        # чем у него есть, не просим: ошибка «Invalid number of channels» скрыла бы настоящую причину)
+        attempts = [(RATE, 1), (native, 1), (native, 2), (native, most)]
+        attempts = [(r, c) for r, c in attempts if c <= max(most, 1)]
+        errors: list[str] = []
         self._token += 1
         token = self._token
         for rate, channels in dict.fromkeys(attempts):
@@ -404,14 +405,18 @@ class MicInput:
                     self._make_finished(token),
                 )
             except Exception as e:
-                last = e
+                log.info("звук: микрофон %d Гц, каналов %d — не открылся: %s", rate, channels, e)
+                if str(e) not in errors:
+                    errors.append(str(e))
                 continue
             self.rate = rate
             self._resampler = Resampler(rate, RATE) if rate != RATE else None
             break
         else:
             raise AudioError(
-                f"микрофон не открылся: {last} — проверьте, что он подключён и выбран в настройках голоса"
+                f"микрофон не открылся: {'; '.join(errors[:2])} — проверьте, что он подключён, выбран "
+                "в настройках голоса и что в Windows включён доступ к микрофону (Параметры → "
+                "Конфиденциальность → Микрофон)"
             )
         self.device_name = device_name(api, index, "input")
         self._pending = np.zeros(0, dtype=np.float32)

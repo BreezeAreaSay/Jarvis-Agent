@@ -261,3 +261,17 @@ def test_default_input_without_a_microphone_says_so() -> None:
     mic = MicInput("", api_factory=lambda: api)  # type: ignore[arg-type,return-value]
     assert mic.read(0.01) is None
     assert mic.error.startswith("микрофон не найден") and api.opened == []
+
+
+def test_mono_mic_error_shows_the_real_cause() -> None:
+    api = FakeApi()
+
+    def open_input(index: int | None, rate: int, channels: int, *rest: Any) -> Any:
+        api.opened.append((index, rate, channels))
+        raise OSError("Unanticipated host error [PaErrorCode -9999]")  # например, Windows не даёт микрофон
+
+    api.open_input = open_input  # type: ignore[method-assign]
+    mic = MicInput("USB", api_factory=lambda: api)  # type: ignore[arg-type,return-value]
+    assert mic.read(0.01) is None
+    assert all(channels == 1 for _, _, channels in api.opened)  # у моно-микрофона двух каналов не просим
+    assert "Unanticipated host error" in mic.error and "Конфиденциальность" in mic.error

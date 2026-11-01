@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 import pytest
 
+from jarvis.ai.agent import LIMIT_GRACE, LIMIT_TEXT, REPEAT_STOP, SKIPPED
 from jarvis.ai.uia import UiElement
 from jarvis.context import AppContext
 from jarvis.services import ExecResult, UserFacingError
@@ -49,10 +50,11 @@ def _mail_script(llm: ScriptedLlm, final: str) -> None:
         PLAN,
         calls(("ui_click", {"id": "e1", "step": 2})),
         calls(
-            ("ui_type", {"id": "e1", "text": "ivan@example.com", "step": 3}),
-            ("ui_type", {"id": "e3", "text": "Отчёт готов, смотри вложение", "step": 3}),
+            # id — из снимка окна нового письма: «Написать» и «Входящие» были e1 и e2, новые элементы — дальше
+            ("ui_type", {"id": "e3", "text": "ivan@example.com", "step": 3}),
+            ("ui_type", {"id": "e5", "text": "Отчёт готов, смотри вложение", "step": 3}),
         ),
-        calls(("ui_click", {"id": "e4", "step": 4})),
+        calls(("ui_click", {"id": "e6", "step": 4})),
         calls(("finish", {"summary": final})),
         calls(("finish", {"summary": final})),  # после проверки по свежему снимку
     )
@@ -160,10 +162,24 @@ async def test_agent_stop(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi, events:
 
 async def test_agent_step_limit_and_always_confirm(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi) -> None:
     ctx.settings.patch({"ai": {"max_agent_steps": 3}})
-    llm.add(PLAN, *[calls(("press_keys", {"combo": "ctrl+c"})) for _ in range(4)])
+    # лимит: ещё LIMIT_GRACE вызовов — просьба закончить (finish), дальше — остановка
+    llm.add(PLAN, *[calls(("press_keys", {"combo": "ctrl+c"})) for _ in range(4 + LIMIT_GRACE)])
     result = await ctx.agent.wait(await ctx.agent.run("Копируй без конца"))  # type: ignore[attr-defined]
     assert result.status == "error" and "не уложился в 3 шагов" in result.summary
     assert result.summary.endswith("Успел: Нажать ctrl+c, Нажать ctrl+c, Нажать ctrl+c.")
+    tool_texts = [
+        str(m.get("content")) for r in llm.requests for m in r["messages"] if m.get("role") == "tool"
+    ]
+    assert any(LIMIT_TEXT in t for t in tool_texts)
+
+    # успел подвести итог после лимита — честный partial, а не ошибка
+    llm.add(
+        PLAN,
+        *[calls(("press_keys", {"combo": "ctrl+v"})) for _ in range(4)],
+        calls(("finish", {"status": "partial", "summary": "Скопировал не всё"})),
+    )
+    result = await ctx.agent.wait(await ctx.agent.run("Вставь без конца"))  # type: ignore[attr-defined]
+    assert result.status == "done" and result.outcome == "partial" and result.summary == "Скопировал не всё"
 
     ctx.settings.patch({"ai": {"agent_confirm": "always", "max_agent_steps": 10}})
     asked = _answer_confirmations(ctx, True)
@@ -281,3 +297,44 @@ async def test_agent_other_actions(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
         "data:image/jpeg;base64,"
     )
     assert "screenshot" in {t["function"]["name"] for t in llm.requests[1]["tools"]}
+
+
+async def test_failed_action_stops_the_rest_of_the_turn(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
+) -> None:
+    """Клик не прошёл — ввод из того же хода не выполняется (иначе текст ушёл бы, куда попал фокус)."""
+    llm.add(
+        PLAN,
+        calls(("ui_click", {"id": "e99"}), ("type_text", {"text": "Привет, мама"})),
+        calls(("finish", {"status": "partial", "summary": "Не нашёл поле"})),
+    )
+    result = await ctx.agent.wait(await ctx.agent.run("Напиши маме"))  # type: ignore[attr-defined]
+    assert result.outcome == "partial"
+    texts = [m for r in llm.requests for m in r["messages"] if m.get("role") == "tool"]
+    assert str(texts[0]["content"]).startswith("Ошибка") and texts[1]["content"] == SKIPPED
+    assert not [c for c in ctx.platform.calls if c[0] == "type_text"]  # type: ignore[attr-defined]
+
+
+async def test_repeating_without_effect_gets_hint_then_stops(
+    ctx: AppContext, llm: ScriptedLlm, ui: FakeUi
+) -> None:
+    ctx.settings.patch({"ai": {"vision": "off"}})
+    same = calls(("press_keys", {"combo": "ctrl+r"}))
+    llm.add(PLAN, *[same for _ in range(REPEAT_STOP)])
+    result = await ctx.agent.wait(await ctx.agent.run("Обнови"))  # type: ignore[attr-defined]
+    assert result.status == "error" and "повторял одно и то же действие" in result.summary
+    texts = [str(m["content"]) for r in llm.requests for m in r["messages"] if m.get("role") == "tool"]
+    assert "уже 2 раза подряд дало тот же итог" in texts[-1] or any("уже 2 раза" in t for t in texts)
+
+
+async def test_agent_asks_before_a_lookalike_site(ctx: AppContext, llm: ScriptedLlm, ui: FakeUi) -> None:
+    asked = _answer_confirmations(ctx, lambda title: False)
+    llm.add(
+        PLAN,
+        calls(("open_url", {"url": "https://gооgle.com/"})),  # русские «о», адрес без данных
+        calls(("finish", {"summary": "Не открыл"})),
+    )
+    await ctx.agent.wait(await ctx.agent.run("Открой gооgle.com"))  # type: ignore[attr-defined]
+    assert asked[0][0] == "Открыть xn--ggle-55da.com?"
+    assert asked[0][1].startswith("Осторожно: имя сайта «gооgle.com» похоже на подделку")
+    assert not any(name == "open_url" for name, _ in ctx.platform.calls)  # type: ignore[attr-defined]

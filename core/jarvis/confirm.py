@@ -2,13 +2,17 @@
 
 request() публикует confirm.request — интерфейс показывает карточку «Отклонить / Разрешить» (оверлей,
 главное окно, пульт). Если просьба пришла голосом, Jarvis ещё и спрашивает вслух и ждёт «да» / «нет».
-Первый ответ решает; нет ответа за timeout — отказ. Каждый итог (разрешено, отклонено, нет ответа, отменено
-«Стопом») пишется в историю команд (kind confirm) — видно, что и когда человек разрешал.
+Необратимое (risk="high": отправить, оплатить, купить, удалить, опубликовать, ввести пароль или номер карты —
+high_risk()) голосовым «да» не разрешается: только кнопкой (голосом можно лишь отказать; включается в
+настройках голоса — voice.confirm_high_by_voice). Первый ответ решает; нет ответа за timeout — отказ.
+Каждый итог (разрешено, отклонено, нет ответа, отменено «Стопом») пишется в историю команд (kind confirm) —
+видно, что и когда человек разрешал.
 """
 
 import asyncio
 import contextlib
 import logging
+import re
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -21,6 +25,13 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 YES_WORDS = ("да", "давай", "конечно", "подтверждаю", "разрешаю", "выполняй", "ага", "угу", "можно", "yes")
+# необратимое: деньги, отправка от имени человека, удаление, публикация, пароли и карты
+HIGH_RISK = re.compile(
+    r"отправ|оплат|заплат|плат[её]ж|перевод|перевест|куп|заказ|оформить|удал|стер[еч]|очист|публик|"
+    r"пароль|парол[яю]|номер карты|данные карты|cvv|форматир|выключить компьютер|перезагруз|подделк|подтверд|"
+    r"\b(send|pay|buy|purchase|order|delete|remove|publish|post|transfer|submit|format)\b",
+    re.I,
+)
 NO_WORDS = ("нет", "не надо", "отмена", "отмени", "стоп", "не нужно", "запрещаю", "no")
 
 
@@ -33,6 +44,7 @@ class Confirmation:
     source: str = "ui"
     created: float = field(default_factory=now)
     timeout: float = 60.0
+    risk: Literal["normal", "high"] = "normal"  # high — разрешить только кнопкой, не голосом
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -70,8 +82,9 @@ class Confirmations:
         source: str = "ui",
         timeout: float = 60.0,
         spoken: str = "",
+        risk: Literal["normal", "high"] = "normal",
     ) -> bool:
-        conf = Confirmation(new_id(), title, detail, kind, source, timeout=timeout)
+        conf = Confirmation(new_id(), title, detail, kind, source, timeout=timeout, risk=risk)
         future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self._pending[conf.id] = (conf, future)
         self.ctx.bus.publish("confirm.request", conf.to_json())
@@ -138,15 +151,33 @@ class Confirmations:
         return count
 
     async def _ask_voice(self, conf: Confirmation, question: str) -> None:
+        button_only = conf.risk == "high" and not self.ctx.settings.value.voice.confirm_high_by_voice
         with contextlib.suppress(asyncio.CancelledError):
             try:
-                await self.ctx.tts.say(f"{question} Да или нет?", interrupt=True, wait=True)
+                if button_only:  # необратимое: голосом — только отказ, разрешить — кнопкой
+                    await self.ctx.tts.say(f"{question} {BUTTON_ONLY}", interrupt=True, wait=True)
+                else:
+                    await self.ctx.tts.say(f"{question} Да или нет?", interrupt=True, wait=True)
                 answer = await self.ctx.voice.ask_yes_no(timeout=8.0)
             except Exception:
                 log.exception("голосовое подтверждение не удалось")
                 return
-            if answer is not None:
-                self.resolve(conf.id, answer)
+            if answer is None:
+                return
+            if answer and button_only:
+                with contextlib.suppress(Exception):
+                    await self.ctx.tts.say(NOT_BY_VOICE, interrupt=True, wait=False)
+                return
+            self.resolve(conf.id, answer)
+
+
+BUTTON_ONLY = "Разрешить это можно только кнопкой на экране или в телефоне. Отменить — скажите «нет»."
+NOT_BY_VOICE = "Голосом такое не разрешаю — нажмите «Разрешить» на экране."
+
+
+def high_risk(title: str, detail: str = "") -> Literal["normal", "high"]:
+    """Необратимое ли действие («Отправить сообщение?», «Нажать «Купить»?», «Удалить файл?») — по словам."""
+    return "high" if HIGH_RISK.search(f"{title} {detail}") else "normal"
 
 
 def parse_yes_no(text: str) -> bool | None:

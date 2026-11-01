@@ -4,6 +4,7 @@
 import json
 import os
 import stat
+import sys
 import time
 from pathlib import Path
 
@@ -15,6 +16,14 @@ from jarvis.ai.cli.stream import ClaudeStream, GeminiStream, parse_line
 
 WIN = "win32"
 PATHEXT = ".COM;.EXE;.BAT;.CMD;.VBS;.JS"
+
+
+@pytest.fixture(autouse=True)
+def _no_real_registry_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Окружение Windows в тестах — только из win_env: настоящий PATH из реестра (на Windows с Node) не
+    в счёт."""
+    monkeypatch.setattr(locate, "registry_path", lambda: [])
+
 
 # обёртки ровно в том виде, в каком их пишут npm (cmd-shim), pnpm и установщик Qwen Code
 NPM_SHIM = r"""@ECHO off
@@ -152,6 +161,7 @@ def test_unknown_shim_falls_back_to_cmd_with_safe_arguments_only(tmp_path: Path)
     assert command == f'{shim} --model "" "C:\\Program Files\\x"'
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="на Windows у файлов нет бита исполнения")
 def test_posix_search_needs_the_executable_bit_and_runs_js_with_node(tmp_path: Path) -> None:
     env = {"PATH": str(tmp_path / "bin"), "HOME": str(tmp_path)}
     touch(tmp_path / "bin" / "claude")  # не исполняемый — не программа

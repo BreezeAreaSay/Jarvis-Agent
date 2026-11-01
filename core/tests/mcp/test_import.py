@@ -107,7 +107,9 @@ def test_import_api(client: TestClient, home: Path) -> None:
         "github": {"command": "npx", "args": ["-y", "gh"], "env": {"GITHUB_TOKEN": "secret"}},
         "old": {"type": "sse", "url": "https://sse.example.com/sse"},
     }
-    write(home / ".config" / "Claude" / "claude_desktop_config.json", json.dumps({"mcpServers": servers}))
+    # где Claude Desktop хранит настройки на этой системе (на Windows — %APPDATA%, иначе ~/.config)
+    desktop = next(f.path for f in clients.client_files(home) if f.client == "claude-desktop")
+    write(desktop, json.dumps({"mcpServers": servers}))
     items = client.get("/api/mcp/import").json()["items"]
     by_name = {i["name"]: i for i in items}
     assert (

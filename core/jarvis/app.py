@@ -26,9 +26,11 @@ def build_context(platform_name: str = "auto") -> AppContext:
     ctx.confirmations = Confirmations(ctx)
 
     from jarvis.ai.agent import Agent
+    from jarvis.ai.browser.agent_browser import AgentBrowser
     from jarvis.ai.browser.service import Browser
     from jarvis.ai.images import Images
     from jarvis.ai.service import Ai
+    from jarvis.background.service import Background
     from jarvis.commands.service import Commands
     from jarvis.desks.service import Desks
     from jarvis.dispatcher import MainDispatcher
@@ -57,6 +59,8 @@ def build_context(platform_name: str = "auto") -> AppContext:
     ctx.mcp = Mcp(ctx)
     ctx.browser = Browser(ctx)  # браузер Jarvis для агента (до агента: агент берёт его из ctx)
     ctx.agent = Agent(ctx)
+    ctx.agent_browser = AgentBrowser(ctx)  # браузер фоновых задач: без окна, виден в панели Jarvis
+    ctx.background = Background(ctx)  # фоновые задачи: агент работает в фоне, итог — в заметки (Obsidian)
     ctx.plugins = Plugins(ctx)
     ctx.remote = Remote(ctx)
     ctx.scenarios = Scenarios(ctx)  # после команд: регистрирует в них свои фразы
@@ -81,6 +85,8 @@ START_ORDER = (
     "mcp",
     "browser",
     "agent",
+    "agent_browser",
+    "background",
     "plugins",
     "voice",
     "remote",

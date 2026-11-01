@@ -42,6 +42,13 @@ NOW = time.time()
         ("TELEGRAM_SESSION_STRING=1BVtsOKkBu3v8Xyz-abcdefg", "TELEGRAM_SESSION_STRING=•••"),
         ("бот 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw1", "бот 123456789:•••"),
         ("max_tokens: 12345678", "max_tokens: 12345678"),
+        ('{"nextPageToken": "CiAKGjBpNDd2Nmp2"}', '{"nextPageToken": "CiAKGjBpNDd2Nmp2"}'),  # не секрет
+        ("next_page_token=Q2lBS0dqQnBO", "next_page_token=Q2lBS0dqQnBO"),
+        ("FB_PAGE_TOKEN=EAABsbCS1iHgBAAx1234", "FB_PAGE_TOKEN=•••"),  # ключ страницы Facebook — секрет
+        (
+            "MY_COMPANY_PRODUCTION_ENVIRONMENT_SERVICE_ACCOUNT_API_KEY=abcd1234efgh5678",
+            "MY_COMPANY_PRODUCTION_ENVIRONMENT_SERVICE_ACCOUNT_API_KEY=•••",
+        ),
         ("обычный текст 2026 года", "обычный текст 2026 года"),
     ],
 )

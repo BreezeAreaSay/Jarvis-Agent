@@ -135,6 +135,10 @@ MIGRATIONS: list[str] = [
     ALTER TABLE memory ADD COLUMN kind TEXT NOT NULL DEFAULT 'fact';  -- fact | assumption | temp
     ALTER TABLE memory ADD COLUMN expires REAL;                       -- temp: когда забыть (unix-время)
     """,
+    # 3 — история: сколько длилось от фразы до итога
+    """
+    ALTER TABLE history ADD COLUMN ms INTEGER NOT NULL DEFAULT 0;     -- 0 — сразу (без ожидания)
+    """,
 ]
 
 

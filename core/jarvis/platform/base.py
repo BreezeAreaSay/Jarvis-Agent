@@ -11,7 +11,9 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
 MediaKey = Literal["play_pause", "next", "prev", "stop"]
-WindowAction = Literal["minimize", "maximize", "restore", "close", "focus", "minimize_all", "show_desktop"]
+WindowAction = Literal[
+    "minimize", "maximize", "restore", "close", "focus", "minimize_all", "undo_minimize_all", "show_desktop"
+]
 PowerAction = Literal["lock", "sleep", "hibernate", "shutdown", "restart", "logoff", "cancel"]
 MouseButton = Literal["left", "right", "middle"]
 

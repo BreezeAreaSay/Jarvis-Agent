@@ -1,6 +1,7 @@
 """Прогон набора задач: каждая — repeat раз (модель недетерминирована: успех — доля из N), оценка, журналы
 неудачных попыток, summary.json и report.md в папке прогона, сравнение с базовой линией."""
 
+import hashlib
 import json
 import shutil
 import time
@@ -83,10 +84,17 @@ async def run_tasks(
         "started": started,
         "duration_s": round(time.monotonic() - began, 1),
         "jarvis": __version__,
+        "tasks_sha256": tasks_sha256(tasks),  # на каком наборе задач получены цифры
         "skipped": skipped,
         "font_ok": font_ok(),
     }
     return summarize(tasks, results, meta), results
+
+
+def tasks_sha256(tasks: list[Any]) -> str:
+    """Отпечаток набора задач (текст, проверки, зрение): сравнивать прогоны можно только на одном наборе."""
+    data = json.dumps([t.to_json() for t in tasks], ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
 def finish_run(summary: dict[str, Any], options: Options, baseline: Path | None) -> dict[str, Any] | None:

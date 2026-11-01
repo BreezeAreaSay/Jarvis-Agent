@@ -19,6 +19,8 @@ jobs:
     defaults:
       run:
         working-directory: core
+    env:
+      PYTHONUTF8: "1"  # как у Jarvis в работе (desktop/electron/core.ts): ядро всегда в режиме UTF-8
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

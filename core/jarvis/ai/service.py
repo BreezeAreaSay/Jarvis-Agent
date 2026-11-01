@@ -37,11 +37,14 @@ from jarvis.ai.prompts import system_prompt
 from jarvis.ai.providers import PRESETS
 from jarvis.ai.tools import Tool, ToolEnv, ToolOutput, ToolRegistry, args_detail, confirm
 from jarvis.ai.web import WebClient
+from jarvis.background.repeat import describe
 from jarvis.db import new_id
 from jarvis.mcp.server import JarvisMcpServer
 from jarvis.platform.base import PlatformError
+from jarvis.redact import set_outgoing
 from jarvis.service_base import BaseService
 from jarvis.services import AskResult, Source, UserFacingError
+from jarvis.voice.stress import strip_accents
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +69,33 @@ AGENT_PHRASE = re.compile(
     rf"^\s*(?:агент|agent)\s*(?:[,:—–-]\s*|\s+(?=(?:сам\s+)?(?:{_AGENT_VERBS})\b))(?P<task>.+)$",
     re.I | re.S,
 )
+# «в фоне: собери…», «фоном найди…», «поставь задачу: …» — сразу фоновая задача (jarvis.background)
+BACKGROUND_PHRASE = re.compile(
+    r"^\s*(?:в\s+фоне|фоном|фоново|в\s+фоновом\s+режиме|фонов(?:ая|ую)\s+задач[аую]|"
+    r"поставь\s+(?:фоновую\s+)?задачу)\s*[:,—–-]?\s*(?P<task>.+)$",
+    re.I | re.S,
+)
+# «приватно: …» — ответ только моделью на этом ПК: без облака, поиска в интернете и серверов MCP
+PRIVATE_PHRASE = re.compile(
+    r"^\s*(?:джарвис[,\s]+)?(?:приватно|локально|по\s+секрету|без\s+облака|"
+    r"только\s+на\s+этом\s+(?:пк|компьютере))\s*[:,—–-]?\s*(?P<text>.+)$",
+    re.I | re.S,
+)
+# в приватном ответе нет инструментов, которые ходят в интернет (картинки рисует облако), и тех, что пишут то,
+# что потом само уходит в каждый облачный запрос: память и дела на сегодня (Ai._active_context)
+NETWORK_TOOLS = frozenset(
+    {
+        "web_search",
+        "fetch_page",
+        "get_weather",
+        "get_news",
+        "get_rates",
+        "run_agent",
+        "remember",
+        "generate_image",
+        "add_task",
+    }
+)
 _IMAGE_URL = re.compile(r"^data:image/(?:png|jpe?g|webp|gif);base64,", re.I)
 
 
@@ -83,6 +113,7 @@ class Turn:
     model: str
     kind: str
     agent_task: str = ""
+    private: bool = False  # «приватно: …» — только модель на этом ПК (LlmClient.private_config)
     note: str = ""  # пометка для модели к словам человека (снимок экрана приложен…) — в чат не пишется
     shown: str = ""  # текст, уже отправленный в интерфейс
     pending: str = ""  # текст, ещё не отправленный событием chat.delta
@@ -235,11 +266,15 @@ class Ai(BaseService):
         self.llm.transport = transport
         self.web.transport = transport
 
-    def account_backend(self) -> Any:
-        """Провайдер без ключа API (ChatGPT или программа человека), если выбран он, иначе None."""
-        if self.chatgpt.selected:
-            return self.chatgpt
-        return self.cli.selected()
+    def account_backend(self, *, routed: bool = True) -> Any:
+        """Провайдер без ключа API (ChatGPT или программа человека), если выбран он, иначе None. routed — для
+        ответов: пока он на паузе после сбоя (лимит подписки, нет входа, регион) и есть запасной провайдер по
+        ключу, — None: отвечает запасной (llm.config)."""
+        backend = self.chatgpt if self.chatgpt.selected else self.cli.selected()
+        paused = backend is not None and routed and self.llm.outage(self.ctx.settings.value.ai.provider)
+        if paused and self.llm.fallback_config() is not None:
+            return None
+        return backend
 
     @property
     def configured(self) -> bool:
@@ -257,10 +292,11 @@ class Ai(BaseService):
         return now
 
     async def start(self) -> None:
+        set_outgoing(self.ctx.settings.value.ai.mask_secrets)
         self._configured = self.configured
         self._unsubs += [
             self.ctx.settings.on_change(self._on_settings),
-            self.ctx.bus.on("secrets.changed", lambda _e: self.refresh_configured()),
+            self.ctx.bus.on("secrets.changed", self._on_secrets),
         ]
         await self.mcp_server.start()
         await self.chatgpt.start()
@@ -271,8 +307,15 @@ class Ai(BaseService):
             backend = self.cli.get(new.ai.provider)
             if backend is not None and self.ctx.loop is not None and not self.ctx.loop.is_closed():
                 self.ctx.loop.call_soon_threadsafe(backend.on_selected)  # проверить вход в программу
+        if old.ai.mask_secrets != new.ai.mask_secrets:
+            set_outgoing(new.ai.mask_secrets)
         if old.ai != new.ai:
+            self.llm.clear_outages()  # другой провайдер, модель или запасной — основной снова зовётся первым
             self.refresh_configured()
+
+    def _on_secrets(self, _event: Any) -> None:
+        self.llm.clear_outages()  # новый ключ — основной снова зовётся первым
+        self.refresh_configured()
 
     async def stop(self) -> None:
         for off in self._unsubs:
@@ -304,14 +347,14 @@ class Ai(BaseService):
 
     async def list_models(self) -> list[str]:
         """Модели выбранного провайдера (у ChatGPT — из каталога Codex, у программ — свой список)."""
-        backend = self.account_backend()
+        backend = self.account_backend(routed=False)
         if backend is not None:
             return list(await backend.list_models())
         return await self.llm.list_models()
 
     async def test_connection(self) -> dict[str, Any]:
         """Проверка связи с выбранным провайдером: {ok, error?, latency_ms, model}."""
-        backend = self.account_backend()
+        backend = self.account_backend(routed=False)
         if backend is not None:
             return dict(await backend.test())
         return await self.llm.test()
@@ -356,6 +399,16 @@ class Ai(BaseService):
         images: list[str] | None = None,
         agent_task: str = "",
     ) -> AskResult:
+        private = PRIVATE_PHRASE.match(text or "") if not agent_task else None
+        if private is not None and private["text"].strip(" .,:"):
+            return await self._private(private["text"].strip(), chat_id, source, images)
+        background = BACKGROUND_PHRASE.match(text or "") if not images and not agent_task else None
+        if (
+            background is not None
+            and background["task"].strip(" .,:")
+            and getattr(self.ctx, "background", None)
+        ):
+            return self._background(text, background["task"].strip(), chat_id, source, mode)
         images, note = await self._screen_question(text, images, chat_id, source, mode, agent_task)
         browser = await self._browser_front(agent_task)
         try:
@@ -372,6 +425,57 @@ class Ai(BaseService):
             return AskResult(chat_id or "", "", error=str(e))
         turn.note = note
         return await self._spawn(turn)
+
+    async def _private(
+        self, text: str, chat_id: str | None, source: Source, images: list[str] | None
+    ) -> AskResult:
+        """«Приватно: …» — ответ в режиме «Чат» моделью на этом ПК: без облака, поиска и серверов MCP. Модели
+        на этом ПК нет — понятная ошибка, а не тихий уход в облако."""
+        problem = self.llm.private_problem()
+        if problem:
+            return AskResult(chat_id or "", "", error=problem)
+        try:
+            turn = self._begin(text, chat_id=chat_id, source=source, mode="chat", images=images, private=True)
+        except UserFacingError as e:
+            return AskResult(chat_id or "", "", error=str(e))
+        return await self._spawn(turn)
+
+    def _background(
+        self, text: str, brief: str, chat_id: str | None, source: Source, mode: str | None
+    ) -> AskResult:
+        """«В фоне: …» — фоновая задача без ответа модели: в чат — просьба и короткое «Принял»."""
+        chat = self._chat_for(chat_id, source, mode)
+        row = self.chats.add_message(chat["id"], "user", text)
+        self.ctx.bus.publish("chat.message", {"chat_id": chat["id"], "message": ui_message(row)})
+        kind = {"voice": "voice", "telegram": "remote", "remote": "remote"}.get(str(source), "text")
+        meta: dict[str, Any] = {"turn": row["id"]}
+        try:
+            task = self.ctx.background.create(brief, source=kind)
+        except UserFacingError as e:
+            reply, spoken, meta["error"] = str(e), "", str(e)
+        else:
+            meta["background"] = task.id
+            address = self.ctx.settings.value.profile.address.strip()
+            if task.recurring:
+                every = describe(task.repeat)
+                reply = (
+                    f"Принял — буду делать {every}: «{task.title}». Первый раз — сейчас. Итоги и замеры — "
+                    "в заметках, расписание — на странице «Фоновые задачи»."
+                )
+                spoken = f"Принял{', ' + address if address else ''}. Буду делать {every}."
+            else:
+                reply = (
+                    f"Принял — работаю в фоне: «{task.title}». Ход — на странице «Фоновые задачи», итог "
+                    "запишу в заметки."
+                )
+                spoken = f"Принял{', ' + address if address else ''}. Работаю в фоне."
+        answer = self.chats.add_message(chat["id"], "assistant", reply, meta=meta)
+        self.ctx.bus.publish("chat.message", {"chat_id": chat["id"], "message": ui_message(answer)})
+        self.ctx.bus.publish(
+            "chat.done",
+            {"chat_id": chat["id"], "message_id": answer["id"], "text": reply, "sources": [], "actions": []},
+        )
+        return AskResult(chat["id"], reply, spoken=spoken, error=meta.get("error", ""))
 
     async def _screen_question(
         self,
@@ -396,7 +500,9 @@ class Ai(BaseService):
         except Exception:
             log.exception("снимок экрана к вопросу не сделан")
             return images, ""
-        return (pictures, note) if pictures else (images, "")
+        if pictures:
+            return pictures, note
+        return images, note  # снимка нет; пометка (скрытое от ИИ окно) — модели, чтобы так и сказала
 
     def _mode_of(self, chat_id: str | None, source: Source, mode: str | None) -> str:
         """Режим, в котором пойдёт ход (как в _begin, но без создания чата)."""
@@ -457,7 +563,23 @@ class Ai(BaseService):
             self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
             await self.ctx.dispatcher.stop()
             return {"chat_id": chat_id, "message_id": row["id"], "reply_id": run.reply_id}  # type: ignore[union-attr]
-        if working and agent.interject(text):  # type: ignore[union-attr]
+        private = PRIVATE_PHRASE.match(text or "")
+        if private is not None and private["text"].strip(" .,:"):
+            # «приватно: …» из окна чата — как голосом и в Telegram: только модель на этом ПК, не агенту
+            problem = self.llm.private_problem()
+            if problem:
+                raise UserFacingError(problem)
+            turn = self._begin(
+                private["text"].strip(),
+                chat_id=chat_id,
+                source=source,
+                mode="chat",
+                images=images,
+                private=True,
+            )
+            self.ctx.spawn(self._spawn(turn), f"chat-{turn.chat_id}")
+            return {"chat_id": turn.chat_id, "message_id": turn.user_id, "reply_id": turn.reply_id}
+        if working and agent.interject(text, source):  # type: ignore[union-attr]
             row = self.chats.add_message(chat_id, "user", text.strip())
             self.ctx.bus.publish("chat.message", {"chat_id": chat_id, "message": ui_message(row)})
             return {"chat_id": chat_id, "message_id": row["id"], "reply_id": run.reply_id}
@@ -519,6 +641,7 @@ class Ai(BaseService):
         images: list[str] | None,
         agent_task: str = "",
         browser: bool = False,
+        private: bool = False,
     ) -> Turn:
         text = (text or "").strip()
         pictures = self._check_images(images)
@@ -526,7 +649,7 @@ class Ai(BaseService):
             raise UserFacingError("Пустое сообщение")
         chat = self._chat_for(chat_id, source, mode)
         agent_task = agent_task.strip()
-        found = AGENT_PHRASE.match(text)
+        found = AGENT_PHRASE.match(text) if not private else None  # агент работает облачной моделью
         if not agent_task and found and found["task"].strip():
             agent_task = found["task"].strip()
         if agent_task:
@@ -548,9 +671,10 @@ class Ai(BaseService):
         first = self.ctx.db.query_one(
             "SELECT 1 FROM messages WHERE chat_id=? AND role='user' LIMIT 1", (chat["id"],)
         )
-        row = self.chats.add_message(
-            chat["id"], "user", text, meta={"images": pictures} if pictures else None
-        )
+        meta: dict[str, Any] = {"images": pictures} if pictures else {}
+        if private:
+            meta["private"] = True  # «приватно: …» — в историю для облачной модели не идёт (Ai._history)
+        row = self.chats.add_message(chat["id"], "user", text, meta=meta or None)
         self.ctx.bus.publish("chat.message", {"chat_id": chat["id"], "message": ui_message(row)})
         changes: dict[str, Any] = {}
         if chat["kind"] == "chat" and first is None and chat["title"] in ("", "Новый чат"):
@@ -570,6 +694,7 @@ class Ai(BaseService):
             model=chat["model"],
             kind=chat["kind"],
             agent_task=agent_task,
+            private=private,
         )
 
     async def _spawn(self, turn: Turn) -> AskResult:
@@ -600,14 +725,16 @@ class Ai(BaseService):
 
     # --- ответ модели с инструментами ---------------------------------------------------------------------
     async def _run_chat(self, turn: Turn) -> AskResult:
-        backend = self.account_backend()
+        backend = None if turn.private else self.account_backend()
         if backend is not None:
             return await backend.run_chat(turn)
-        problem = self.llm.problem(turn.model or None)
+        problem = self.llm.private_problem() if turn.private else self.llm.problem(turn.model or None)
         if problem:
             return self._finish(turn, error=problem)
         self._status(turn, "thinking", "Думаю…")
         tools = self.tools.available(turn.mode, source=turn.source)
+        if turn.private:  # только то, что не ходит в интернет
+            tools = {k: t for k, t in tools.items() if k not in NETWORK_TOOLS and not k.startswith("mcp__")}
         specs = [t.spec() for t in tools.values()]
         env = ToolEnv(self.ctx, self.web, turn.source, turn.chat_id, user_text=turn.text)
         try:
@@ -632,6 +759,7 @@ class Ai(BaseService):
                     model=turn.model or None,
                     stream=True,
                     on_delta=lambda delta: self._delta(turn, delta),
+                    private=turn.private,
                 )
                 self._flush(turn)
                 turn.usage.add(response.usage)
@@ -705,6 +833,8 @@ class Ai(BaseService):
         groups = group_turns(self.chats.rows(turn.chat_id))
         index = next((i for i, g in enumerate(groups) if g[0]["id"] == turn.user_id), len(groups))
         groups = groups[:index]
+        if not turn.private:  # «приватно: …» было только для модели на этом ПК — облаку его не показываем
+            groups = [g for g in groups if not g[0]["meta"].get("private")]
         if turn.kind == "voice":
             since = time.time() - VOICE_WINDOW_S
             groups = [g for g in groups if g[0]["created"] >= since][-VOICE_TURNS:]
@@ -730,7 +860,7 @@ class Ai(BaseService):
             "assistant",
             response.content,
             tool_calls=calls,
-            meta={"turn": turn.user_id, "hidden": True},
+            meta={"turn": turn.user_id, "hidden": True, **({"private": True} if turn.private else {})},
         )
         return {"role": "assistant", "content": response.content or None, "tool_calls": calls}
 
@@ -902,6 +1032,8 @@ class Ai(BaseService):
         self.ctx.bus.publish("chat.tool", data)
 
     def _delta(self, turn: Turn, text: str) -> None:
+        # знаки ударения («за́мок») модель ставит для голоса: в речь идут из turn.rounds, на экран — без них
+        text = strip_accents(text)
         if turn.new_round:
             text = text.lstrip()
             if not text:
@@ -952,6 +1084,8 @@ class Ai(BaseService):
             meta["stopped"] = True
         if final and final != text:
             meta["llm_content"] = final
+        if turn.private:
+            meta["private"] = True
         if not turn.finished:
             turn.finished = True
             row = self.chats.add_message(turn.chat_id, "assistant", text, meta=meta, message_id=turn.reply_id)

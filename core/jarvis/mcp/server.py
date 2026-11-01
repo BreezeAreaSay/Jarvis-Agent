@@ -30,6 +30,7 @@ from starlette.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 
 from jarvis import __version__
+from jarvis.redact import outgoing
 
 if TYPE_CHECKING:
     from jarvis.context import AppContext
@@ -247,8 +248,8 @@ class JarvisMcpServer:
                 if task is not None:
                     binding.tasks.discard(task)
             content: list[types.TextContent | types.ImageContent] = []
-            if result.text or not result.images:
-                content.append(types.TextContent(type="text", text=result.text))
+            if result.text or not result.images:  # программе (облачной модели) — без паролей и ключей
+                content.append(types.TextContent(type="text", text=outgoing(result.text)))
             for url in result.images:
                 block = _image_block(url)
                 if block is not None:

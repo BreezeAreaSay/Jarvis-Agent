@@ -1,0 +1,45 @@
+name: Ошибка
+description: Что-то работает не так, как должно
+labels: ["ошибка"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Что случилось
+      description: Что вы сделали или сказали, что ожидали и что получилось.
+      placeholder: Сказал «Джарвис, включи музыку» — Jarvis ответил «Не нашёл программу», хотя Spotify установлен.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как повторить
+      placeholder: |
+        1. Открыть «Фоновые задачи»
+        2. …
+  - type: input
+    id: version
+    attributes:
+      label: Версия Jarvis
+      description: «Настройки → Система → О программе».
+      placeholder: "3.1.0"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows
+      placeholder: Windows 11 24H2
+  - type: input
+    id: ai
+    attributes:
+      label: Провайдер ИИ и модель (если ошибка в чате, агенте или фоновой задаче)
+      placeholder: ChatGPT по подписке / Claude Code / ключ OpenRouter, модель …
+  - type: textarea
+    id: logs
+    attributes:
+      label: Журнал
+      description: >-
+        Если есть — последние строки журнала ядра: папка logs в папке данных («Настройки → Система → Данные → Открыть папку»).
+        Перед отправкой уберите личное: ключи, адреса, переписку.
+      render: text

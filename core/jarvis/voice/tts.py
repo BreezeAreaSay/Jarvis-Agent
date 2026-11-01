@@ -46,6 +46,7 @@ from jarvis.voice.dsp import as_mono, float_to_pcm16, pcm16_to_float, resample, 
 from jarvis.voice.engines import Engine, SynthOptions, create_engines
 from jarvis.voice.fx import EARCON_RATE, earcon, electronic, fade
 from jarvis.voice.player import Chunk, Player, Sink, SoundDeviceSink
+from jarvis.voice.stress import bundled, strip_accents
 from jarvis.voice.textprep import prepare, split_sentences
 
 if TYPE_CHECKING:
@@ -350,6 +351,8 @@ class Tts(BaseService):
             "speaking": self.speaking,
             "piper_voice": piper.pick(s.piper_voice) if piper is not None and hasattr(piper, "pick") else "",
             "engines": {name: e.available() for name, e in self.engines.items()},
+            # словарь ударений: есть ли в этой сборке и какой у загруженного голоса («jarvis» | «espeak» | "")
+            "stress_dict": {"bundled": bundled() is not None, "loaded": getattr(piper, "dictionary", "")},
         }
 
     # --- очередь ---------------------------------------------------------------------------------
@@ -466,7 +469,11 @@ class Tts(BaseService):
     async def _synth_with(
         self, engine: Any, sentence: str, voice: str, settings: Settings, *, strict: bool = False
     ) -> tuple[np.ndarray, int]:
-        text = prepare(sentence, russian=True) if engine.russian(voice) else sentence
+        accents = bool(getattr(engine, "accents", False))  # знак ударения понимает только piper со словарём
+        if engine.russian(voice):
+            text = prepare(sentence, russian=True, accents=accents)
+        else:
+            text = sentence if accents else strip_accents(sentence)
         if not text.strip():
             raise UserFacingError("Нечего произносить")
         opts = SynthOptions(voice, settings.tts.speed, settings.tts.pitch, settings)

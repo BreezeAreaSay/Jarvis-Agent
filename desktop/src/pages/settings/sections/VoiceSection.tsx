@@ -382,6 +382,18 @@ function RepliesCard() {
       <Setting name="Подтверждения голосом" desc="Отвечайте «да» или «нет», когда Jarvis спрашивает разрешение">
         <Toggle checked={v.confirm_by_voice} onChange={(on) => patch({ voice: { confirm_by_voice: on } })} label="Подтверждения голосом" />
       </Setting>
+      {v.confirm_by_voice && (
+        <Setting
+          name="Необратимое — тоже голосом"
+          desc="Отправить, оплатить, купить, удалить, ввести пароль или номер карты. Выключено — такое разрешается только кнопкой на экране или в телефоне, голосом можно лишь отказать"
+        >
+          <Toggle
+            checked={v.confirm_high_by_voice}
+            onChange={(on) => patch({ voice: { confirm_high_by_voice: on } })}
+            label="Необратимое — тоже голосом"
+          />
+        </Setting>
+      )}
       <Setting name="Тихий режим" desc="Jarvis выполняет команды молча, без ответов голосом">
         <Toggle checked={v.silent_mode} onChange={(on) => patch({ voice: { silent_mode: on } })} label="Тихий режим" />
       </Setting>

@@ -123,6 +123,8 @@ class FakePage:
     held: list[tuple[Any, int]] = field(default_factory=list)  # ответы, отложенные до закрытия окна
     loads: int = 0  # сколько раз загружалась
     intercept_files: bool = False  # Page.setInterceptFileChooserDialog
+    user_agent: str = ""  # Emulation.setUserAgentOverride
+    screencast: bool = False  # Page.startScreencast
 
     def nodes(self) -> list[N]:
         return self.root.walk()
@@ -150,9 +152,12 @@ class FakeChrome:
         self.active = ""
         self.commands: list[tuple[str, dict[str, Any]]] = []
         self.download_behavior = "default"
+        self.download_path = ""
         self.downloads: list[dict[str, Any]] = []
+        self.canceled: set[str] = set()  # Browser.cancelDownload
         self.file_choosers: list[str] = []  # окна выбора файла, которые открылись у человека (не перехвачены)
         self.clicked: list[str] = []
+        self.closed = False  # Browser.close
         self.port = 0
         self._server: Any = None
         self._sockets: set[Any] = set()
@@ -346,17 +351,33 @@ class FakeChrome:
         if node.tag == "A":
             href = node.attrs.get("href", "")
             if "download" in node.attrs or href.endswith(".zip") or "data-file" in node.attrs:
-                guid = self._id()
-                name = href.rsplit("/", 1)[-1]
-                state = "canceled" if self.download_behavior == "deny" else "completed"
-                self.downloads.append({"name": name, "state": state})
-                await self.emit(
-                    "Browser.downloadWillBegin", {"guid": guid, "url": href, "suggestedFilename": name}
-                )
-                await self.emit("Browser.downloadProgress", {"guid": guid, "state": state})
+                await self.start_download(tab, href)
                 return None
             await self.navigate(tab, urljoin(tab.url, href))
         return None
+
+    async def start_download(self, tab: FakePage, href: str, *, frame: str = "") -> str:
+        """Скачивание, начатое страницей (ссылкой или сама): allowAndName — файл <папка>/<guid>, как у
+        Chrome."""
+        guid = self._id()
+        name = href.rsplit("/", 1)[-1]
+        state = "canceled" if self.download_behavior == "deny" else "completed"
+        self.downloads.append({"name": name, "state": state})
+        await self.emit(
+            "Browser.downloadWillBegin",
+            {"guid": guid, "url": href, "suggestedFilename": name, "frameId": frame or tab.target},
+        )
+        for _ in range(40):  # Jarvis успевает отменить чужое скачивание до конца (и на медленной машине CI)
+            if guid in self.canceled or self.download_behavior in ("deny", "default"):
+                break
+            await asyncio.sleep(0.005)
+        if guid in self.canceled:
+            state = "canceled"
+            self.downloads[-1]["state"] = state
+        if state == "completed" and self.download_behavior == "allowAndName" and self.download_path:
+            Path(self.download_path, guid).write_bytes(b"PK")
+        await self.emit("Browser.downloadProgress", {"guid": guid, "state": state})
+        return guid
 
     # --- команды --------------------------------------------------------------------------------------------
     async def _run(self, method: str, p: dict[str, Any], session: str, tab: FakePage | None) -> Any:
@@ -369,8 +390,15 @@ class FakeChrome:
             return {"processInfo": [{"type": "browser", "id": self.pid}, {"type": "renderer", "id": 1}]}
         if method == "Browser.setDownloadBehavior":
             self.download_behavior = p.get("behavior", "default")
+            self.download_path = str(p.get("downloadPath") or "")
+            return {}
+        if method == "Browser.cancelDownload":
+            self.canceled.add(str(p.get("guid") or ""))
             return {}
         if method in ("Target.setDiscoverTargets", "Page.enable", "Page.bringToFront"):
+            return {}
+        if method == "Browser.close":
+            self.closed = True
             return {}
         if method == "Target.getTargets":
             return {"targetInfos": [self._info(t) for t in self.tabs]}
@@ -448,6 +476,29 @@ class FakeChrome:
             return {"nodes": self._ax(tab)}
         if method == "DOMSnapshot.captureSnapshot":
             return self._dom(tab)
+        if method == "Emulation.setUserAgentOverride":
+            tab.user_agent = p.get("userAgent", "")
+            return {}
+        if method == "Page.startScreencast":
+            tab.screencast = True
+            frame = {
+                "data": "anBlZw==",
+                "metadata": {"deviceWidth": VIEW_W, "deviceHeight": VIEW_H},
+                "sessionId": 1,
+            }
+            asyncio.get_running_loop().call_later(
+                0.01,
+                lambda: asyncio.ensure_future(
+                    self.emit("Page.screencastFrame", frame, self._session_of(tab.target))
+                ),
+            )
+            return {}
+        if method in ("Page.stopScreencast", "Page.screencastFrameAck"):
+            if method == "Page.stopScreencast":
+                tab.screencast = False
+            return {}
+        if method == "Page.captureScreenshot":
+            return {"data": "anBlZw=="}
         node = self._node(tab, p)
         if method == "DOM.scrollIntoViewIfNeeded":
             if node.rect is not None and not node.overlay:

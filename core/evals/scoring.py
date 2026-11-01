@@ -41,6 +41,8 @@ class Result:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost: float = 0.0
+    ttft_s: float | None = None
+    tokens_per_s: float | None = None
     questions: list[str] = field(default_factory=list)
     approvals: list[dict[str, Any]] = field(default_factory=list)
     actions: list[str] = field(default_factory=list)
@@ -156,6 +158,8 @@ def score(
         prompt_tokens=trace.prompt_tokens,
         completion_tokens=trace.completion_tokens,
         cost=round(trace.cost, 6),
+        ttft_s=trace.ttft_s,
+        tokens_per_s=trace.tokens_per_s,
         questions=[f"{q.text} → {q.answer}" for q in trace.questions],
         approvals=[
             {"title": a.title, "detail": a.detail, "allowed": a.allowed, "step": a.step}
@@ -169,6 +173,12 @@ def score(
 # --- сводка -------------------------------------------------------------------------------------------------
 def _mean(values: list[float]) -> float:
     return round(sum(values) / len(values), 2) if values else 0.0
+
+
+def _known_mean(values: list[float | None]) -> float | None:
+    """Среднее известных значений (скорость есть только у запросов по ключу API) или None."""
+    known = [v for v in values if v is not None]
+    return _mean(known) if known else None
 
 
 def summarize(tasks: list[Task], results: list[Result], meta: dict[str, Any]) -> dict[str, Any]:
@@ -191,6 +201,8 @@ def summarize(tasks: list[Task], results: list[Result], meta: dict[str, Any]) ->
                 "prompt_tokens": sum(r.prompt_tokens for r in mine),
                 "completion_tokens": sum(r.completion_tokens for r in mine),
                 "cost": round(sum(r.cost for r in mine), 6),
+                "ttft_s": _known_mean([r.ttft_s for r in mine]),
+                "tokens_per_s": _known_mean([r.tokens_per_s for r in mine]),
                 "results": [r.to_json() for r in mine],
             }
         )
@@ -209,6 +221,8 @@ def summarize(tasks: list[Task], results: list[Result], meta: dict[str, Any]) ->
         "prompt_tokens": sum(r.prompt_tokens for r in results),
         "completion_tokens": sum(r.completion_tokens for r in results),
         "cost": round(sum(r.cost for r in results), 6),
+        "ttft_s": _known_mean([r.ttft_s for r in results]),
+        "tokens_per_s": _known_mean([r.tokens_per_s for r in results]),
         "categories": {
             category: _mean([t["rate"] for t in by_task if t["category"] == category])
             for category in CATEGORIES

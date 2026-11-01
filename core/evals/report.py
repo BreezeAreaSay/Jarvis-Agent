@@ -30,6 +30,10 @@ def _tokens(prompt: int, completion: int) -> str:
     return f"{prompt / 1000:.1f}k / {completion / 1000:.1f}k"
 
 
+def _speed(value: Any, unit: str) -> str:
+    return "—" if value is None else f"{value} {unit}"
+
+
 def _cell(text: str) -> str:
     return " ".join(str(text).split()).replace("|", "\\|")
 
@@ -66,6 +70,14 @@ def render(summary: dict[str, Any], comparison: dict[str, Any] | None = None) ->
         f"{_money(totals['cost'])}",
         "",
     ]
+    if totals.get("ttft_s") is not None or totals.get("tokens_per_s") is not None:
+        lines += [
+            f"Скорость модели: первый токен — {_speed(totals.get('ttft_s'), 'с')} · генерация — "
+            f"{_speed(totals.get('tokens_per_s'), 'ток/с')}",
+            "",
+        ]
+    if meta.get("tasks_sha256"):
+        lines += [f"Набор задач: `{str(meta['tasks_sha256'])[:12]}`", ""]
     if totals.get("categories"):
         lines.append(
             " · ".join(f"{CATEGORIES.get(c, c)}: {_pct(r)}" for c, r in totals["categories"].items())

@@ -20,7 +20,7 @@ TOKEN = "test-token"
 @pytest.fixture(autouse=True)
 def _no_real_windows_voice(monkeypatch: pytest.MonkeyPatch) -> None:
     """На Windows тесты не говорят настоящими голосами Windows: синтез WinRT и SAPI в потоках тестов
-    медленный, сыплет исключениями COM и может зависнуть. Движок «Голоса Windows» в тестах — как вне Windows."""
+    медленный, сыплет исключениями COM и может зависнуть. «Голоса Windows» в тестах — как вне Windows."""
     if sys.platform != "win32":
         return
     from jarvis.voice.engines import windows

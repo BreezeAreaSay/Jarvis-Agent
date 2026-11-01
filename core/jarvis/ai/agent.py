@@ -1834,7 +1834,7 @@ class Agent(BaseService):
         """Новые всплывающие уведомления Windows с прошлого снимка («Telegram: Аня — Привет») — текстом, как
         данные. Нет доступа к уведомлениям (Параметры Windows) или не Windows — ничего."""
         source = self.toast_source
-        if source is None and sys.platform == "win32":
+        if source is None and sys.platform == "win32" and getattr(self.ctx.platform, "name", "") == "windows":
             from jarvis.plugins.notify_voice import WinNotificationSource
 
             source = self.toast_source = WinNotificationSource()

@@ -9,8 +9,8 @@
   "main": "dist-electron/main.cjs",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n vite,electron \"vite\" \"npm:dev:electron\"",
-    "dev:electron": "node scripts/build-electron.mjs --watch && wait-on tcp:5173 && electron .",
+    "dev": "concurrently -k -n vite,esbuild,electron \"vite\" \"node scripts/build-electron.mjs --watch\" \"npm:dev:electron\"",
+    "dev:electron": "node scripts/build-electron.mjs && wait-on tcp:127.0.0.1:5173 && electron .",
     "web": "vite",
     "build": "tsc --noEmit -p tsconfig.json && vite build && node scripts/build-electron.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",

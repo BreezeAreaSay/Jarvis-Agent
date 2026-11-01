@@ -232,8 +232,10 @@ async def test_waits_while_the_window_is_changing(ctx: AppContext, monkeypatch: 
     await agent._settle(run, 5.0)
     assert len(grabbed) == 3
 
-    # меняется без конца — не дольше предела
+    # меняется без конца — не дольше предела (пауза между снимками больше шага часов: на Windows у Python 3.12
+    # time.monotonic идёт шагами по 15,6 мс — без паузы предел в 0,1 мс «не наступал» несколько снимков)
     grabbed.clear()
+    monkeypatch.setattr(agent_module, "SETTLE_POLL_S", 0.02)
     monkeypatch.setattr(platform, "screen_pixels", frames(list(range(8)) * 100))
     await agent._settle(run, 0.0001)
     assert len(grabbed) <= 2

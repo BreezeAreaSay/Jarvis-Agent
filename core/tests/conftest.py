@@ -1,6 +1,7 @@
 """Общие фикстуры: временный каталог данных, контекст ядра на платформе-заглушке, HTTP-клиент API."""
 
 import asyncio
+import sys
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,28 @@ from jarvis.bus import Event
 from jarvis.context import AppContext
 
 TOKEN = "test-token"
+
+
+@pytest.fixture(autouse=True)
+def _no_real_windows_voice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """На Windows тесты не говорят настоящими голосами Windows: синтез WinRT и SAPI в потоках тестов
+    медленный, сыплет исключениями COM и может зависнуть. Движок «Голоса Windows» в тестах — как вне Windows."""
+    if sys.platform != "win32":
+        return
+    from jarvis.voice.engines import windows
+    from jarvis.voice.engines.base import TtsEngineError
+
+    off = "голоса Windows в тестах выключены"
+
+    async def synthesize(self: Any, text: str, opts: Any) -> Any:
+        raise TtsEngineError(off)
+
+    async def voices(self: Any) -> list[dict[str, Any]]:
+        return []
+
+    monkeypatch.setattr(windows.WindowsEngine, "available", lambda self: off)
+    monkeypatch.setattr(windows.WindowsEngine, "synthesize", synthesize)
+    monkeypatch.setattr(windows.WindowsEngine, "voices", voices)
 
 
 @pytest.fixture

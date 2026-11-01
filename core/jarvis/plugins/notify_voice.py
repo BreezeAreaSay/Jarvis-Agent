@@ -224,7 +224,9 @@ class NotifyVoice(Plugin):
 
     @property
     def supported(self) -> bool:
-        return self.source_factory is not None or sys.platform == "win32"
+        # уведомления Windows — только на настоящей платформе Windows (заглушку — тесты, демо — не трогаем)
+        real = sys.platform == "win32" and getattr(self.ctx.platform, "name", "") == "windows"
+        return self.source_factory is not None or real
 
     async def start(self) -> None:
         self._primed = False

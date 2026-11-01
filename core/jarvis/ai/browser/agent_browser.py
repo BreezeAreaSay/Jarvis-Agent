@@ -31,7 +31,7 @@ import sys
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 from jarvis import paths
@@ -277,19 +277,35 @@ class AgentBrowser(Browser):
         raise UserFacingError(self.error)
 
     async def _spawn(self, app: launch.BrowserApp, args: list[str]) -> None:
-        """Свой процесс браузера (без окна): его не видно, и закрыть его может только Jarvis."""
+        """Свой процесс браузера (без окна): его не видно, и закрыть его может только Jarvis. На Windows — в
+        Job Object ядра (jarvis.platform.windows.jobs): ядро упало или его убили — Windows закроет и браузер,
+        он не останется висеть без окна."""
 
         def run() -> subprocess.Popen[bytes]:
-            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
-            return subprocess.Popen(
-                [app.path, *args],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=flags,
-            )
+            options: dict[str, Any] = {
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+            }
+            if sys.platform == "win32":
+                from jarvis.platform.windows.jobs import spawn_with_core
 
-        self._proc = await self.ctx.run_io(run)
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                return cast(
+                    subprocess.Popen[bytes],
+                    spawn_with_core([app.path, *args], creationflags=flags, **options),
+                )
+            return subprocess.Popen([app.path, *args], **options)
+
+        try:
+            self._proc = await self.ctx.run_io(run)
+        except OSError as e:
+            log.warning("браузер агента не запустился: %s", e)
+            self._set(
+                "error",
+                f"{app.title} не запустился без окна — попробуйте ещё раз или выберите другой браузер",
+            )
+            raise UserFacingError(self.error) from e
 
     async def _setup(self, client: CdpClient) -> None:
         self._ua_sessions.clear()

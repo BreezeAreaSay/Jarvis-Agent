@@ -1218,7 +1218,10 @@ events, reminders, clipboard, summaries, screenshots, file_index, voice_cache, u
 - **Браузер агента** (`jarvis/ai/browser/agent_browser.py`, `ctx.agent_browser`): Chrome или Edge без окна
   (`--headless=new`, подпись — как у обычного Chrome, флаг автоматизации снят), профиль `<данные>/agent-browser`,
   своя вкладка у каждой задачи (`task_tabs`), скачивания запрещены. Запускается при первом сайте задачи или
-  открытии панели, закрывается вместе с Jarvis и через 10 минут без задач и зрителей. Действия задачи
+  открытии панели, закрывается вместе с Jarvis и через 10 минут без задач и зрителей; на Windows процесс без окна —
+  в Job Object ядра с `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`jarvis/platform/windows/jobs.py`: создаётся
+  приостановленным, помещается, потом продолжает — его дочерние процессы тоже внутри): ядро упало или его убили —
+  Windows закрывает и браузер; поместить не вышло — работает как раньше (запись в журнал). Действия задачи
   (`jarvis/ai/browser/task_tools.py`): `browser_open, browser_click, browser_type, browser_scroll, browser_press,
   browser_wait, browser_read` (и `browser_screenshot` — модели с картинками); ответ каждого — снимок страницы
   (элементы `b1, b2…`). Разрешение (вопрос задачи): деньги, отправка и публикация — всегда; удаление — кроме

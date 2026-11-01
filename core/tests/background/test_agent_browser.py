@@ -410,3 +410,20 @@ async def test_download_keeps_files_and_takes_only_its_own_tab(
     assert [d["state"] for d in chrome.downloads] == ["canceled", "completed", "canceled"]
     assert sorted(p.name for p in folder.iterdir()) == ["price (2).zip", "price.zip"]  # без файлов-guid
     assert chrome.download_behavior == "deny"
+
+
+async def test_browser_that_cannot_start_reports_an_error(bg: Bg, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Процесс браузера не создался (нет доступа, на Windows — не продолжился после Job Object): понятная
+    ошибка и состояние «error», а не вечное «запускается»."""
+    browser: AgentBrowser = bg[0].agent_browser  # type: ignore[attr-defined]
+
+    class Broken(subprocess.Popen):  # type: ignore[type-arg]
+        _child_created = False  # __del__ недосозданного процесса — без ошибок
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise OSError("отказано в доступе")
+
+    monkeypatch.setattr(subprocess, "Popen", Broken)
+    with pytest.raises(UserFacingError, match="не запустился без окна"):
+        await browser._spawn(APP, [*HEADLESS])
+    assert browser.state()["status"] == "error"

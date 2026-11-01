@@ -19,8 +19,8 @@ desktop/
                        TextInput, Setting, Card, Modal, Empty, Dots, notify/notifyError, timeAgo
     components/        Orb (сфера: боковая панель, профиль), JarvisOrb (сфера из частиц: чат, аватар), LogoMark, AppIcon
                        (значки программ по ключу), PageHeader
-    pages/<раздел>/    страницы: home, commands, extensions, ai, system («Системные операции»), settings, profile,
-                       onboarding
+    pages/<раздел>/    страницы: home, commands, extensions, ai, background («Фоновые задачи» и панель «Браузер
+                       агента»), system («Системные операции»), settings, profile, onboarding
     widgets/           виджеты столов: common.tsx (рамка, useWidgetData), core.tsx, extra.tsx, registry.tsx
     overlay/           окно поверх всего: тосты, подтверждения, план агента, субтитры, питомец
     avatar/            аватар на рабочем столе: переливающаяся сфера — только пока Jarvis слушает, думает или

@@ -6,8 +6,12 @@ t.me/<бот>?start=123456). Меню — инлайн-кнопки, навиг�
 «Главное › Медиа» → ⏯ Пауза … Внизу сообщения — итог последнего нажатия: «Выполнено: Пауза».
 Свободный текст и голосовые уходят в Jarvis: ctx.dispatcher.handle(text, "telegram").
 
+Вопросы фоновых задач (ask_owner) приходят сообщением с кнопками вариантов: ответ — кнопкой или ответом на это
+сообщение текстом (Reply); ответ уходит задаче (ctx.background.answer), сообщение отмечается.
+
 Безопасность: при запуске накопившиеся нажатия кнопок не выполняются (пока компьютер был выключен, кто-то мог
-нажать «Выключить»), старые сообщения пропускаются, подтверждение выключения живёт минуту.
+нажать «Выключить»; разрешение фоновой задаче — тоже), старые сообщения пропускаются, подтверждение выключения
+живёт минуту.
 """
 
 import asyncio
@@ -37,6 +41,9 @@ API_BASE = "https://api.telegram.org"
 POLL_TIMEOUT = 25
 MAX_BACKOFF = 60.0
 STALE_MESSAGE_S = 120.0  # сообщения старше — из очереди, пока компьютер был выключен
+MAX_QUESTIONS = 100  # сообщений с вопросами задач, на которые можно ответить (сообщение → задача, вопрос)
+QUESTIONS_KEY = "telegram:task_questions"
+STALE_APPROVAL = "Jarvis только что запустился — ответьте ещё раз, чтобы разрешить."
 CONFIRM_TTL_S = 60.0
 STRANGER_REPLY_S = 600.0  # чужим отвечаем не чаще раза в 10 минут
 MAX_MESSAGE = 4000
@@ -196,6 +203,7 @@ class TelegramBot:
         self._bot_id = ""  # чей username показываем: сменился токен — имя бота узнаём заново
         self._offset = 0
         self._strangers: dict[int, float] = {}
+        self._questions: dict[int, list[str]] | None = None  # сообщение с вопросом → [задача, вопрос]
 
     # --- запуск и остановка -----------------------------------------------------------------------
     @property
@@ -442,6 +450,10 @@ class TelegramBot:
                 await self._send(chat_id, DENIED)
             return
 
+        replied = (message.get("reply_to_message") or {}).get("message_id")
+        if text and not command and replied is not None and self._question_of(int(replied)) is not None:
+            await self._task_reply(chat_id, int(replied), text, backlog=backlog)
+            return
         if command in ("start", "menu"):
             await self._send_menu(chat_id)
         elif command == "help":
@@ -475,6 +487,9 @@ class TelegramBot:
         owner = self._owner()
         if not owner or user_id != owner:
             await self._answer(query_id, DENIED, alert=True)
+            return
+        if data.startswith("bq:"):
+            await self._task_button(query_id, data, chat_id, message_id, message, backlog=backlog)
             return
         if backlog:
             await self._answer(query_id, "Кнопка устарела — откройте меню заново: /menu")
@@ -634,6 +649,146 @@ class TelegramBot:
         await self._send(chat_id, text, keyboard, as_html=True)
 
     # --- ответы -----------------------------------------------------------------------------------
+    async def notify_owner(self, text: str) -> bool:
+        """Сообщение владельцу бота (уведомление Jarvis: вопрос или итог фоновой задачи). Бот не подключён или
+        владельца нет — False."""
+        owner = self._owner()
+        if not owner or self.api is None:
+            return False
+        await self._send(owner, text)
+        return True
+
+    async def ask_owner(self, task_id: str, question: Any, text: str) -> bool:
+        """Вопрос фоновой задачи владельцу — с кнопками вариантов (разрешение — «Разрешить» / «Отклонить»);
+        ответить можно и текстом, ответом на это сообщение. Бот не подключён или владельца нет — False."""
+        owner = self._owner()
+        if not owner or self.api is None:
+            return False
+        approval = getattr(question, "kind", "") == "approval"
+        options = [str(o) for o in getattr(question, "options", []) or []][:6]
+        rows = [[_button(o[:40], f"bq:{task_id}:{question.id}:{i}")] for i, o in enumerate(options)]
+        detail = str(getattr(question, "detail", "") or "")
+        mark = "🔐" if approval else ("📋" if getattr(question, "kind", "") == "plan" else "❓")
+        lines = [f"{mark} <b>{html.escape(text)}</b>"]
+        if detail:
+            lines.append(html.escape(detail))
+        lines.append(
+            "<i>Ответьте кнопкой или ответом на это сообщение.</i>"
+            if rows
+            else "<i>Ответьте на это сообщение (свайп влево → «Ответить»).</i>"
+        )
+        sent = await self._send(
+            owner, "\n\n".join(lines), {"inline_keyboard": rows} if rows else None, as_html=True
+        )
+        message_id = (sent or {}).get("message_id") if isinstance(sent, dict) else None
+        if message_id is not None:
+            questions = self._task_questions()
+            questions[int(message_id)] = [task_id, str(question.id)]
+            while len(questions) > MAX_QUESTIONS:
+                questions.pop(next(iter(questions)))
+            self._save_questions()
+        return True
+
+    def _task_questions(self) -> dict[int, list[str]]:
+        if self._questions is None:
+            raw = {}
+            with contextlib.suppress(Exception):
+                raw = self.ctx.db.kv_get(QUESTIONS_KEY, {}) or {}
+            self._questions = {
+                int(k): [str(x) for x in v][:2]
+                for k, v in raw.items()
+                if str(k).lstrip("-").isdigit() and isinstance(v, list) and len(v) >= 2
+            }
+        return self._questions
+
+    def _save_questions(self) -> None:
+        with contextlib.suppress(Exception):
+            self.ctx.db.kv_set(QUESTIONS_KEY, {str(k): v for k, v in self._task_questions().items()})
+
+    def _question_of(self, message_id: int) -> tuple[str, str] | None:
+        found = self._task_questions().get(message_id)
+        return (found[0], found[1]) if found else None
+
+    def _background(self) -> Any:
+        return getattr(self.ctx, "background", None)
+
+    async def _task_button(
+        self,
+        query_id: str,
+        data: str,
+        chat_id: int | None,
+        message_id: int | None,
+        message: dict[str, Any],
+        *,
+        backlog: bool,
+    ) -> None:
+        """Кнопка ответа на вопрос фоновой задачи: bq:<задача>:<вопрос>:<номер варианта>."""
+        parts = data.split(":")
+        background = self._background()
+        if len(parts) != 4 or not parts[3].isdigit() or background is None:
+            await self._answer(query_id, "Кнопка устарела")
+            return
+        task_id, question_id, index = parts[1], parts[2], int(parts[3])
+        try:
+            task = background.get(task_id)
+        except UserFacingError:
+            await self._answer(query_id, "Этой задачи больше нет")
+            await self._close_question(chat_id, message_id, message, "задачи больше нет")
+            return
+        question = next((q for q in task.questions if q.id == question_id), None)
+        if question is None or not question.open:
+            await self._answer(query_id, "На этот вопрос уже ответили")
+            await self._close_question(chat_id, message_id, message, "уже ответили")
+            return
+        if backlog and question.kind == "approval":
+            # нажато, пока Jarvis был выключен: разрешение на необратимое — только свежим нажатием
+            await self._answer(query_id, "Нажмите ещё раз — Jarvis только что запустился", alert=True)
+            return
+        if index >= len(question.options):
+            await self._answer(query_id, "Кнопка устарела")
+            return
+        choice = question.options[index]
+        try:
+            background.answer(task_id, question_id, choice)
+        except UserFacingError as e:
+            await self._answer(query_id, str(e))
+            return
+        await self._answer(query_id, "Ответ передан задаче")
+        await self._close_question(chat_id, message_id, message, f"ответ: {choice}")
+
+    async def _task_reply(self, chat_id: int, replied: int, text: str, *, backlog: bool = False) -> None:
+        """Текст ответом на сообщение с вопросом задачи — ответ этой задаче (разрешение, написанное, пока
+        Jarvis был выключен, — как и кнопка: только заново)."""
+        found = self._question_of(replied)
+        background = self._background()
+        if found is None or background is None:
+            return
+        if backlog:
+            with contextlib.suppress(UserFacingError):
+                task = background.get(found[0])
+                question = next((q for q in task.questions if q.id == found[1]), None)
+                if question is not None and question.kind == "approval" and question.open:
+                    await self._send(chat_id, STALE_APPROVAL)
+                    return
+        try:
+            background.answer(found[0], found[1], text)
+        except UserFacingError as e:
+            await self._send(chat_id, f"Не передал: {e}")
+            return
+        await self._send(chat_id, "✅ Передал ответ задаче — она продолжит работу.")
+
+    async def _close_question(
+        self, chat_id: int | None, message_id: int | None, message: dict[str, Any], note: str
+    ) -> None:
+        """Вопрос закрыт: кнопки убрать, в конце сообщения — чем кончилось."""
+        if chat_id is None or message_id is None:
+            return
+        body = html.escape(str(message.get("text") or "").strip())
+        with contextlib.suppress(TelegramError, httpx.HTTPError):
+            await self._edit(
+                chat_id, message_id, f"{body}\n\n✅ <i>{html.escape(note)}</i>", {"inline_keyboard": []}
+            )
+
     def _require_api(self) -> TelegramApi:
         if self.api is None:
             raise TelegramError("бот не подключён")

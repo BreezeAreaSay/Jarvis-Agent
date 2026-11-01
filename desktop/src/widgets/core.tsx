@@ -97,6 +97,13 @@ function statusText(h: HistoryItem): { text: string; ok: boolean | null } {
   return { text: h.detail || "Ошибка", ok: false };
 }
 
+/** 420 → «0,4 с», 12 300 → «12 с», 95 000 → «1 мин 35 с». */
+function fmtMs(ms: number): string {
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1).replace(".", ",")} с`;
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s} с` : `${Math.floor(s / 60)} мин${s % 60 ? ` ${s % 60} с` : ""}`;
+}
+
 export function HistoryWidget() {
   const history = useApp((s) => s.history);
   return (
@@ -116,6 +123,7 @@ export function HistoryWidget() {
                 </div>
                 <div className="status">
                   {st.text}
+                  {h.ms ? <span className="faint">{fmtMs(h.ms)}</span> : null}
                   {st.ok === true && <Check style={{ color: "var(--ok)" }} />}
                   {st.ok === false && <CircleAlert style={{ color: "var(--err)" }} />}
                 </div>

@@ -32,6 +32,7 @@ import {
   Fish,
   Mic,
   MicOff,
+  Undo2,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import {
@@ -153,6 +154,7 @@ const CATEGORY: Record<string, ReactNode> = {
   lock: <Lock />,
   screenshot: <Camera />,
   keyboard: <Keyboard />,
+  undo: <Undo2 />,
   mouse: <MousePointer2 />,
   search: <Search />,
   weather: <CloudSun />,

@@ -44,9 +44,13 @@ from jarvis.ai.policy import (
     RISKY_KEYS,
     SEARCH_HOSTS,
     SEND_KEYS,
+    ascii_host,
     has_card_number,
     is_messenger,
+    link_note,
+    lookalike_host,
     normalize_combo,
+    web_url,
 )
 from jarvis.ai.tools import untrusted
 from jarvis.ai.uia import UiElement, UiSnapshot
@@ -385,7 +389,9 @@ class BrowserTools:
         browser = self._browser()
         self._start(run)
         raw = _arg(args, "url")
-        url = _url(raw)
+        url, problem = web_url(_url(raw))
+        if problem:
+            return Outcome(False, problem)
         if not url:
             return Outcome(
                 False,
@@ -394,13 +400,14 @@ class BrowserTools:
             )
         parsed = urlparse(url)
         host = (parsed.hostname or "").casefold()
-        site = pages.site_of(url) or url
-        # ссылка с данными на незнакомый сайт может унести их наружу (инструкция из чужого текста) — спросить
+        # ссылка с данными на незнакомый сайт может унести их наружу (инструкция из чужого текста) — спросить;
+        # имя сайта, похожее на подделку («gооgle.com» с русскими «о»), — спросить всегда
         known = not host or bool(SEARCH_HOSTS.search(host)) or host in run.task.casefold()
-        if self.agent._ask(run, bool(parsed.query) and not known):
-            await self.agent._approve(
-                run, f"Открыть {site} в браузере Jarvis?", f"Адрес: {one_line(url, 160)}"
-            )
+        fake = lookalike_host(host)
+        site = ascii_host(host) if fake else (pages.site_of(url) or url)
+        if self.agent._ask(run, (bool(parsed.query) and not known) or fake):
+            detail = f"{link_note(host)} Адрес: {one_line(url, 160)}".strip()
+            await self.agent._approve(run, f"Открыть {site} в браузере Jarvis?", detail)
         await browser.connect(launch=True)
         await browser.allow_downloads(False)
         tabs = await browser.tabs()

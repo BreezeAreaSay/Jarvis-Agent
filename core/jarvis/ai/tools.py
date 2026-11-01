@@ -28,19 +28,26 @@ from urllib.parse import urlparse
 
 from rapidfuzz import fuzz, process
 
+from jarvis.ai import private_windows
 from jarvis.ai.format import iso_local, one_line, parse_when
 from jarvis.ai.policy import (
     APP_SCHEMES,
     RISKY_KEYS,
     SEARCH_HOSTS,
     SEND_KEYS,
+    ascii_host,
     has_card_number,
     is_messenger,
     is_shell_window,
     jarvis_hotkeys,
+    link_note,
+    lookalike_host,
     normalize_combo,
+    web_url,
 )
 from jarvis.ai.web import WebClient, check_public_url, site_name
+from jarvis.background.repeat import describe
+from jarvis.confirm import high_risk
 from jarvis.platform.base import AppInfo, PlatformError, WindowInfo
 from jarvis.services import ExecResult, Source, UserFacingError
 
@@ -178,8 +185,11 @@ def args_detail(args: dict[str, Any], limit: int = 4) -> str:
 
 
 async def confirm(env: "ToolEnv", title: str, detail: str = "") -> bool:
-    """Спросить человека (карточка подтверждения; голосом — голосом)."""
-    return bool(await env.ctx.confirmations.request(title, detail, kind="command", source=env.source))
+    """Спросить человека (карточка подтверждения; голосом — голосом, необратимое — только кнопкой)."""
+    risk = high_risk(title, detail)
+    return bool(
+        await env.ctx.confirmations.request(title, detail, kind="command", source=env.source, risk=risk)
+    )
 
 
 def _notes(env: ToolEnv) -> "Notes":
@@ -391,10 +401,9 @@ async def _launch_app(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
             title=f"Открыть «{launched}»",
             detail="Окно пока не появилось",
         )
+    title = private_windows.shown_title(window, private_windows.settings_list(env.ctx))
     return ToolOutput(
-        f"Запущено: {launched} — открылось окно «{window.title}»",
-        title=f"Открыть «{launched}»",
-        detail="Открыто",
+        f"Запущено: {launched} — открылось окно «{title}»", title=f"Открыть «{launched}»", detail="Открыто"
     )
 
 
@@ -411,17 +420,20 @@ async def _open_url(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
             return ToolOutput.fail(
                 "нужна ссылка http(s) или адрес программы: tg:, ms-settings:, spotify:, mailto:, whatsapp:"
             )
+    url, problem = web_url(url)
+    if problem:
+        return ToolOutput.fail(problem.removeprefix("Ошибка: "))
     parsed = urlparse(url)
     host = (parsed.hostname or "").casefold()
     known = bool(SEARCH_HOSTS.search(host)) or host in env.user_text.casefold()
-    if (
-        parsed.query
-        and not known
-        and not await confirm(
-            env, f"Открыть {site_name(url) or host}?", f"Адрес с данными: {one_line(url, 160)}"
-        )
-    ):
-        return ToolOutput("Пользователь не разрешил открыть ссылку.", ok=False, detail="Отклонено")
+    # имя сайта, похожее на подделку («gооgle.com» с русскими «о»), — спросить, даже если адрес без данных
+    fake = lookalike_host(host)
+    if (parsed.query and not known) or fake:
+        name = ascii_host(host) if fake else (site_name(url) or host)
+        label = "Адрес с данными" if parsed.query else "Адрес"
+        detail = f"{link_note(host)} {label}: {one_line(url, 160)}".strip()
+        if not await confirm(env, f"Открыть {name}?", detail):
+            return ToolOutput("Пользователь не разрешил открыть ссылку.", ok=False, detail="Отклонено")
     await env.ctx.run_platform(env.ctx.platform.open_url, url)
     return ToolOutput(
         f"Открыто в браузере: {url}", title=f"Открыть {site_name(url) or url}", detail="Выполнено"
@@ -455,6 +467,9 @@ async def _type_text(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
     if not text:
         return ToolOutput.fail("пустой текст")
     window = await foreground_for_input(env.ctx)
+    hidden = private_windows.private_reason(window, private_windows.settings_list(env.ctx))
+    if hidden and window is not None:
+        return ToolOutput.fail(private_windows.hidden_text(window, hidden))
     title, exe = (window.title, window.exe) if window is not None else ("", "")
     where = f" в «{title}»" if title else ""
     if is_shell_window(title, exe):
@@ -484,6 +499,9 @@ async def _press_keys(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
     if combo in jarvis_hotkeys(env.ctx.settings.value):
         return ToolOutput.fail(f"{combo} — горячая клавиша самого Jarvis, её я не нажимаю")
     window = await foreground_for_input(env.ctx)
+    hidden = private_windows.private_reason(window, private_windows.settings_list(env.ctx))
+    if hidden and window is not None:
+        return ToolOutput.fail(private_windows.hidden_text(window, hidden))
     title, exe = (window.title, window.exe) if window is not None else ("", "")
     where = f" в «{title}»" if title else ""
     detail = ""
@@ -523,6 +541,33 @@ async def _run_agent(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
         title=f"Агент: {one_line(task, 60)}",
         detail="Запущен",
     )
+
+
+async def _start_background_task(env: ToolEnv, args: dict[str, Any]) -> ToolOutput:
+    brief = _str(args, "task")
+    if not brief:
+        return ToolOutput.fail("не описана задача")
+    service = getattr(env.ctx, "background", None)
+    if service is None:
+        return ToolOutput.fail("фоновые задачи недоступны")
+    source = {"voice": "voice", "telegram": "remote", "remote": "remote"}.get(str(env.source), "text")
+    raw = args.get("repeat")
+    repeat = raw if isinstance(raw, dict) and raw.get("kind") else None  # нет — повтор найдётся в тексте
+    task = service.create(brief, deliverable=_str(args, "result"), source=source, repeat=repeat)
+    if task.recurring:
+        text = (
+            f"Повторяющаяся фоновая задача поставлена: «{task.title}», {describe(task.repeat)}; первый "
+            "запуск — сейчас. Каждый запуск идёт сам, в фоне, итоги и замеры записываются в заметки, ход и "
+            "расписание — на странице «Фоновые задачи». Коротко скажи пользователю, как часто задача будет "
+            "работать; сам её не выполняй."
+        )
+    else:
+        text = (
+            f"Фоновая задача поставлена: «{task.title}». Она идёт сама, в фоне, итог запишется в заметки "
+            "(хранилище Obsidian), ход виден на странице «Фоновые задачи». Коротко скажи пользователю, что "
+            "задача взята в работу; сам её не выполняй."
+        )
+    return ToolOutput(text, title=f"Фоновая задача: {one_line(task.title, 60)}", detail="Поставлена")
 
 
 # --- обработчики: интернет ------------------------------------------------------------------------------
@@ -1081,6 +1126,39 @@ def builtin_tools() -> list[Tool]:
             _run_agent,
             lambda a: f"Агент: {one_line(_str(a, 'task'), 60)}",
             status_text="Запускаю агента…",
+            action=True,
+        ),
+        Tool(
+            "start_background_task",
+            "Поставить большую задачу в фон: агент сам, без экрана пользователя, ищет и читает сайты, "
+            "работает в своём браузере и записывает результат в заметки (Obsidian) — исследование, "
+            "сравнение, обзор, сбор данных, подборка, мониторинг. Для того, что займёт больше пары минут и "
+            "не требует окон программ на экране; ответ «прямо сейчас» в чате — не сюда. Регулярное дело "
+            "(«каждый вечер записывай курс доллара», «по будням собирай вакансии») — с repeat: задача будет "
+            "запускаться сама, замеры — таблицей с графиком.",
+            _obj(
+                {
+                    "task": _s("Задача целиком, со всеми подробностями: что найти, сравнить, собрать"),
+                    "result": _s("Какой нужен результат: отчёт, таблица, список… (необязательно)"),
+                    "repeat": {
+                        "type": "object",
+                        "description": (
+                            "Только если задачу нужно повторять: kind=daily — в at (ЧЧ:ММ) по дням weekdays "
+                            "(0 — понедельник; пусто — каждый день), kind=hours — каждые hours часов"
+                        ),
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["daily", "hours"]},
+                            "at": _s("Время ЧЧ:ММ (для daily)"),
+                            "weekdays": {"type": "array", "items": {"type": "integer"}},
+                            "hours": {"type": "integer", "description": "Каждые сколько часов (для hours)"},
+                        },
+                    },
+                },
+                ["task"],
+            ),
+            _start_background_task,
+            lambda a: f"Фоновая задача: {one_line(_str(a, 'task'), 60)}",
+            status_text="Ставлю фоновую задачу…",
             action=True,
         ),
         Tool(

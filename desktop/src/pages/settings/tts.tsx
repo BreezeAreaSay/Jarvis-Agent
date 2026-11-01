@@ -9,7 +9,7 @@ import { LogoMark } from "@/components/Orb";
 import { bridge } from "@/lib/bridge";
 import { navigate } from "@/lib/router";
 import { useApp } from "@/store/app";
-import { Button, cx, notify, notifyError, Select, Slider } from "@/ui";
+import { Button, cx, notify, notifyError, Select, Setting, Slider, Toggle } from "@/ui";
 import {
   type ApiState,
   Combo,
@@ -440,6 +440,18 @@ export function TtsOptions({ engine, compact }: { engine: Engine; compact?: bool
 
       {engine === "piper" && (
         <PiperDownload model={models.items.find((m) => m.id === `piper-${tts.piper_voice}`)} onDownload={(id) => void models.download(id)} />
+      )}
+
+      {engine === "piper" && !compact && (
+        <Setting
+          name="Ударения и «ё»"
+          desc={
+            "Словарь Jarvis: «за\u0301мок» и «замо\u0301к», «ещё», «утра\u0301» — верно в 99,6 % слов против 94 % " +
+            "у словаря по умолчанию. Включение и выключение — со следующего запуска Jarvis"
+          }
+        >
+          <Toggle checked={tts.stress_dict} onChange={(on) => patchTts({ stress_dict: on })} label="Словарь ударений" />
+        </Setting>
       )}
 
       {keyBlock}

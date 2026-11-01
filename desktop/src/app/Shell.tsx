@@ -1,5 +1,5 @@
 // Каркас главного окна: фон, боковая навигация, кнопки окна, страница по маршруту.
-import { CircleUser, Gauge, House, MicOff, Minus, Puzzle, Settings, Sparkles, SquareTerminal, X } from "lucide-react";
+import { CircleUser, Gauge, House, MicOff, Minus, Puzzle, Settings, Sparkles, SquareTerminal, Telescope, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { api } from "@/api/client";
 import { onEvent } from "@/api/events";
@@ -7,6 +7,7 @@ import { LogoMark, Orb } from "@/components/Orb";
 import { bridge, isElectron } from "@/lib/bridge";
 import { navigate, useRoute } from "@/lib/router";
 import { useApp } from "@/store/app";
+import { useWaitingCount, wireBackground } from "@/store/background";
 import { ConfirmBar } from "@/components/ConfirmBar";
 import { CoreDown } from "@/components/CoreDown";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -20,6 +21,7 @@ const AiPage = lazy(() => import("@/pages/ai/AiPage"));
 const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
 const ProfilePage = lazy(() => import("@/pages/profile/ProfilePage"));
 const SystemPage = lazy(() => import("@/pages/system/SystemPage"));
+const BackgroundPage = lazy(() => import("@/pages/background/BackgroundPage"));
 const Onboarding = lazy(() => import("@/pages/onboarding/Onboarding"));
 
 const NAV: { id: string; label: string; icon: ReactNode }[] = [
@@ -27,6 +29,7 @@ const NAV: { id: string; label: string; icon: ReactNode }[] = [
   { id: "commands", label: "Команды", icon: <SquareTerminal /> },
   { id: "extensions", label: "Расширения", icon: <Puzzle /> },
   { id: "ai", label: "Jarvis AI", icon: <Sparkles /> },
+  { id: "background", label: "Фоновые задачи", icon: <Telescope /> },
   { id: "system", label: "Системные операции", icon: <Gauge /> },
   { id: "settings", label: "Настройки", icon: <Settings /> },
 ];
@@ -35,6 +38,8 @@ const NAV: { id: string; label: string; icon: ReactNode }[] = [
 function Sidebar({ page, locked }: { page: string; locked: boolean }) {
   const pendingConfirm = useApp((s) => s.confirmations.length > 0);
   const updateReady = useUpdates((s) => s.status === "available" || s.status === "downloaded");
+  const waiting = useWaitingCount();
+  useEffect(() => wireBackground(), []);
   return (
     <aside className={cx("sidebar", locked && "locked")} inert={locked}>
       <button className="logo" onClick={() => navigate("home")} aria-label="Jarvis">
@@ -49,6 +54,7 @@ function Sidebar({ page, locked }: { page: string; locked: boolean }) {
         >
           {n.icon}
           {n.id === "ai" && pendingConfirm && <span className="nav-dot" />}
+          {n.id === "background" && waiting > 0 && <span className="nav-dot" title="Агент ждёт вашего ответа" />}
           {n.id === "settings" && updateReady && <span className="nav-dot" title="Доступно обновление" />}
           <span className="nav-tip">{n.label}</span>
         </button>
@@ -175,6 +181,7 @@ const PAGE_NAMES: Record<string, string> = {
   commands: "Команды",
   extensions: "Расширения",
   ai: "Jarvis AI",
+  background: "Фоновые задачи",
   system: "Системные операции",
   settings: "Настройки",
   profile: "Профиль",
@@ -204,6 +211,9 @@ export function Shell() {
       break;
     case "system":
       content = <SystemPage />;
+      break;
+    case "background":
+      content = <BackgroundPage route={route.slice(1)} />;
       break;
     default:
       content = <HomePage route={route.slice(1)} />;

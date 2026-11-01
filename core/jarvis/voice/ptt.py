@@ -2,7 +2,10 @@
 
 Держишь — Jarvis слушает (без «Джарвис»), отпустил — фраза закончилась. Нажата другая клавиша, пока держишь
 (правый Ctrl+C) — это сочетание, а не голос: фраза отменяется. Автоповтор нажатия игнорируется.
-Колбэки — из потока pynput: только быстрые действия (команда в очередь слушателя).
+Колбэки — из потока pynput: только быстрые действия (команда в очередь слушателя). Windows молча снимает
+низкоуровневый хук, если обработчик ответил слишком медленно (LowLevelHooksTimeout), — тогда клавиша перестаёт
+работать без единой ошибки; сторож голосового сервиса (VoiceService._ptt_watch) это замечает: человек
+печатает, а хук давно не слышал ни одного нажатия, — и ставит хук заново.
 
 parse_key не зовёт pynput: «right ctrl», «правый ctrl», «RightCtrl», «rctrl», «f9», «caps lock», «alt gr»,
 одна буква — в имя клавиши pynput (ctrl_r, f9, caps_lock, alt_gr, char:x).
@@ -11,6 +14,7 @@ parse_key не зовёт pynput: «right ctrl», «правый ctrl», «Right
 import logging
 import re
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -129,6 +133,7 @@ class PttHook:
         self.down = False
         self._listener: Any = None
         self._lock = threading.Lock()
+        self.heard = time.monotonic()  # когда хук последний раз получил нажатие (любой клавиши)
 
     def start(self) -> None:
         try:
@@ -139,7 +144,17 @@ class PttHook:
         listener.daemon = True
         listener.start()
         self._listener = listener
+        self.heard = time.monotonic()
         log.info("голос: клавиша «держи и говори» — %s", self.label)
+
+    def alive(self) -> bool:
+        """Поток хука жив (pynput останавливает его при ошибке)."""
+        listener = self._listener
+        return listener is not None and bool(getattr(listener, "running", True)) and listener.is_alive()
+
+    def silent_for(self) -> float:
+        """Сколько секунд хук не получал ни одного нажатия."""
+        return time.monotonic() - self.heard
 
     def stop(self) -> None:
         listener, self._listener = self._listener, None
@@ -153,6 +168,7 @@ class PttHook:
             self._call(self.on_up)
 
     def press(self, key: Any) -> None:
+        self.heard = time.monotonic()
         with self._lock:
             if key_matches(self.spec, key):
                 if self.down:
@@ -166,6 +182,7 @@ class PttHook:
         self._call(callback)
 
     def release(self, key: Any) -> None:
+        self.heard = time.monotonic()
         with self._lock:
             if not (self.down and key_matches(self.spec, key)):
                 return

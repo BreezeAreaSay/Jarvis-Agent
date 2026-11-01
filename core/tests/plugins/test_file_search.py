@@ -356,10 +356,15 @@ def test_scan_limits_exclude_links_and_nested_roots(tmp_path: Path) -> None:
     assert len(items) == 3 and truncated is True
     names = {i.name for i in scan_folders([str(root)], exclude=[str(root / "Проекты")])[0]}
     assert "Проекты" not in names and "меню.pdf" not in names
-    os.symlink(root / "Проекты", root / "ссылка")
+    try:
+        os.symlink(root / "Проекты", root / "ссылка")
+    except OSError:  # Windows без режима разработчика не даёт создать ссылку (WinError 1314)
+        linked = False
+    else:
+        linked = True
     paths = [i.path for i in scan_folders([str(root), str(root / "Проекты"), str(tmp_path / "нет")])[0]]
     assert len(paths) == len(set(paths))  # вложенный корень не обходится второй раз
-    assert not any("ссылка" in p for p in paths)
+    assert not linked or not any("ссылка" in p for p in paths)
     stop = __import__("threading").Event()
     stop.set()
     assert scan_folders([str(root)], stop=stop) == ([], False)

@@ -122,6 +122,7 @@ async def test_key_providers_use_bearer_and_their_own_address(
     assert result.content == "Готово"
     assert str(seen[0].url) == url and seen[0].headers["authorization"] == "Bearer sk-test"
     assert llm.requests[0]["model"] == model and "OpenAI-Project" not in seen[0].headers
+    assert "x-data-logging-enabled" not in seen[0].headers
 
 
 async def test_region_switches_the_address(ctx: AppContext, llm: ScriptedLlm) -> None:
@@ -149,6 +150,7 @@ async def test_yandexgpt_api_key_header_folder_and_model_uri(ctx: AppContext, ll
     assert str(request.url) == "https://llm.api.cloud.yandex.net/v1/chat/completions"
     assert request.headers["authorization"] == "Api-Key AQVN-secret"
     assert request.headers["openai-project"] == "b1gfolder"
+    assert request.headers["x-data-logging-enabled"] == "false"  # Yandex не сохраняет запросы у себя
     body = llm.requests[0]
     assert body["model"] == "gpt://b1gfolder/yandexgpt/latest" and "response_format" not in body
     assert "stream_options" not in body

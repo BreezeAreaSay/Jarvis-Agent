@@ -59,6 +59,12 @@ async def usage(ctx: Ctx) -> dict[str, Any]:
     return _ai(ctx).usage()
 
 
+@router.get("/api/ai/fallback")
+async def fallback(ctx: Ctx) -> dict[str, Any]:
+    """Запасной провайдер: настроен ли, какой и кто сейчас на паузе после сбоя."""
+    return dict(_ai(ctx).llm.fallback_status())
+
+
 # --- ChatGPT по подписке (Codex): компонент и вход ----------------------------------------------------------
 
 

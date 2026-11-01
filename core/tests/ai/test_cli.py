@@ -189,6 +189,8 @@ async def test_stop_kills_the_program(
     chat = core.ai.create_chat()  # type: ignore[attr-defined]
     posted = await core.ai.post_message(chat["id"], "Долгий вопрос")  # type: ignore[attr-defined]
     await until(lambda: len(fake.runs) == 1)
+    # «Думаю…» уже на экране (на Windows программа запускается дольше — без этого стоп успевал раньше)
+    await until(lambda: "Думаю" in "".join(e["delta"] for e in events.of("chat.delta")))
     started = time.monotonic()
     assert core.ai.stop_chat(chat["id"]) is True  # type: ignore[attr-defined]
     await until(lambda: any(d.get("stopped") for d in events.of("chat.done")))
@@ -264,16 +266,17 @@ async def test_agent_step_limit_kills_the_program(
     agent.ui, agent.settle_s, agent.launch_settle_s = FakeUi(), 0.0, 0.0
     fake.add(
         [{"say": '{"steps": []}'}],
-        [{"tool": "ui_snapshot", "args": {}}] * 4 + [{"sleep": 30}],
+        # три действия, ещё три — просьба закончить, седьмое — остановка, восьмое — программа остановлена
+        [{"tool": "ui_snapshot", "args": {}}] * 8 + [{"sleep": 30}],
     )
     events = collect(core)
     started = time.monotonic()
     run_id = await core.agent.run("Посмотри", "text")
     result = await asyncio.wait_for(core.agent.wait(run_id), 20)
     assert result.status == "error" and result.error == "Агент не уложился в 3 шагов"
-    # четвёртое действие не выполнено, программа остановлена сразу, а не через 30 с своего сценария
+    # после лимита действия не выполняются, программа остановлена сразу, а не через 30 с своего сценария
     work = next(r for r in fake.runs if "одним JSON" not in r["stdin"])
-    assert [t["name"] for t in work["tools"]] == ["ui_snapshot"] * 3
+    assert len(work["tools"]) <= 8 and set(t["name"] for t in work["tools"]) == {"ui_snapshot"}
     assert [s["status"] for s in events.of("agent.step")].count("ok") == 3
     assert time.monotonic() - started < 15
 

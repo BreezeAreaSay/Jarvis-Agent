@@ -3,12 +3,15 @@
 from fastapi import FastAPI
 
 from jarvis.api import (
+    agent_browser,
     ai,
+    background,
     browser,
     commands,
     core,
     data,
     desks,
+    diagnostics,
     images,
     mcp,
     notes,
@@ -31,6 +34,8 @@ def include_all(app: FastAPI) -> None:
         voice,
         ai,
         browser,
+        agent_browser,
+        background,
         images,
         notes,
         mcp,
@@ -41,6 +46,7 @@ def include_all(app: FastAPI) -> None:
         desks,
         scenarios,
         data,
+        diagnostics,
         tools,
     ):
         app.include_router(module.router)

@@ -330,7 +330,8 @@ async def test_lan_server_lifecycle(ctx: AppContext) -> None:
     finally:
         await remote.lan.stop()
     assert remote.lan.status == "off"
-    with pytest.raises(httpx.ConnectError):
+    # закрытый порт: Linux отказывает сразу, Windows — повторами около 2 с (тогда это ConnectTimeout)
+    with pytest.raises((httpx.ConnectError, httpx.ConnectTimeout)):
         async with httpx.AsyncClient(timeout=2) as http:
             await http.get(f"http://127.0.0.1:{port}/")
 

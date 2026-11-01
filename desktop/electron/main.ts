@@ -26,6 +26,10 @@ const VERSION = app.getVersion();
 
 // как appId в electron-builder.yml — не менять: по нему Windows связывает уведомления и ярлыки с Jarvis
 app.setAppUserModelId("com.breezeareasay.jarvis");
+// из исходников на Windows — свой профиль окна: не мешать установленному Jarvis (одна копия на профиль)
+if (!app.isPackaged && process.platform === "win32" && !process.argv.some((a) => a.startsWith("--user-data-dir"))) {
+  app.setPath("userData", path.join(app.getPath("appData"), "Jarvis-dev"));
+}
 if (!app.requestSingleInstanceLock()) {
   app.quit();
   process.exit(0);

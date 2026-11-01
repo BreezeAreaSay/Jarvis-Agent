@@ -189,6 +189,8 @@ async def test_stop_kills_the_program(
     chat = core.ai.create_chat()  # type: ignore[attr-defined]
     posted = await core.ai.post_message(chat["id"], "Долгий вопрос")  # type: ignore[attr-defined]
     await until(lambda: len(fake.runs) == 1)
+    # «Думаю…» уже на экране (на Windows программа запускается дольше — без этого стоп успевал раньше)
+    await until(lambda: "Думаю" in "".join(e["delta"] for e in events.of("chat.delta")))
     started = time.monotonic()
     assert core.ai.stop_chat(chat["id"]) is True  # type: ignore[attr-defined]
     await until(lambda: any(d.get("stopped") for d in events.of("chat.done")))

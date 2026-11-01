@@ -96,6 +96,10 @@ export class CoreProcess {
       const exe = path.join(root, "python", process.platform === "win32" ? "python.exe" : "bin/python3");
       return { cmd: exe, args: common, env: { ...env, PYTHONPATH: path.join(root, "app") }, cwd: root };
     }
+    // из исходников на Windows — свои данные ядра: установленный Jarvis со своими задачами и базой не задеваем
+    if (process.platform === "win32" && !env.JARVIS_DATA_DIR && env.LOCALAPPDATA) {
+      env.JARVIS_DATA_DIR = path.join(env.LOCALAPPDATA, "Jarvis-dev");
+    }
     const coreDir = path.resolve(app.getAppPath(), "..", "core");
     const venv = path.join(coreDir, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
     if (fs.existsSync(venv)) return { cmd: venv, args: common, env, cwd: coreDir };

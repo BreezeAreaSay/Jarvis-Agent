@@ -233,3 +233,31 @@ def test_ptt_hook_press_release_autorepeat_and_combo() -> None:
     assert log == ["down", "other", "up"]
     assert key_matches("alt_r", Key("alt_gr")) and key_matches("char:x", Key(char="X"))
     assert not key_matches("ctrl_r", Key("ctrl_l"))
+
+
+def test_mic_array_opens_with_its_own_channel_count() -> None:
+    api = FakeApi()
+    array = dev("Микрофонная решётка (Realtek)", 1, 4, 0)
+
+    def open_input(index: int | None, rate: int, channels: int, *rest: Any) -> Any:
+        api.opened.append((index, rate, channels))
+        if channels != 4:  # WASAPI: только формат устройства
+            raise OSError("Invalid number of channels")
+        stream = FakeStream(api, rate, rest[1], rest[2])
+        api.streams.append(stream)
+        return stream
+
+    api.devices = lambda: [dict(d, index=i) for i, d in enumerate([*DEVICES, array])]  # type: ignore[method-assign]
+    api.open_input = open_input  # type: ignore[method-assign]
+    mic = MicInput("решётка", api_factory=lambda: api)  # type: ignore[arg-type,return-value]
+    assert mic.read(0.01) is None and mic.error == ""
+    assert api.opened[-1] == (5, 48000, 4)  # каналы решётки — в моно сводит сам MicInput
+    mic.close()
+
+
+def test_default_input_without_a_microphone_says_so() -> None:
+    api = FakeApi()
+    api.default_index = lambda kind: 2  # type: ignore[method-assign]  # «по умолчанию» — «Динамики»
+    mic = MicInput("", api_factory=lambda: api)  # type: ignore[arg-type,return-value]
+    assert mic.read(0.01) is None
+    assert mic.error.startswith("микрофон не найден") and api.opened == []

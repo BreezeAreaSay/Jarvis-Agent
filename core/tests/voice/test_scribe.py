@@ -182,13 +182,13 @@ def test_throttled_commit_is_retried() -> None:
 def test_no_network_returns_none_quickly() -> None:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]  # порт закрыт: соединение отвергнуто сразу
+        port = sock.getsockname()[1]  # порт закрыт: Linux отказывает сразу, Windows — повторами около 2 с
     errors: list[ScribeError] = []
     s = ScribeStream(f"ws://127.0.0.1:{port}/", {}, on_error=errors.append)
     s.feed(frames(1)[0])
     started = time.monotonic()
-    assert s.finish(3.0) is None
-    assert time.monotonic() - started < 2.0
+    assert s.finish(6.0) is None
+    assert time.monotonic() - started < 4.0  # ответ — по отказу соединения, а не по пределу ожидания
     assert "нет связи" in str(errors[0]) and errors[0].cooldown_s == sc.NET_COOLDOWN_S
 
 

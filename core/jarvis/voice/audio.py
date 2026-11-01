@@ -259,6 +259,16 @@ def device_rate(api: SoundDevice, index: int | None, kind: str = "input") -> int
         return 0
 
 
+def _input_channels(api: SoundDevice, index: int | None) -> int:
+    """Сколько входных каналов у устройства; не узнать — 1 (пробуем как обычно)."""
+    if index is None:
+        return 1
+    try:
+        return int(api.devices()[index].get("max_input_channels") or 0)
+    except Exception:
+        return 1
+
+
 def device_name(api: SoundDevice, index: int | None, kind: str = "input") -> str:
     try:
         if index is None:
@@ -372,7 +382,13 @@ class MicInput:
         if no_default and not any(d.get("max_input_channels", 0) > 0 for d in api.devices()):
             raise AudioError("микрофон не найден — подключите микрофон")
         native = device_rate(api, index, "input") or 48000
-        attempts = [(RATE, 1), (native, 1), (native, 2)]
+        target = index if index is not None else api.default_index("input")
+        most = _input_channels(api, target)
+        if target is not None and most == 0:  # «по умолчанию» в Windows указывает на устройство без входа
+            raise AudioError("микрофон не найден — подключите микрофон или выберите его в настройках голоса")
+        # моно; у микрофонных решёток (2–4 канала) и в WASAPI — столько каналов, сколько у устройства
+        attempts = [(RATE, 1), (native, 1), (native, 2), (native, most)] if most > 2 else []
+        attempts = attempts or [(RATE, 1), (native, 1), (native, 2)]
         last: Exception | None = None
         self._token += 1
         token = self._token
@@ -394,7 +410,9 @@ class MicInput:
             self._resampler = Resampler(rate, RATE) if rate != RATE else None
             break
         else:
-            raise AudioError(f"микрофон не открылся: {last}")
+            raise AudioError(
+                f"микрофон не открылся: {last} — проверьте, что он подключён и выбран в настройках голоса"
+            )
         self.device_name = device_name(api, index, "input")
         self._pending = np.zeros(0, dtype=np.float32)
         self._last_data = self.clock()

@@ -577,7 +577,8 @@ class CliBackend:
             if proxy and locate.shell_safe(proxy):
                 lines += [f'set "HTTPS_PROXY={proxy}"', f'set "HTTP_PROXY={proxy}"']
             lines += [f"echo {hint}.", "echo.", f'{call}"{target}"']
-            script.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+            # newline="": строки уже с CRLF — без этого Windows сделала бы из них «\r\r\n»
+            script.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8", newline="")
         else:
             script = folder / f"login-{self.info.binary}.sh"
             script.write_text(f'#!/bin/sh\ncd "$(dirname "$0")"\nexec "{launch.path}"\n', encoding="utf-8")

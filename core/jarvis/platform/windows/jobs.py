@@ -187,10 +187,12 @@ class CoreJob:
             k.CloseHandle(snapshot)
         return resumed
 
-    def spawn(self, args: list[str], *, popen: Any = subprocess.Popen, **kwargs: Any) -> Any:
-        """subprocess.Popen, но процесс — в Job Object ядра с самого начала (см. описание модуля)."""
+    def spawn(self, args: list[str], *, popen: Any = None, **kwargs: Any) -> Any:
+        """subprocess.Popen, но процесс — в Job Object ядра с самого начала (см. описание модуля). Popen
+        берётся в момент вызова, а не при загрузке модуля: подмена subprocess.Popen (тесты) действует и
+        здесь."""
         flags = int(kwargs.pop("creationflags", 0) or 0)
-        proc = popen(args, creationflags=flags | CREATE_SUSPENDED, **kwargs)
+        proc = (popen or subprocess.Popen)(args, creationflags=flags | CREATE_SUSPENDED, **kwargs)
         handle = getattr(proc, "_handle", None)
         joined = handle is not None and self.add(int(handle))
         try:

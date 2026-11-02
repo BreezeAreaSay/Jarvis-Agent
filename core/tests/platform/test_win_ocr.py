@@ -170,3 +170,50 @@ def test_real_windows_ocr_reads_rendered_text() -> None:
         pytest.skip(str(e))  # в Windows нет языка распознавания (чистый образ CI)
     text = " ".join(line for line, _words in raw)
     assert "Hello" in text and "2026" in text
+
+
+def test_russian_engine_misreading_english_gets_the_latin_reading_too() -> None:
+    # Windows 11: русский движок читает «Hello» как «Непо», английский русские слова — латиницей
+    ru = [
+        [("Непо", (10.0, 10.0, 40.0, 12.0)), ("World", (55.0, 10.0, 45.0, 12.0))],
+        [("Сеть", (10.0, 40.0, 30.0, 12.0)), ("Отмена", (50.0, 40.0, 50.0, 12.0))],
+    ]
+    en = [
+        [("Hello", (10.0, 10.0, 41.0, 12.0)), ("World", (55.0, 10.0, 45.0, 12.0))],
+        [("Ceтb", (10.0, 40.0, 30.0, 12.0)), ("OTMeHa", (50.0, 40.0, 50.0, 12.0))],
+        [("Settings", (10.0, 80.0, 60.0, 12.0))],  # русский не прочёл вовсе
+    ]
+    merged = win_ocr.merge_readings(ru, en)
+    assert [text for text, _boxes in merged] == [
+        "Непо|Hello World",  # одинаково прочитанное — один раз
+        "Сеть Отмена|OTMeHa",  # «ь» латиницей не бывает — второе прочтение «Сеть» не нужно
+        "Settings",
+    ]
+    assert merged[2][1] == [(10.0, 80.0, 60.0, 12.0)]
+
+
+def test_two_engines_when_russian_and_english_are_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _fake_winrt(monkeypatch, ["en-US", "ru-RU"], profile="en-US")
+    engine_types = sys.modules["winrt.windows.media.ocr"].OcrEngine  # type: ignore[attr-defined]
+    created = engine_types.try_create_from_language
+
+    def reading(language: Any) -> Any:
+        engine = created(language)
+        text = "Непо" if language.language_tag.startswith("ru") else "Hello"
+        rect = types.SimpleNamespace(x=10.0, y=20.0, width=40.0, height=12.0)
+        word = types.SimpleNamespace(text=text, bounding_rect=rect)
+        line = types.SimpleNamespace(text=text, words=[word])
+        result = types.SimpleNamespace(lines=[line])
+
+        def recognize_async(bitmap: Any) -> Any:
+            seen["bitmap"] = bitmap
+            return created(language).recognize_async(bitmap).__class__(result)
+
+        engine.recognize_async = recognize_async
+        return engine
+
+    monkeypatch.setattr(engine_types, "try_create_from_language", staticmethod(reading))
+    backend = win_ocr.WindowsOcr(Inline())  # type: ignore[arg-type]
+    lines = backend.recognize(b"\0" * (200 * 100 * 4), (200, 100), (0, 0, 200, 100))
+    assert [line.text for line in lines] == ["Непо|Hello"] and backend.language == "ru-RU"
+    assert seen["bitmap"].closed  # картинка одна на оба движка и закрыта

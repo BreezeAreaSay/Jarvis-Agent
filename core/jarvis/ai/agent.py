@@ -45,6 +45,7 @@ from urllib.parse import urlparse
 from rapidfuzz import fuzz, process
 
 from jarvis.ai import apphints, journal, lessons, ocr, playbooks, private_windows, vision
+from jarvis.ai import telegram_desktop as tg
 from jarvis.ai.catalog import AGENT_ACTIONS
 from jarvis.ai.chats import ChatStore, ui_message
 from jarvis.ai.format import chat_title, now_text, one_line, speech_text
@@ -124,7 +125,20 @@ TEMPERATURE = 0.2  # действиям на экране нужна аккур�
 # хода по одному; свой цикл API знает ходы точно и сбрасывает отметку на каждом)
 BATCH_GAP_S = 0.5
 # действия настоящей мышью и клавиатурой: пока человек сам работает ими — не мешать, подождать
-HUMAN_INPUT = frozenset({"click_point", "type_text", "scroll", "press_keys"})
+HUMAN_INPUT = frozenset(
+    {"click_point", "type_text", "scroll", "press_keys", "telegram_send", "telegram_read"}
+)
+# действие из нескольких шагов: действуют и запреты его шагов (запрещено «Печатать текст» — не напишет)
+COMPOSITE = {
+    "telegram_send": ("click_point", "type_text", "press_keys"),
+    "telegram_read": ("click_point", "type_text", "press_keys"),
+}
+TG_READ_DEFAULT = 10  # telegram_read: последних сообщений по умолчанию…
+TG_READ_MAX = 30  # …и не больше
+TG_CHOICES = 5  # подходят несколько чатов — столько показать человеку
+TG_SAY = 3  # голосовая команда «что написала Аня»: столько последних сообщений собеседника — в ответ
+TG_OPEN_RETRY_S = 0.7  # шапка чата не появилась сразу — подождать столько и посмотреть ещё раз
+TG_USERNAME = re.compile(r"^@?([A-Za-z][A-Za-z0-9_]{3,31})$")
 OCR_COVERED = (
     "(Текст этого окна не распознан: поверх него окно Jarvis. Первое действие в окне выведет его вперёд — "
     "или focus_window, и в новом снимке будут строки t….)"
@@ -366,6 +380,9 @@ class AgentRun:
     vision: bool = False  # модель понимает картинки
     ask_all: bool = False  # после отказа спрашивать перед каждым действием, которое что-то меняет
     ask_once: bool = False  # это действие человек велел спрашивать всегда (разрешения инструментов)
+    quiet: bool = (
+        False  # шаги составного действия (telegram_send): не спрашивать о каждом — только рискованное
+    )
     failed_at: float = 0.0  # когда отдан ответ сорвавшегося действия: остальные действия того же хода — нет
     repeats: dict[str, tuple[str, int]] = field(default_factory=dict)  # действие → (итог, сколько раз подряд)
     over: int = 0  # вызовов после лимита шагов
@@ -384,6 +401,8 @@ class AgentRun:
     stopping: bool = False  # «Стоп»: больше ни одного действия (Codex и программы ещё могут звать)
     acting: "set[asyncio.Future[Outcome]]" = field(default_factory=set)  # идущие действия — «Стоп» обрывает
     request: str = ""  # слова человека: фраза сценария, если прогон запомнят
+    steps: list[tuple[str, dict[str, Any]]] = field(default_factory=list)  # готовые действия без модели
+    last: "Outcome | None" = None  # итог последнего действия
     recipe: list[dict[str, str]] = field(default_factory=list)  # удачные действия — шагами сценария
     replayable: bool = True  # всё, что меняло экран, сценарий повторит (нет MCP, безымянных кнопок, секретов)
     pointer: tuple[int, int] | None = None  # куда (экран) агент последний раз нажал мышью или крутил колесо
@@ -420,6 +439,7 @@ class Outcome:
     content: str  # результат для модели
     detail: str = ""  # для карточки
     extras: list[dict[str, Any]] = field(default_factory=list)  # сообщения после результатов (снимок окна)
+    summary: str = ""  # итог для человека, когда действие — вся работа (голосовая команда без модели)
 
 
 @dataclass
@@ -669,18 +689,25 @@ class Agent(BaseService):
         reply_id: str | None = None,
         speak: bool | None = None,
         request: str | None = None,
+        steps: list[tuple[str, dict[str, Any]]] | None = None,
     ) -> str:
         """Запустить агента; ход — события agent.*, итог — сообщение в чат (режим «Агент» или тот, откуда
-        позвали). request — слова человека, если задачу для агента переписали (фраза будущего сценария)."""
+        позвали). request — слова человека, если задачу для агента переписали (фраза будущего сценария).
+        steps — готовые действия без модели (голосовая команда «напиши Ане в телеграме: …»): те же проверки,
+        разрешения и карточки, итог — короткий текст последнего действия."""
         task = " ".join((task or "").split())
         if not task:
             raise UserFacingError("Опишите задачу для агента")
         if self._run is not None and not self._run.finished:
             raise UserFacingError("Агент уже работает — дождитесь окончания или нажмите «Стоп»")
-        chatgpt = self._chatgpt()
-        problem = chatgpt.problem() if chatgpt is not None else self._llm().problem()
-        if problem:
-            raise UserFacingError(problem)
+        unknown = [name for name, _ in steps or [] if name not in self._actions]
+        if unknown:
+            raise UserFacingError(f"У агента нет действия «{unknown[0]}»")
+        if not steps:
+            chatgpt = self._chatgpt()
+            problem = chatgpt.problem() if chatgpt is not None else self._llm().problem()
+            if problem:
+                raise UserFacingError(problem)
         if self.chats.get(chat_id) is None:
             chat = self.chats.create(title=chat_title(task), mode="agent")
             row = self.chats.add_message(chat["id"], "user", task)
@@ -695,7 +722,10 @@ class Agent(BaseService):
             reply_id=reply_id or new_id(),
             speak=(source == "voice") if speak is None else speak,
             request=" ".join((request or task).split()),
+            steps=list(steps or []),
         )
+        if run.steps:
+            run.replayable = False  # это и так команда: сценарием её не запоминать
         run.done = asyncio.get_running_loop().create_future()
         if self.ctx.settings.value.ai.agent_journal:
             run.journal = journal.Journal(run.id, task, run.chat_id)
@@ -799,13 +829,16 @@ class Agent(BaseService):
         status, summary, error = "error", "", ""
         plan_task: asyncio.Future[None] | None = None
         try:
-            self._set(run, "planning", "Составляю план…")
-            windows = await self._windows_text()
-            # план составляется параллельно: агент не ждёт его и сразу берётся за дело, а план появится
-            # в панели и у модели (в ответе на ближайшее действие), как только будет готов
-            plan_task = asyncio.ensure_future(self._plan_later(run, windows))
-            self._set(run, "running", "Приступаю")
-            summary = await self._loop(run, windows)
+            if run.steps:
+                summary = await self._run_steps(run)
+            else:
+                self._set(run, "planning", "Составляю план…")
+                windows = await self._windows_text()
+                # план составляется параллельно: агент не ждёт его и сразу берётся за дело, а план появится
+                # в панели и у модели (в ответе на ближайшее действие), как только будет готов
+                plan_task = asyncio.ensure_future(self._plan_later(run, windows))
+                self._set(run, "running", "Приступаю")
+                summary = await self._loop(run, windows)
             status = "done"
         except asyncio.CancelledError:
             _uncancel()
@@ -821,6 +854,26 @@ class Agent(BaseService):
         if plan_task is not None and not plan_task.done():
             plan_task.cancel()
         await self._complete(run, status, summary, error)
+
+    async def _run_steps(self, run: AgentRun) -> str:
+        """Готовые действия по очереди, до первой неудачи; итог — summary последнего действия."""
+        run.total = len(run.steps)
+        self._set(run, "running", "Приступаю")
+        outcome: Outcome | None = None
+        for i, (name, args) in enumerate(run.steps, 1):
+            run.step = i
+            call = ToolCall(new_id(), name, json.dumps(args, ensure_ascii=False))
+            run.last = None
+            content, _extras = await self._act(run, call)
+            outcome = run.last
+            if outcome is None or not outcome.ok:
+                run.outcome = "failed"
+                if outcome is not None and outcome.detail == "Отклонено":
+                    return "Не стал: вы не разрешили."
+                reason = (outcome.detail if outcome is not None else "") or content.partition("\n")[0]
+                return f"Не получилось: {reason.removeprefix('Ошибка: ')}"
+        run.outcome = "done"
+        return (outcome.summary or outcome.detail or "Готово.") if outcome is not None else "Готово."
 
     async def _plan_later(self, run: AgentRun, windows: str) -> None:
         try:
@@ -1214,6 +1267,12 @@ class Agent(BaseService):
         if name == "focus_window":
             target = run.target
             return [_step("App.Focus", target.exe or target.title)] if target is not None else None
+        if name == "telegram_send":
+            to = _arg(args, "to")
+            return [_step("Telegram.Send", f"{to}|{text}")] if to and text and "|" not in to else None
+        if name == "telegram_read":
+            chat = _arg(args, "chat")
+            return [_step("Telegram.Read", chat)] if chat else None
         if name == "run_command":
             value = _arg(args, "id") or _arg(args, "text")
             return [_step("Jarvis.Command", value)] if value else None
@@ -1360,12 +1419,14 @@ class Agent(BaseService):
         if call.name in self._actions:
             risk = AGENT_RISK.get(call.name, "act")
             choice = decision(self.ctx.settings.value.ai, f"agent.{call.name}", risk)
+            parts: tuple[str, ...] = COMPOSITE.get(call.name, ())
             if call.name == "ui_click" and _is_text_id(_arg(args, "id")):
-                # щелчок по строке t… — настоящая мышь, как click_point: действует и запрет «Щелчок мышью»
-                point = decision(
-                    self.ctx.settings.value.ai, "agent.click_point", AGENT_RISK.get("click_point", "act")
+                parts = ("click_point",)  # щелчок по строке t… — настоящая мышь: и запрет «Щелчок мышью»
+            for part in parts:
+                step_choice = decision(
+                    self.ctx.settings.value.ai, f"agent.{part}", AGENT_RISK.get(part, "act")
                 )
-                choice = max(choice, point, key=("allow", "ask", "deny").index)
+                choice = max(choice, step_choice, key=("allow", "ask", "deny").index)
             if choice == "deny":
                 return (
                     "Ошибка: это действие агенту запрещено в настройках (Jarvis AI → Инструменты и "
@@ -1423,6 +1484,7 @@ class Agent(BaseService):
             outcome, look = Outcome(False, f"Ошибка: {e}", str(e)), True
         finally:
             run.acting.discard(work)
+        run.last = outcome
         status = "ok" if outcome.ok else "error"
         if outcome.ok and call.name in self._actions and AGENT_RISK.get(call.name, "act") != "read":
             run.changed = True
@@ -1503,7 +1565,7 @@ class Agent(BaseService):
         return self.ctx.settings.value.ai.agent_confirm == "always"
 
     def _ask(self, run: AgentRun, risky: bool = False) -> bool:
-        return risky or self._always or run.ask_all or run.ask_once
+        return risky or (not run.quiet and (self._always or run.ask_all or run.ask_once))
 
     async def _perform(self, run: AgentRun, name: str, action: Any, args: dict[str, Any]) -> Outcome:
         """Действие; мышью и клавиатурой — только когда человек сам ими не работает (ждём до HUMAN_WAIT_S)."""
@@ -2679,6 +2741,206 @@ class Agent(BaseService):
         run.shot = zoomed
         return Outcome(True, "Лупа приложена картинкой.", extras=[vision.message(zoomed)])
 
+    # --- Telegram Desktop одним действием ---------------------------------------------------------------
+    async def _tg_window(self, run: AgentRun) -> WindowInfo:
+        """Окно Telegram впереди: уже впереди — оно, открыто — вперёд его, нет — запустить."""
+        fg = await self._foreground()
+        if fg is None or not tg.is_telegram(fg.exe) or fg.minimized:
+            windows = await self.ctx.run_platform(self.ctx.platform.list_windows)
+            window = next((w for w in windows if tg.is_telegram(w.exe)), None)
+            if window is None:
+                await self._launch(run, {"name": "Telegram"})
+            else:
+                await self.ctx.run_platform(self.ctx.platform.window_action, "focus", window.hwnd)
+                await self._await_front(fg)
+            fg = await self._foreground()
+        if fg is None or not tg.is_telegram(fg.exe):
+            raise UserFacingError(
+                "окно Telegram Desktop не вышло вперёд — открой его (launch_app «Telegram»)"
+            )
+        hidden = private_windows.private_reason(fg, private_windows.settings_list(self.ctx))
+        if hidden:
+            raise UserFacingError(private_windows.hidden_text(fg, hidden))
+        run.target = fg
+        return fg
+
+    async def _tg_snapshot(self, run: AgentRun) -> UiSnapshot:
+        await self._look(run)
+        if run.snapshot is None:
+            raise UserFacingError("элементы окна Telegram недоступны — сделай ui_snapshot")
+        return run.snapshot
+
+    async def _tg_click(self, run: AgentRun, element: UiElement) -> Outcome:
+        """Щелчок мышью по элементу или строке окна Telegram (чат в списке открывается только мышью)."""
+        if element.ocr:
+            return await self._click_text(run, element.id, False)
+        fg = await self._target(run, explicit=True)
+        return await self._click_screen(run, fg, element.center, element.name, "left", False, element.id)
+
+    async def _tg_find(self, run: AgentRun, search: UiElement, query: str) -> list[UiElement]:
+        """Набрать query в поле поиска чатов — строки найденного (левая колонка под полем)."""
+        await self._tg_click(run, search)
+        await self._press_keys(run, {"combo": "ctrl+a"})  # прежний запрос в поле — заменить
+        await self._type_text(run, {"text": query, "field": "поиск"})
+        snapshot = run.snapshot
+        if snapshot is None:
+            return []
+        return tg.results(snapshot, tg.search_field(snapshot) or search)
+
+    async def _tg_choose(self, run: AgentRun, names: list[str]) -> str:
+        """Подходят несколько чатов — спросить человека, какой; ответ не подошёл ни к одному — ""."""
+        options = names[:TG_CHOICES]
+        listed = ", ".join(f"«{n}»" for n in options)
+        answer = await self._question(
+            run, f"В Telegram подходят несколько чатов: {listed}. В какой написать?"
+        )
+        return tg.answer_pick(answer, options)
+
+    async def _tg_open(self, run: AgentRun, to: str) -> tuple[str, UiSnapshot]:
+        """Открыть чат to: по @username — адресом tg://, иначе поиском по имени. Вернёт имя открытого чата
+        (как в Telegram) и снимок окна; не нашёл или не уверен, что открыт нужный, — UserFacingError."""
+        await self._tg_window(run)
+        snapshot = await self._tg_snapshot(run)
+        username = TG_USERNAME.match(to) if to.startswith("@") else None
+        if to.startswith("@"):
+            if username is None:
+                raise UserFacingError(
+                    f"«{to}» — не имя пользователя Telegram (@ и 4–32 латинских букв и цифр)"
+                )
+            await self._open_url(run, {"url": f"tg://resolve?domain={username.group(1)}"})
+            snapshot = await self._tg_snapshot(run)
+            edge = tg.split_x(snapshot, tg.search_field(snapshot))
+            title = tg.chat_title(snapshot, edge)
+            if not title or tg.message_field(snapshot, edge) is None:
+                raise UserFacingError(f"чат {to} не открылся (нет такого имени или в нём нельзя писать)")
+            return title, snapshot
+        search = tg.search_field(snapshot)
+        edge = tg.split_x(snapshot, search)
+        opened = tg.pick(to, [e.name for e in tg.header(snapshot, edge)])
+        if len(opened) == 1 and (m := tg.match(to, opened[0])) is not None and m.whole and m.score >= 2:
+            return opened[0], snapshot  # нужный чат уже открыт
+        if search is None:
+            raise UserFacingError(
+                "в окне Telegram не видно поля «Поиск» над списком чатов — открой чат сам: ui_snapshot, "
+                "щелчок по полю поиска и по чату"
+            )
+        queries = list(dict.fromkeys([to, " ".join(tg.stem(w) for w in tg.norm(to).split())]))
+        rows: list[UiElement] = []
+        names: list[str] = []
+        for query in queries:  # «Ане» Telegram не найдёт — тогда основа слова: «Ан»
+            rows = await self._tg_find(run, search, query)
+            names = tg.pick(to, [r.name for r in rows])
+            if names:
+                break
+            search = tg.search_field(run.snapshot) if run.snapshot is not None else None
+            if search is None:
+                break
+        if not names:
+            raise UserFacingError(f"в Telegram не нашёл чат «{to}» — уточни имя, как оно записано в Telegram")
+        chosen = names[0] if len(names) == 1 else await self._tg_choose(run, names)
+        if not chosen:
+            raise UserFacingError(f"не понял, какой из чатов выбрать: {', '.join(names[:TG_CHOICES])}")
+        row = next(r for r in rows if r.name.strip() == chosen)
+        await self._tg_click(run, row)
+        snapshot = run.snapshot or await self._tg_snapshot(run)
+        for attempt in range(2):
+            edge = tg.split_x(snapshot, tg.search_field(snapshot))
+            if tg.chat_open(snapshot, edge, chosen) is not None:
+                return chosen, snapshot
+            if attempt == 0:
+                await asyncio.sleep(TG_OPEN_RETRY_S)
+                snapshot = await self._tg_snapshot(run)
+        raise UserFacingError(f"не вижу, что открылся чат «{chosen}» — ничего не набрал")
+
+    async def _telegram_send(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
+        to, text = _arg(args, "to"), str(args.get("text") or "").strip()
+        if not to or not text:
+            return Outcome(False, "Ошибка: нужно, кому (to) и что (text) написать")
+        run.quiet = True  # промежуточные шаги — без вопросов: спросим перед отправкой, с текстом
+        try:
+            chat, snapshot = await self._tg_open(run, to)
+            edge = tg.split_x(snapshot, tg.search_field(snapshot))
+            box = tg.message_field(snapshot, edge)
+            left = tg.draft(box)
+            if left:
+                raise UserFacingError(
+                    f"в поле сообщения чата «{chat}» уже есть текст «{one_line(left, 60)}» — его набрал "
+                    "человек, не трогаю. Спроси, что с ним сделать"
+                )
+            if box is not None:
+                await self._tg_click(run, box)
+            await self._type_text(run, {"text": text, "field": "сообщение"})
+            snapshot = run.snapshot or await self._tg_snapshot(run)
+            edge = tg.split_x(snapshot, tg.search_field(snapshot))
+            if tg.chat_open(snapshot, edge, chat) is None and not to.startswith("@"):
+                raise UserFacingError(f"после набора текста не видно, что открыт чат «{chat}» — не отправляю")
+            box = tg.message_field(snapshot, edge)
+            shown = tg.typed_shown(snapshot, edge, box, text)
+            if shown is False or (shown is None and (box is None or box.ocr)):
+                what = "в поле сообщения другой текст" if shown is False else "не вижу набранного текста"
+                raise UserFacingError(f"{what} в чате «{chat}» — не отправляю; посмотри окно (ui_snapshot)")
+            before = tg.messages(snapshot, edge, box)
+            try:
+                await self._approve(
+                    run, f"Отправить в Telegram «{chat}»?", f"Будет отправлено: «{one_line(text, 160)}»"
+                )
+            except Denied:
+                if shown:  # набранное — не черновик человека: стереть, чтобы не ушло потом случайно
+                    with contextlib.suppress(PlatformError):
+                        await self.ctx.run_platform(self.ctx.platform.press_keys, "ctrl+a")
+                        await self.ctx.run_platform(self.ctx.platform.press_keys, "backspace")
+                run.unsent = []
+                raise
+            run.unsent = []
+            sent = await self._press_keys(run, {"combo": "enter"})
+        finally:
+            run.quiet = False
+        snapshot = run.snapshot or snapshot
+        edge = tg.split_x(snapshot, tg.search_field(snapshot))
+        after = tg.messages(snapshot, edge, tg.message_field(snapshot, edge))
+        if tg.mine_count(after, text) > tg.mine_count(before, text):
+            head = f"Отправлено в Telegram «{chat}»: «{one_line(text, 120)}» — сообщение видно в чате."
+            human = f"Отправил в Telegram «{chat}»: «{one_line(text, 120)}»."
+        else:
+            head = (
+                f"Отправка в Telegram «{chat}» нажата, но сообщения в чате не видно — проверь по снимку; "
+                "НЕ отправляй его ещё раз, пока не убедишься, что оно не ушло."
+            )
+            human = f"Нажал «Отправить» в Telegram «{chat}», но сообщения в чате не вижу — проверьте."
+        rest = sent.content.partition("\n\n")[2]
+        return Outcome(True, f"{head}\n\n{rest}", f"{chat}: «{one_line(text, 60)}»", sent.extras, human)
+
+    async def _telegram_read(self, run: AgentRun, args: dict[str, Any]) -> Outcome:
+        chat_name = _arg(args, "chat")
+        if not chat_name:
+            return Outcome(False, "Ошибка: нужно имя чата (chat)")
+        count = int(max(1, min(_num(args, "count") or TG_READ_DEFAULT, TG_READ_MAX)))
+        if self._ask(run):
+            await self._approve(run, f"Открыть в Telegram чат «{chat_name}» и прочитать сообщения?")
+        run.quiet = True
+        try:
+            chat, snapshot = await self._tg_open(run, chat_name)
+        finally:
+            run.quiet = False
+        text, extras = await self._look(run)  # снимок уже открытого чата — модели вместе с сообщениями
+        snapshot = run.snapshot or snapshot
+        edge = tg.split_x(snapshot, tg.search_field(snapshot))
+        lines = tg.messages(snapshot, edge, tg.message_field(snapshot, edge))[-count:]
+        if not lines:
+            body = "сообщений в окне не видно (чат пуст или ещё грузится — посмотри снимок)"
+            human = f"В чате «{chat}» сообщений не видно."
+        else:
+            body = "\n".join(f"{'→' if line.mine else '←'} {line.text}" for line in lines)
+            theirs = [line.text for line in lines if not line.mine][-TG_SAY:]
+            if theirs:
+                human = f"«{chat}» в Telegram: " + " … ".join(theirs)
+            else:  # «Избранное» или ответа ещё нет — последние свои
+                mine = [line.text for line in lines][-TG_SAY:]
+                human = f"В чате «{chat}» последние сообщения ваши: " + " … ".join(mine)
+        head = f"Чат Telegram «{chat}» открыт. Видимые сообщения, сверху вниз (← собеседник, → ваше):"
+        content = f"{head}\n{untrusted('Сообщения Telegram', body)}\n\n{text}"
+        return Outcome(True, content, f"{chat}: {len(lines)} сообщ.", extras, human)
+
     def _make_actions(self) -> list[Action]:
         def name_of(run: AgentRun, args: dict[str, Any]) -> str:
             return self._element_name(run, _arg(args, "id"))
@@ -2843,6 +3105,31 @@ class Agent(BaseService):
                 lambda r, a: "Смотрю ближе",
             ),
             Action(
+                "telegram_send",
+                "Написать в Telegram Desktop одним действием: Jarvis сам откроет Telegram, найдёт чат по "
+                "имени (или @username), проверит по шапке, что открыт именно он, наберёт текст и отправит — "
+                "с разрешения человека, показав текст. Подходят несколько чатов — сам спросит, какой. Имя — "
+                "как в Telegram или как сказал человек («Аня», «Ане», «Мама»).",
+                {"to": _s("Кому: имя чата или @username"), "text": _s("Текст сообщения дословно")},
+                ["to", "text"],
+                self._telegram_send,
+                lambda r, a: f"Пишу в Telegram «{_arg(a, 'to')}»",
+                lambda r, a: f"Написать в Telegram «{_arg(a, 'to')}»",
+            ),
+            Action(
+                "telegram_read",
+                "Открыть чат в Telegram Desktop по имени (или @username) и прочитать видимые сообщения — "
+                "одним действием, без щелчков по окну.",
+                {
+                    "chat": _s("Имя чата или @username"),
+                    "count": {"type": "integer", "description": "Сколько последних сообщений (до 30)"},
+                },
+                ["chat"],
+                self._telegram_read,
+                lambda r, a: f"Читаю Telegram «{_arg(a, 'chat')}»",
+                lambda r, a: f"Прочитать Telegram «{_arg(a, 'chat')}»",
+            ),
+            Action(
                 "ask_user",
                 "Спросить пользователя и дождаться ответа: одним коротким вопросом, когда неясно, что "
                 "именно, кому или какой из вариантов. Голосом он ответит сразу, без «Джарвис»; в чате — "
@@ -2884,19 +3171,7 @@ class Agent(BaseService):
         question = _arg(args, "question").strip()
         if not question:
             return Outcome(False, "Ошибка: нет вопроса")
-        run.question = asyncio.get_running_loop().create_future()
-        previous = run.text
-        self._set(run, "waiting", f"Жду ответа: {one_line(question, 80)}")
-        try:
-            row = self.chats.add_message(run.chat_id, "assistant", question, meta={"turn": run.turn_id})
-            self.ctx.bus.publish("chat.message", {"chat_id": run.chat_id, "message": ui_message(row)})
-        except Exception:
-            log.exception("вопрос агента не записан в чат")
-        try:
-            answer = await self._answer(run, question)
-        finally:
-            run.question = None
-        self._set(run, "running", previous)  # не в finally: «Стоп» посреди ожидания — сразу «Остановлено»
+        answer = await self._question(run, question)
         if not answer:
             content = (
                 "Пользователь не ответил. Реши сам, если это безопасно, или закончи (finish, status=partial) "
@@ -2911,6 +3186,23 @@ class Agent(BaseService):
         return Outcome(
             True, content, one_line(answer, 60) if answer else "Без ответа", seen[1] if seen else []
         )
+
+    async def _question(self, run: AgentRun, question: str) -> str:
+        """Вопрос в чат (и вслух, если задачу дали голосом) — и ответ человека; не ответил — ""."""
+        run.question = asyncio.get_running_loop().create_future()
+        previous = run.text
+        self._set(run, "waiting", f"Жду ответа: {one_line(question, 80)}")
+        try:
+            row = self.chats.add_message(run.chat_id, "assistant", question, meta={"turn": run.turn_id})
+            self.ctx.bus.publish("chat.message", {"chat_id": run.chat_id, "message": ui_message(row)})
+        except Exception:
+            log.exception("вопрос агента не записан в чат")
+        try:
+            answer = await self._answer(run, question)
+        finally:
+            run.question = None
+        self._set(run, "running", previous)  # не в finally: «Стоп» посреди ожидания — сразу «Остановлено»
+        return answer
 
     async def _answer(self, run: AgentRun, question: str) -> str:
         assert run.question is not None

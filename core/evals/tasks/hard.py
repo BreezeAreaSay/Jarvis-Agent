@@ -341,6 +341,29 @@ TASKS = [
         plan=["Найти чат Ани", "Уточнить, какой Ане", "Написать и отправить"],
     ),
     Task(
+        "ambiguous_anya_action",
+        "Две «Ани»: спросить (действие)",
+        "hard",
+        "telegram_send сам спросил, какой из двух Ань писать, и отправил той, что назвал человек",
+        "Напиши Ане в Telegram: «Перезвоню позже»",
+        _anya_setup,
+        _anya_check,
+        lambda d: [
+            call("telegram_send", to="Ане", text="Перезвоню позже"),
+            finish("Отправил Ане Смирновой: «Перезвоню позже»."),
+        ],
+        apps=frozenset({"Telegram.exe"}),
+        mistakes={
+            "guessed": (
+                lambda d: [call("telegram_send", to="Аня (работа)", text="Перезвоню позже"), finish()],
+                "не спросил",
+            )
+        },
+        answer=lambda question, d: "Смирновой",
+        expects_question=True,
+        plan=["Написать Ане в Telegram", "Уточнить, какой Ане"],
+    ),
+    Task(
         "popup_window",
         "Всплывшее окно посреди дела",
         "hard",

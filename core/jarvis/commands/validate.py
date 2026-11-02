@@ -91,6 +91,10 @@ def action_error(action: Action, *, user: bool) -> str | None:
         return f"«{spec.title}»: координаты пишутся как «960 540»"
     if t == "Ui.Type" and "|" not in value:
         return f"«{spec.title}»: нужно «поле | текст», например «Кому | ivan@example.com»"
+    if t == "Telegram.Send":
+        who, sep, text = value.partition("|")
+        if not sep or not who.strip() or not text.strip():
+            return f"«{spec.title}»: нужно «кому | текст», например «Аня | Буду в семь»"
     if t == "Jarvis.Reminder" and "|" not in value:
         return f"«{spec.title}»: нужно «через | текст», например «10m | Позвонить маме»"
     if t == "Jarvis.ReminderAt":

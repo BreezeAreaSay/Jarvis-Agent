@@ -176,6 +176,27 @@ ACTIONS: tuple[ActionType, ...] = (
         step="Ввести текст",
         required=True,
     ),
+    _a(
+        "Telegram.Send",
+        "Написать в Telegram",
+        "Программы",
+        "telegram",
+        Param("text", "Кому | текст", "Аня | Буду в семь"),
+        "Jarvis откроет Telegram Desktop, найдёт чат по имени (или @username), проверит, что открыт он, и "
+        "отправит текст — после вашего подтверждения. Подходят несколько чатов — спросит, какой.",
+        step="Написать в Telegram",
+        required=True,
+    ),
+    _a(
+        "Telegram.Read",
+        "Прочитать чат Telegram",
+        "Программы",
+        "telegram",
+        Param("text", "Чат", "Аня"),
+        "Открыть чат в Telegram Desktop и прочитать последние сообщения собеседника (голосом — до трёх).",
+        step="Прочитать Telegram",
+        required=True,
+    ),
     # клавиатура
     _a(
         "Keys.Press",

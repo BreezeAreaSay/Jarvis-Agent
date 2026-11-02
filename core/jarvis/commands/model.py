@@ -111,6 +111,8 @@ class Entry:
     handler: Handler | None = None
     exclude: tuple[str, ...] = ()  # начала слов, при которых команда не подходит («завтр» для погоды)
     no_question: bool = False  # {text} с вопроса («что у меня», «во сколько») — не команда, а вопрос ИИ
+    # {query} — имя («напиши {query} в телеграме …»): с этих слов или длиннее MAX_NAME_WORDS — не команда
+    not_name: frozenset[str] = frozenset()
 
     @property
     def id(self) -> str:

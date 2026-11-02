@@ -128,7 +128,15 @@ class Commands(BaseService):
                 entries[e.id] = e
 
             for item in builtin_commands():
-                add(entry(item.command, "builtin", exclude=item.exclude, no_question=item.no_question))
+                add(
+                    entry(
+                        item.command,
+                        "builtin",
+                        exclude=item.exclude,
+                        no_question=item.no_question,
+                        not_name=item.not_name,
+                    )
+                )
             for pack_id in settings.packs:
                 pack = self.packs.get(pack_id)
                 if pack is None:
@@ -657,5 +665,6 @@ INFO_ACTIONS = frozenset(
         "Jarvis.Reminders",
         "Jarvis.Briefing",
         "Speak",
+        "Telegram.Read",  # «что написала Аня в телеграме?» — открыть её чат и прочитать
     }
 )

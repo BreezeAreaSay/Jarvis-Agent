@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from jarvis import paths
-from jarvis.ai.format import human_time, one_line, plural
+from jarvis.ai.format import human_time, one_line, plural, speech_text
 from jarvis.ai.uia import find_by_name
 from jarvis.commands import keys as keyops
 from jarvis.commands import numbers
@@ -210,6 +210,24 @@ def _reminder_text(text: str) -> str:
     return " ".join(words)
 
 
+# «напиши Ане в телеграме что буду в семь»: «что», «сообщение», «текст» перед словами сообщения — не они
+_MESSAGE_LEAD = ("что", "чтобы", "сообщение", "текст")
+
+
+def _chat_name(text: str) -> str:
+    """«ане » → «Ане»: имя чата, как его сказали (падеж сравнит сам агент), с большой буквы."""
+    name = " ".join(text.split()).strip(" ,.:;«»\"'")
+    return name[:1].upper() + name[1:] if name and not name.startswith("@") else name
+
+
+def _message_text(text: str) -> str:
+    words = text.strip(" ,:;«»\"'").split()
+    while len(words) > 1 and words[0].casefold() in _MESSAGE_LEAD:
+        words.pop(0)
+    message = " ".join(words)
+    return message[:1].upper() + message[1:]
+
+
 def substitute(value: str, slots: dict[str, Any]) -> str:
     """Подставить слоты: «{number}» → «50». Нужного слота нет — UserFacingError с подсказкой."""
 
@@ -335,6 +353,8 @@ class Executor:
             "Jarvis.Briefing": self._briefing,
             "Ui.Click": self._ui_click,
             "Ui.Type": self._ui_type,
+            "Telegram.Send": self._telegram_send,
+            "Telegram.Read": self._telegram_read,
             "Mouse.MoveInWindow": self._mouse_in_window,
         }
 
@@ -694,6 +714,34 @@ class Executor:
         ui, element = await self._ui_element(name.strip(), st)
         await self._platform(ui.set_text, element.id, text.strip())
         await asyncio.sleep(UI_SETTLE_S)
+
+    # --- Telegram Desktop: действия агента без модели ----------------------------------------------------
+    async def _telegram_send(self, value: str, st: RunState) -> None:
+        """«Аня | буду в семь» — агент сам найдёт чат, проверит и отправит (с подтверждением)."""
+        who, sep, text = value.partition("|")
+        who, text = _chat_name(who), _message_text(text)
+        if not sep or not who or not text:
+            raise UserFacingError("Не понял, кому и что написать в Telegram")
+        task = f"Написать в Telegram «{who}»: «{one_line(text, 80)}»"
+        await self._agent_steps(task, [("telegram_send", {"to": who, "text": text})], st)
+
+    async def _telegram_read(self, value: str, st: RunState) -> None:
+        who = _chat_name(value)
+        if not who:
+            raise UserFacingError("Не понял, какой чат Telegram прочитать")
+        await self._agent_steps(f"Прочитать в Telegram чат «{who}»", [("telegram_read", {"chat": who})], st)
+
+    async def _agent_steps(self, task: str, steps: list[tuple[str, dict[str, Any]]], st: RunState) -> None:
+        """Готовые действия агента без модели: те же проверки и подтверждения, что у агента; итог — ответом
+        команды (не получилось — ошибкой)."""
+        agent = getattr(self.ctx, "agent", None)
+        if agent is None or not callable(getattr(agent, "run", None)):
+            raise UserFacingError("Агент недоступен")
+        run_id = await agent.run(task, st.source, speak=False, steps=steps)
+        result = await agent.wait(run_id)
+        if result.error or result.outcome != "done":
+            raise UserFacingError(result.error or result.summary or "Не получилось")
+        st.info(result.summary, speech_text(result.summary))
 
     @staticmethod
     def _handoff(st: RunState, message: str) -> NeedsAgent:

@@ -13,6 +13,7 @@ class Builtin:
     command: Command
     exclude: tuple[str, ...] = ()  # начала слов, при которых команда не подходит
     no_question: bool = False  # {text}, начатый вопросом («что у меня завтра»), — не команда
+    not_name: frozenset[str] = frozenset()  # {query} — имя: с этих слов («в», «мне», «пост») — не команда
 
 
 def variants(*patterns: str) -> list[str]:
@@ -43,6 +44,7 @@ def cmd(
     optional: tuple[str, ...] = (),
     exclude: tuple[str, ...] = (),
     no_question: bool = False,
+    not_name: frozenset[str] = frozenset(),
 ) -> Builtin:
     """Встроенная команда: id builtin.<id_>, фразы — уже раскрытые варианты."""
     return Builtin(
@@ -60,6 +62,7 @@ def cmd(
         ),
         exclude,
         no_question,
+        not_name,
     )
 
 

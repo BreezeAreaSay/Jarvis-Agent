@@ -60,6 +60,20 @@ def _tg_not_sent(d: Desktop) -> list:
     return [click("Поиск"), type_text("Мама"), keys("enter"), type_text("Буду в 7"), finish("Отправил.")]
 
 
+# --- 1б. Telegram одним действием: «Ане Смирновой» (падеж), прочитать, что написал Папа -----------------
+def _tg_action_check(d: Desktop, trace: Trace) -> list[str]:
+    problems: list[str] = []
+    expect(problems, sent_ok(d, "Аня Смирнова", "Буду в семь"), "Ане Смирновой не отправлено «Буду в семь»")
+    expect(problems, len(d.telegram.sent().get("Аня Смирнова", [])) <= 1, "отправлено несколько раз")
+    return problems + sent_elsewhere(d, "Аня Смирнова")
+
+
+def _tg_read_check(d: Desktop, trace: Trace) -> list[str]:
+    problems: list[str] = []
+    expect(problems, "сервис" in norm(trace.summary), "в ответе нет того, что написал Папа")
+    return problems + sent_elsewhere(d)
+
+
 # --- 2. Включить музыку -------------------------------------------------------------------------------------
 YANDEX_MIX = {
     "Моя волна": [("Тёплый вечер", "Ночные снайперы"), ("Северный ветер", "Кино")],
@@ -267,6 +281,43 @@ TASKS = [
             "not_sent": (_tg_not_sent, "Маме не отправлено"),
         },
         plan=["Открыть чат «Мама»", "Написать «Буду в 7»", "Отправить"],
+    ),
+    Task(
+        "tg_action_send",
+        "Telegram одним действием",
+        "everyday",
+        "сообщение ушло в чат «Аня Смирнова» (в просьбе — «Ане Смирновой») и только туда; с разрешения",
+        "Напиши Ане Смирновой в телеграме: «Буду в семь»",
+        _tg_setup,
+        _tg_action_check,
+        lambda d: [
+            call("telegram_send", to="Ане Смирновой", text="Буду в семь"),
+            finish("Отправил Ане Смирновой в Telegram: «Буду в семь»."),
+        ],
+        apps=frozenset({"Telegram.exe"}),
+        mistakes={
+            "wrong_chat": (
+                lambda d: [call("telegram_send", to="Папе", text="Буду в семь"), finish()],
+                "Ане Смирновой не отправлено",
+            ),
+        },
+        plan=["Написать Ане Смирновой в Telegram", "Проверить, что ушло"],
+    ),
+    Task(
+        "tg_action_read",
+        "Telegram: прочитать чат",
+        "everyday",
+        "в ответе — что написал Папа («Машину забрал из сервиса»), ничего не отправлено",
+        "Что мне написал папа в телеграме?",
+        _tg_setup,
+        _tg_read_check,
+        lambda d: [
+            call("telegram_read", chat="папа"),
+            finish("Папа написал: «Машину забрал из сервиса»."),
+        ],
+        apps=frozenset({"Telegram.exe"}),
+        mistakes={"not_read": (lambda d: [finish("Папа ничего не писал.")], "что написал Папа")},
+        plan=["Открыть чат с папой", "Прочитать последние сообщения"],
     ),
     Task(
         "music_play",

@@ -148,6 +148,15 @@ def compile_template(phrase: str) -> Template | None:
     return Template(text, tuple(tokens), slots, sum(len(w) for w in words), words)
 
 
+MAX_NAME_WORDS = 3  # «Ане Смирновой», «Маме», «Работа проект»
+
+
+def _a_name(text: str, not_name: frozenset[str]) -> bool:
+    """Слот {query} похож на имя: не длиннее MAX_NAME_WORDS слов и не начат словом из not_name."""
+    words = text.split()
+    return 0 < len(words) <= MAX_NAME_WORDS and words[0] not in not_name
+
+
 class Index:
     """Подготовленные шаблоны включённых команд: строки для rapidfuzz и шаблоны со слотами по первому
     слову."""
@@ -315,6 +324,8 @@ class Matcher:
             if entry.exclude and any(w.startswith(ex) for w in words for ex in entry.exclude):
                 continue
             if entry.no_question and _asks(str(cand.slots.get("text") or "")):
+                continue
+            if entry.not_name and not _a_name(str(cand.slots.get("query") or ""), entry.not_name):
                 continue
             limit = need if cand.score < 100 else 0.0
             if long_phrase and not cand.free_slot and cand.score < 100:

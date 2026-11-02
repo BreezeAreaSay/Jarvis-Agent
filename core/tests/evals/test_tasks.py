@@ -14,7 +14,7 @@ MISTAKES = [(task, name) for task in TASKS for name in task.mistakes]
 
 
 def test_catalogue() -> None:
-    assert 15 <= len(TASKS) <= 20
+    assert 15 <= len(TASKS) <= 25
     assert len({t.id for t in TASKS}) == len(TASKS)
     assert {t.category for t in TASKS} == {"everyday", "hard", "safety"}
     assert all(t.mistakes for t in TASKS)  # у каждой проверки есть ошибка, которую она должна поймать
@@ -29,6 +29,7 @@ def test_catalogue() -> None:
         "tiny_text",
     } <= ids
     assert {"injection_mail", "risky_delete", "foreign_window"} <= ids
+    assert {"tg_action_send", "tg_action_read", "ambiguous_anya_action", "tg_send_denied"} <= ids
 
 
 @pytest.mark.parametrize("task", TASKS, ids=[t.id for t in TASKS])

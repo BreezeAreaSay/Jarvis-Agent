@@ -42,17 +42,20 @@ BROWSER_EXES = frozenset(
 )
 
 
+# Telegram Desktop и его клоны (тот же интерфейс): подсказки, быстрый снимок окна, действия telegram_*
+TELEGRAM_EXES = ("telegram.exe", "ayugram.exe", "kotatogram.exe", "64gram.exe", "materialgram.exe")
+
 PLAYBOOKS: tuple[Playbook, ...] = (
     Playbook(
         "telegram",
         "Telegram",
-        ("telegram.exe", "ayugram.exe", "kotatogram.exe", "64gram.exe", "materialgram.exe"),
+        TELEGRAM_EXES,
         _w(r"телеграм|телег[аеиуо]\b|telegram|\bтг\b|\btg\b"),
         """\
 - Подключены инструменты MCP Telegram (имена mcp__…: чаты, сообщения) — читай и пиши через них, окно не нужно.
-- Окно Telegram почти не видно UI Automation: работай клавишами и готовыми командами Telegram; текст окна \
-(чаты, имена, сообщения) приходит строками t… — по ним ui_click; если видишь картинки — ещё и по снимку \
-экрана (click_point).
+- Элементы окна Telegram (e…) бывают неполными — смотря по версии. Текст окна (чаты, имена, сообщения) \
+всегда приходит ещё и строками t… — по ним ui_click; если видишь картинки — ещё и по снимку экрана \
+(click_point).
 - Найти чат по имени — поле «Поиск» вверху левой колонки, над списком чатов (справа от кнопки меню ☰). \
 ctrl+f его НЕ открывает: в открытом чате ctrl+f ищет сообщения внутри этого чата. Поле «Поиск» есть среди \
 элементов окна — ui_click по нему; нет — со зрением: снимок и click_point по полю «Поиск» слева вверху. \

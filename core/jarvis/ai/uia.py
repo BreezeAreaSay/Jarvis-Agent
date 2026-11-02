@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from jarvis.ai.format import one_line
-from jarvis.ai.playbooks import BROWSER_EXES
+from jarvis.ai.playbooks import BROWSER_EXES, TELEGRAM_EXES
 from jarvis.platform.base import Platform, PlatformError
 
 log = logging.getLogger(__name__)
@@ -33,6 +33,9 @@ PAGE_TEXT_LIMIT = 2500  # символов текста видимой част�
 _WEB_TRIES = 3  # страница пустая — Chrome ещё строит её дерево для UI Automation: снимок ещё раз
 _WEB_RETRY_S = 0.4
 _TREE_SCOPE_DESCENDANTS = 4
+# окна, которые снимаются одним запросом UI Automation, как браузер: обход дерева по узлу в Telegram (Qt) —
+# 3–4,6 с на снимок (Windows 11, 150 элементов), одним запросом — доли секунды
+FAST_TREE_EXES = frozenset(TELEGRAM_EXES)
 _OBJID_CLIENT = -4
 _CHROME_PAGE_CLASS = "Chrome_RenderWidgetHostHWND"
 
@@ -206,6 +209,17 @@ def find_by_name(elements: list[UiElement], name: str) -> UiElement | None:
     scored = [(fuzz.ratio(want, _plain(e.name)), e) for e in named]
     best = max(scored, key=lambda item: item[0], default=None)
     return best[1] if best is not None and best[0] >= 85 else None
+
+
+def choose(found: list[tuple[Any, UiElement]], limit: int) -> tuple[list[tuple[Any, UiElement]], bool]:
+    """Как у обхода дерева: сначала элементы управления (до limit), на остальное место — текст; порядок —
+    как в дереве. Вернёт (выбранное, обрезано ли)."""
+    interactive = [(i, pair) for i, pair in enumerate(found) if pair[1].kind != "Text"]
+    texts = [(i, pair) for i, pair in enumerate(found) if pair[1].kind == "Text"]
+    chosen = interactive[:limit]
+    chosen += texts[: max(0, limit - len(chosen))]
+    chosen.sort(key=lambda item: item[0])
+    return [pair for _i, pair in chosen], len(interactive) > limit
 
 
 def format_snapshot(snapshot: UiSnapshot, to_image: ToImage | None = None, coords: str = "") -> str:
@@ -405,6 +419,14 @@ class WindowsUi:
                 snap = self._keep(chosen, window, app, cut, hwnd, pid, frame)
                 snap.page, snap.page_text = page, text
                 return snap
+        if app.casefold() in FAST_TREE_EXES:
+            try:
+                condition, cache, kinds, value_prop = self._query(auto)
+                chosen, cut = choose(self._find_all(top.Element, condition, cache, kinds, value_prop), limit)
+            except Exception:
+                log.info("быстрый снимок окна %s не получился — обхожу дерево", app, exc_info=True)
+            else:
+                return self._keep(chosen, window, app, cut, hwnd, pid, frame)
         found: list[
             tuple[int, Any, UiElement, bool]
         ] = []  # (порядок в дереве, элемент UIA, описание, текст?)
@@ -480,6 +502,23 @@ class WindowsUi:
         свойствами. Обход дерева по узлу (вызов в процесс браузера на каждое свойство) на тяжёлой странице не
         успевает дойти до её содержимого. Страница ещё пустая — Chrome строит её дерево, когда его об этом
         спросят: разбудить и снять ещё раз."""
+        condition, cache, kinds, value_prop = self._query(auto)
+        result: tuple[list[tuple[Any, UiElement]], bool, str, str] = ([], False, "", "")
+        for attempt in range(_WEB_TRIES):
+            found = self._find_all(top.Element, condition, cache, kinds, value_prop)
+            result = split_page(found, frame, limit)
+            if result[3] or any(e.page and e.kind != "Document" for _, e in result[0]):
+                break
+            if attempt + 1 < _WEB_TRIES:
+                if attempt == 0:
+                    self._wake(top)
+                time.sleep(_WEB_RETRY_S)
+        return result
+
+    @staticmethod
+    def _query(auto: Any) -> tuple[Any, Any, dict[int, str], int]:
+        """Запрос «все видимые элементы нужных типов со свойствами» для FindAllBuildCache: (условие, кэш,
+        тип UIA → вид элемента, id свойства значения)."""
         from uiautomation import uiautomation as core  # type: ignore[import-not-found]  # клиент — не в пакете
 
         uia = core._AutomationClient.instance().IUIAutomation
@@ -503,17 +542,7 @@ class WindowsUi:
             prop.ValueValueProperty,
         ):
             cache.AddProperty(prop_id)
-        result: tuple[list[tuple[Any, UiElement]], bool, str, str] = ([], False, "", "")
-        for attempt in range(_WEB_TRIES):
-            found = self._find_all(top.Element, condition, cache, kinds, prop.ValueValueProperty)
-            result = split_page(found, frame, limit)
-            if result[3] or any(e.page and e.kind != "Document" for _, e in result[0]):
-                break
-            if attempt + 1 < _WEB_TRIES:
-                if attempt == 0:
-                    self._wake(top)
-                time.sleep(_WEB_RETRY_S)
-        return result
+        return condition, cache, kinds, prop.ValueValueProperty
 
     @staticmethod
     def _find_all(

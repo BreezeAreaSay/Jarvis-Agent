@@ -250,3 +250,48 @@ def test_windows_browser_snapshot_in_one_request_and_click(monkeypatch: Any) -> 
     assert snap.elements[1].value == "youtube.com/results"
     # нажатие по ссылке страницы: элемент из быстрого снимка обёрнут для шаблонов UI Automation
     assert ui.click("e4") == "нажато" and invoked == ["Смешные котики 2026"]
+
+
+def test_telegram_window_snapshot_in_one_request(monkeypatch: Any) -> None:
+    """Telegram (Qt): обход дерева по узлу — 3–4,6 с на Windows 11; одним запросом, как у браузера."""
+    import sys
+    import types
+
+    from jarvis.ai import uia
+
+    nodes = [
+        _Node("Поиск", "Edit", (60, 40, 300, 70)),
+        _Node("Аня", "ListItem", (0, 90, 320, 150)),
+        _Node("Буду в 7", "Text", (80, 120, 300, 140)),
+        _Node("Написать сообщение…", "Edit", (340, 840, 1260, 880)),
+    ]
+    window, invoked = _Window([nodes]), []
+    auto = _fake_uiautomation(window, invoked)
+    walked: list[Any] = []
+    auto.WalkControl = lambda *a, **k: walked.append(a) or iter(())  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "uiautomation", auto)
+    monkeypatch.setitem(sys.modules, "uiautomation.uiautomation", auto.uiautomation)
+    monkeypatch.setattr("psutil.Process", lambda pid: types.SimpleNamespace(name=lambda: "Telegram.exe"))
+    snap = uia.WindowsUi(object()).snapshot(hwnd=777)  # type: ignore[arg-type]
+    assert len(window.asked) == 1 and walked == []  # один запрос, без обхода дерева
+    assert [(e.id, e.kind, e.name) for e in snap.elements] == [
+        ("e1", "Edit", "Поиск"),
+        ("e2", "ListItem", "Аня"),
+        ("e3", "Text", "Буду в 7"),
+        ("e4", "Edit", "Написать сообщение…"),
+    ]
+    assert snap.app == "Telegram.exe" and not snap.page
+
+
+def test_choose_keeps_controls_first_and_tree_order() -> None:
+    from jarvis.ai.uia import choose
+
+    found = [
+        (n, UiElement("", n, k, (0, i * 10, 10, i * 10 + 5)))
+        for i, (n, k) in enumerate(
+            [("a", "Text"), ("b", "Button"), ("c", "Text"), ("d", "Edit"), ("e", "Text")]
+        )
+    ]
+    chosen, cut = choose(found, 3)
+    assert [e.name for _n, e in chosen] == ["a", "b", "d"] and not cut  # две кнопки и первый текст по порядку
+    assert choose(found, 1)[1] is True  # кнопок больше, чем места

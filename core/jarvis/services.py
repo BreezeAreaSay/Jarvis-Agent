@@ -55,6 +55,7 @@ class MatchedPart:
 class CommandMatch:
     text: str  # нормализованная фраза целиком
     parts: list[MatchedPart]  # несколько — «сверни все окна и включи музыку»
+    said: str = ""  # фраза, как её сказали (регистр, «ё», знаки) — исполнителю слотом «_said»
 
     @property
     def score(self) -> float:

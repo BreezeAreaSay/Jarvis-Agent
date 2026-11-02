@@ -6,28 +6,37 @@ UI Automation видит больше или меньше, поэтому всё
 поиском и списком чатов, справа открытый чат — шапка с именем вверху, поле сообщения внизу.
 
 Имена сравниваются без регистра, «ё», знаков и похожих латинских букв. «Ане», «Маме», «Ивану» — то же, что
-«Аня», «Мама», «Иван»: у слов сравниваются основы без падежного окончания. Подходят несколько чатов —
-выбирает человек (pick вернёт их все).
+«Аня», «Мама», «Иван»: у слов сравниваются основы без падежного окончания. Сам выбирается только чат, имя
+которого названо целиком; часть имени или несколько подходящих — выбирает человек. Шапка открытого чата —
+только полоса на высоте поля поиска (ниже — уже сообщения: имя отправителя в группе — не шапка), и имя в ней
+должно совпасть целиком.
 """
 
 import re
 from dataclasses import dataclass
 
-from rapidfuzz import fuzz
-
 from jarvis.ai.ocr import spellings
 from jarvis.ai.playbooks import TELEGRAM_EXES
 from jarvis.ai.uia import UiElement, UiSnapshot
+from jarvis.confirm import parse_yes_no
 
 SEARCH_NAMES = frozenset({"поиск", "search"})  # поле поиска чатов («Поиск по чату» — другое)
-MESSAGE_FIELD = re.compile(
-    r"написать сообщение|сообщени|write a message|message|комментар|comment|broadcast|трансляц", re.I
+# подсказка пустого поля сообщения (вся строка, после norm): «Написать сообщение…», «Write a message…»
+PLACEHOLDER = re.compile(
+    r"(написать |оставить |)(сообщение|комментарий)|(write|leave) a (message|comment)|message|comment|"
+    r"(silent |)broadcast|трансляция|(тихая |)публикация"
 )
-HEADER_ZONE = 140  # шапка чата — столько точек от верха окна (с заголовком окна)…
-HEADER_SHARE = 0.15  # …или такая доля высоты окна, что больше
+# заголовки разделов результатов поиска: ниже — не чаты человека, а чужие каналы и найденные сообщения
+SECTIONS = frozenset(
+    {"глобальный поиск", "global search", "результаты глобального поиска", "global search results",
+     "сообщения", "messages", "найденные сообщения", "публикации", "posts"}
+)  # fmt: skip
+HEADER_SLACK = 16  # шапка чата — до низа поля поиска и ещё столько точек…
+HEADER_NO_SEARCH = 100  # …а без поля поиска — столько от верха окна
 FOOTER_SHARE = 0.2  # поле сообщения — в нижней части окна
+FIELD_SLACK = 8  # строка «в поле» — центр внутри прямоугольника поля с таким запасом
 LEFT_SHARE = 0.38  # поле поиска не найдено — левая колонка не шире этой доли окна
-SAME_TEXT = 85  # похожесть строк (rapidfuzz), при которой распознанное считается тем же текстом
+SEARCH_ZONE = 140  # распознанная надпись «Поиск» — не ниже стольких точек от верха окна (или четверти)
 ORDINALS = ("перв", "втор", "трет", "четв", "пят")  # «второй», «третья» — номер варианта
 # окончания имён и прилагательных — сначала длинные: «Избранному», «Смирновой», «Дмитрию», «Марии», «Ане»
 _ENDINGS = (
@@ -89,6 +98,12 @@ class Match:
     whole: bool  # запрос называет имя целиком: каждое слово имени совпало со словом запроса
 
 
+@dataclass(frozen=True)
+class Picked:
+    whole: list[str]  # имя названо целиком: один — он, несколько — спросить
+    partial: list[str]  # названа часть имени («Аня» при «Аня Смирнова») — только спросив человека
+
+
 def match(query: str, name: str) -> Match | None:
     """Подходит ли имя чата к запросу человека: каждое слово запроса — какое-то слово имени."""
     wanted, words = norm(query).split(), _name_words(name)
@@ -101,20 +116,18 @@ def match(query: str, name: str) -> Match | None:
     return Match(min(scores), whole)
 
 
-def pick(query: str, names: list[str]) -> list[str]:
-    """Чаты, которые человек назвал: [имя] — он, несколько — выбрать человеку, [] — ни одного.
-
-    Имя целиком («Мама», «Аня» при «Аня Смирнова» рядом) важнее части имени; иначе — лучшие совпадения."""
+def pick(query: str, names: list[str]) -> Picked:
+    """Чаты, которые человек назвал: имя целиком («Мама», «Аня» при «Аня Смирнова» рядом) — whole, иначе
+    лучшие совпадения части имени — partial (их выбрать человеку)."""
     found: list[tuple[Match, str]] = []
     for name in dict.fromkeys(n.strip() for n in names if n.strip()):
         m = match(query, name)
         if m is not None:
             found.append((m, name))
     whole = [name for m, name in found if m.whole and m.score >= 2]
-    if whole:
-        return whole
     best = max((m.score for m, _ in found), default=0)
-    return [name for m, name in found if m.score == best]
+    partial = [] if whole else [name for m, name in found if m.score == best]
+    return Picked(whole, partial)
 
 
 def _in_name(word: str, name: str) -> bool:
@@ -123,8 +136,10 @@ def _in_name(word: str, name: str) -> bool:
 
 def answer_pick(answer: str, options: list[str]) -> str:
     """Ответ человека на «какой из чатов?» → один из options или "": «второй», «2», «Смирновой», «той, что с
-    работы» — у какого варианта больше слов из ответа (по основе)."""
+    работы» — у какого варианта больше слов из ответа (по основе); вариант один — и «да»."""
     words = norm(answer).split()
+    if len(options) == 1 and parse_yes_no(answer):
+        return options[0]
     scores = [sum(1 for w in words if _in_name(w, option)) for option in options]
     best = max(scores, default=0)
     if best and scores.count(best) == 1:
@@ -136,14 +151,16 @@ def answer_pick(answer: str, options: list[str]) -> str:
 
 
 def same_name(want: str, seen: str) -> bool:
-    """Строка в шапке чата — это имя want (распознавание могло ошибиться в букве)."""
-    a, b = norm(want), norm(seen)
-    if not a or not b:
-        return False
-    for spelled in {b, *(norm(s) for s in spellings(seen))}:
-        if spelled == a or spelled.startswith(a + " ") or fuzz.ratio(a, spelled) >= SAME_TEXT:
-            return True
-    return False
+    """Строка — это имя want целиком: слово в слово (без регистра, знаков, времени и чисел; похожие латинские
+    буквы и два прочтения распознавания — одно и то же). «Аня» и «Аня Смирнова», «Иванов» и «Иванова» —
+    разные."""
+    a, b = _name_words(want), _name_words(seen)
+    return bool(a) and len(a) == len(b) and all(x & y for x, y in zip(a, b, strict=True))
+
+
+def placeholder(text: str) -> bool:
+    """Подсказка пустого поля сообщения («Написать сообщение…»), а не текст в нём."""
+    return bool(PLACEHOLDER.fullmatch(norm(text)))
 
 
 # --- места в окне --------------------------------------------------------------------------------------
@@ -167,7 +184,7 @@ def search_field(snapshot: UiSnapshot) -> UiElement | None:
     «Поиск» слева вверху (щелчок по ней ставит курсор в поле)."""
     left, top, right, bottom = frame(snapshot)
     middle = left + (right - left) // 2
-    upper = top + max(HEADER_ZONE, int((bottom - top) * 0.25))
+    upper = top + max(SEARCH_ZONE, int((bottom - top) * 0.25))
     fields = [
         e
         for e in snapshot.elements
@@ -192,47 +209,67 @@ def split_x(snapshot: UiSnapshot, search: UiElement | None) -> int:
 
 
 def results(snapshot: UiSnapshot, search: UiElement | None) -> list[UiElement]:
-    """Строки левой колонки под полем поиска (найденные чаты и их последние сообщения), сверху вниз."""
+    """Строки левой колонки под полем поиска, сверху вниз, — найденные чаты (и их последние сообщения) до
+    раздела «Глобальный поиск» или «Сообщения». Левее поля поиска — папки, не чаты."""
     edge = split_x(snapshot, search)
     _left, top, _right, _bottom = frame(snapshot)
     below = search.rect[3] if search is not None else top + 60
-    rows = [
-        e
-        for e in snapshot.elements
-        if e.name.strip() and e.kind != "Edit" and e.center[0] < edge and e.rect[1] >= below - 2
-    ]
-    return sorted(rows, key=lambda e: (e.rect[1], e.rect[0]))
+    start = search.rect[0] if search is not None else 0
+    rows = sorted(
+        (
+            e
+            for e in snapshot.elements
+            if e.name.strip() and e.kind != "Edit" and start <= e.center[0] < edge and e.rect[1] >= below - 2
+        ),
+        key=lambda e: (e.rect[1], e.rect[0]),
+    )
+    out: list[UiElement] = []
+    for e in rows:
+        if norm(e.name) in SECTIONS:
+            break
+        out.append(e)
+    return out
 
 
-def _header_bottom(snapshot: UiSnapshot) -> int:
-    _left, top, _right, bottom = frame(snapshot)
-    return top + max(HEADER_ZONE, int((bottom - top) * HEADER_SHARE))
+def _header_bottom(snapshot: UiSnapshot, search: UiElement | None) -> int:
+    if search is not None:
+        return search.rect[3] + HEADER_SLACK
+    return frame(snapshot)[1] + HEADER_NO_SEARCH
 
 
-def header(snapshot: UiSnapshot, edge: int) -> list[UiElement]:
-    """Строки шапки открытого чата: справа от левой колонки, у верха окна (имя, «был(а) недавно»)."""
-    limit = _header_bottom(snapshot)
-    return [
-        e
-        for e in snapshot.elements
-        if e.name.strip() and e.kind != "Edit" and e.center[0] > edge and e.center[1] < limit
-    ]
+def header(snapshot: UiSnapshot, search: UiElement | None) -> list[UiElement]:
+    """Строки шапки открытого чата (имя, «был(а) недавно»): справа от левой колонки, не ниже поля поиска —
+    дальше начинаются сообщения. Кнопки шапки («Поиск», «Позвонить») — не строки."""
+    edge, limit = split_x(snapshot, search), _header_bottom(snapshot, search)
+    return sorted(
+        (
+            e
+            for e in snapshot.elements
+            if e.name.strip()
+            and e.kind not in ("Edit", "Button", "Document")
+            and e.center[0] > edge
+            and e.center[1] < limit
+        ),
+        key=lambda e: (e.rect[1], e.rect[0]),
+    )
 
 
-def chat_open(snapshot: UiSnapshot, edge: int, name: str) -> UiElement | None:
-    """Строка шапки с именем чата name — значит, открыт он."""
-    return next((e for e in header(snapshot, edge) if same_name(name, e.name)), None)
+def chat_open(snapshot: UiSnapshot, search: UiElement | None, name: str) -> UiElement | None:
+    """Строка шапки с именем чата name целиком — значит, открыт он."""
+    return next((e for e in header(snapshot, search) if same_name(name, e.name)), None)
 
 
-def chat_title(snapshot: UiSnapshot, edge: int) -> str:
-    """Имя открытого чата — первая строка шапки (для чата по @username, имени которого не знаем)."""
-    rows = sorted(header(snapshot, edge), key=lambda e: (e.rect[1], e.rect[0]))
+def chat_title(snapshot: UiSnapshot, search: UiElement | None) -> str:
+    """Имя открытого чата — верхняя строка шапки (для чата по @username, имени которого не знаем)."""
+    rows = header(snapshot, search)
     return rows[0].name.strip() if rows else ""
 
 
-def message_field(snapshot: UiSnapshot, edge: int) -> UiElement | None:
+def message_field(snapshot: UiSnapshot, search: UiElement | None) -> UiElement | None:
     """Поле сообщения: самое нижнее поле UI Automation справа от левой колонки (не поиск), а нет —
-    распознанная подсказка «Написать сообщение…» внизу окна."""
+    распознанная подсказка пустого поля («Написать сообщение…») внизу окна — вся строка, не слово в
+    сообщении."""
+    edge = split_x(snapshot, search)
     _left, top, _right, bottom = frame(snapshot)
     fields = [
         e
@@ -248,35 +285,60 @@ def message_field(snapshot: UiSnapshot, edge: int) -> UiElement | None:
     hints = [
         e
         for e in snapshot.elements
-        if e.ocr and e.center[0] > edge and e.center[1] > lower and MESSAGE_FIELD.search(e.name)
+        if e.ocr and e.center[0] > edge and e.center[1] > lower and placeholder(e.name)
     ]
     return max(hints, key=lambda e: e.rect[3]) if hints else None
 
 
-def typed_shown(snapshot: UiSnapshot, edge: int, field: UiElement | None, text: str) -> bool | None:
-    """Набранное видно в поле сообщения: True — да, False — в поле другое (черновик, чужой текст), None —
-    не разобрать (поле не показывает текст, и распознанного внизу окна нет)."""
+def _field_box(snapshot: UiSnapshot, field: UiElement) -> tuple[int, int, int, int]:
+    """Где в окне текст поля: у поля UI Automation — его прямоугольник; у распознанной подсказки — её строка
+    от её левого края до правого края окна (набранное шире подсказки)."""
+    left, top, right, bottom = field.rect
+    if field.ocr:
+        right = frame(snapshot)[2]
+    return left - FIELD_SLACK, top - FIELD_SLACK, right + FIELD_SLACK, bottom + FIELD_SLACK
+
+
+def field_text(snapshot: UiSnapshot, field: UiElement) -> str:
+    """Текст, который стоит в поле сообщения ("" — пусто): значение UI Automation, а без него —
+    распознанные строки внутри поля сверху вниз. Подсказка пустого поля — не текст."""
+    if not field.ocr:
+        value = field.value.strip()
+        if value and not placeholder(value) and norm(value) != norm(field.name):
+            return value
+    left, top, right, bottom = _field_box(snapshot, field)
+    lines = sorted(
+        (
+            e
+            for e in snapshot.elements
+            if e.ocr
+            and e is not field
+            and left <= e.center[0] <= right
+            and top <= e.center[1] <= bottom
+            and not placeholder(e.name)
+            and sum(ch.isalnum() for ch in e.name) >= 2
+        ),
+        key=lambda e: (e.rect[1], e.rect[0]),
+    )
+    return " ".join(e.name.strip() for e in lines)
+
+
+def draft(snapshot: UiSnapshot, field: UiElement) -> str:
+    """Черновик человека в поле сообщения до набора: видна подсказка пустого поля — его нет."""
+    return "" if field.ocr else field_text(snapshot, field)
+
+
+def typed_shown(snapshot: UiSnapshot, field: UiElement, text: str) -> bool | None:
+    """В поле сообщения ровно набранное: True — да, False — там другое (черновик вместе с нашим текстом,
+    чужой текст), None — текста поля не видно. Длинный текст переносится, а поле растёт вверх: у распознанной
+    подсказки видна только его последняя строка — она должна быть концом набранного."""
+    seen = norm(field_text(snapshot, field))
     want = norm(text)
-    if field is not None and not field.ocr and field.value.strip():
-        return norm(field.value) == want
-    _left, top, _right, bottom = frame(snapshot)
-    lower = bottom - int((bottom - top) * FOOTER_SHARE)
-    head = want[:40]
-    for e in snapshot.elements:
-        near = e.ocr and e.center[0] > edge and e.center[1] > lower
-        if near and fuzz.partial_ratio(head, norm(e.name)) >= SAME_TEXT:
-            return True
-    return None
-
-
-def draft(field: UiElement | None) -> str:
-    """Текст, который уже стоит в поле сообщения (черновик человека); подсказка поля — не текст."""
-    if field is None or field.ocr:
-        return ""
-    value = field.value.strip()
-    if not value or norm(value) == norm(field.name) or MESSAGE_FIELD.fullmatch(value.strip(" .…")):
-        return ""
-    return value
+    if not seen:
+        return None
+    if seen == want:
+        return True
+    return field.ocr and len(seen) >= 8 and want.endswith(seen) and len(want) > len(seen)
 
 
 @dataclass(frozen=True)
@@ -285,12 +347,13 @@ class Line:
     mine: bool  # справа — своё сообщение, слева — собеседника
 
 
-def messages(snapshot: UiSnapshot, edge: int, field: UiElement | None) -> list[Line]:
+def messages(snapshot: UiSnapshot, search: UiElement | None, field: UiElement | None) -> list[Line]:
     """Сообщения открытого чата, сверху вниз: строки между шапкой и полем сообщения справа от левой
     колонки. Своё — в правой половине чата (так их рисует Telegram)."""
+    edge = split_x(snapshot, search)
     _left, top, right, bottom = frame(snapshot)
-    upper = _header_bottom(snapshot)
-    lower = field.rect[1] if field is not None else bottom - int((bottom - top) * FOOTER_SHARE)
+    upper = _header_bottom(snapshot, search)
+    lower = field.rect[1] - FIELD_SLACK if field is not None else bottom - int((bottom - top) * FOOTER_SHARE)
     middle = edge + (right - edge) // 2
     rows = sorted(
         (
@@ -312,15 +375,12 @@ def messages(snapshot: UiSnapshot, edge: int, field: UiElement | None) -> list[L
 
 
 def mine_count(lines: list[Line], text: str) -> int:
-    """Сколько своих сообщений с этим текстом видно в чате: стало больше после Enter — сообщение ушло."""
+    """Сколько своих сообщений с этим текстом видно в чате: стало больше после Enter — сообщение ушло.
+    Длинное переносится на несколько строк — тогда своя строка, с которой оно начинается."""
     want = norm(text)
-    head = want[:60]
-    return sum(
-        1
-        for line in lines
-        if line.mine
-        and (
-            norm(line.text) == want
-            or (len(head) >= 8 and fuzz.partial_ratio(head, norm(line.text)) >= SAME_TEXT)
-        )
-    )
+    count = 0
+    for line in lines:
+        seen = norm(line.text)
+        if line.mine and seen and (seen == want or (len(seen) >= 12 and want.startswith(seen))):
+            count += 1
+    return count

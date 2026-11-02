@@ -163,20 +163,32 @@ def crop(
     return b"".join(rows), (x1 - x0, y1 - y0), shown
 
 
+INPUT_KINDS = frozenset({"Edit", "ComboBox"})
+
+
+def _plain(text: str) -> str:
+    """Для сравнения подсказки поля с распознанным: без регистра, знаков и «ё»."""
+    return " ".join("".join(ch if ch.isalnum() else " " for ch in text.casefold().replace("ё", "е")).split())
+
+
 def to_elements(
     lines: list[OcrLine], snapshot: UiSnapshot | None, window: Rect
 ) -> tuple[list[UiElement], bool]:
     """Строки распознавания → элементы снимка окна (id пока пустые, ocr=True): только в окне, без повторов
-    элементов UI Automation, сверху вниз, не больше MAX_LINES. Второе — обрезано ли."""
+    элементов UI Automation, сверху вниз, не больше MAX_LINES. Второе — обрезано ли.
+
+    Поле ввода, значение которого UI Automation не отдаёт (пустое), — не повтор: строки в нём (набранный
+    текст, черновик) остаются, кроме подсказки, совпадающей с именем поля."""
     window_area = max(1, _area(window))
-    known = [
-        e.rect
-        for e in (snapshot.elements if snapshot is not None else [])
-        if not e.ocr
-        and (e.name.strip() or (e.value.strip() and not e.password))
-        and e.kind != "Document"
-        and 0 < _area(e.rect) < DUP_AREA * window_area
-    ]
+    known: list[Rect] = []
+    blank: list[tuple[Rect, str]] = []  # поля без значения: (где, имя-подсказка)
+    for e in snapshot.elements if snapshot is not None else []:
+        if e.ocr or e.kind == "Document" or not 0 < _area(e.rect) < DUP_AREA * window_area:
+            continue
+        if e.kind in INPUT_KINDS and not e.value.strip() and not e.password:
+            blank.append((e.rect, _plain(e.name)))
+        elif e.name.strip() or (e.value.strip() and not e.password):
+            known.append(e.rect)
     out: list[UiElement] = []
     for line in sorted(lines, key=lambda line: (line.rect[1], line.rect[0])):
         text = one_line(line.text, TEXT_LIMIT)
@@ -184,6 +196,8 @@ def to_elements(
             continue
         center = _center(line.rect)
         if not _inside(center, window) or any(_inside(center, rect) for rect in known):
+            continue
+        if any(_inside(center, rect) and (not hint or _plain(text) == hint) for rect, hint in blank):
             continue
         out.append(UiElement("", text, "Text", line.rect, ocr=True))
     return out[:MAX_LINES], len(out) > MAX_LINES

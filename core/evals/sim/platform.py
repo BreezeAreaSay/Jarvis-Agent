@@ -79,7 +79,9 @@ class SimPlatform(FakePlatform):
         self._call("press_keys", combo)
         with self.world.lock:
             self.world.tick()
-            self.world.press(normalize_combo(combo) or combo.casefold())
+            key = normalize_combo(combo) or combo.casefold()
+            # программы имитатора знают «esc», а агент нормализует его в «escape»
+            self.world.press("esc" if key == "escape" else key)
 
     def type_text(self, text: str) -> None:
         self._call("type_text", text)

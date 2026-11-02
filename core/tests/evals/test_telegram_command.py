@@ -94,3 +94,94 @@ async def test_read_without_ai(ctx: AppContext, desktop: Desktop) -> None:
     assert result is not None and result.ok, result
     assert "Машину забрал из сервиса" in result.message
     assert desktop.telegram.sent() == {}
+
+
+async def _send(ctx: AppContext, to: str, text: str) -> Any:
+    agent: Any = ctx.agent
+    return await agent.wait(
+        await agent.run(f"Написать {to}", "text", steps=[("telegram_send", {"to": to, "text": text})])
+    )
+
+
+async def test_by_username(ctx: AppContext, desktop: Desktop) -> None:
+    """@username — адрес tg://resolve после закрытия открытого чата; в вопросе — имя из шапки и @имя."""
+    asked = _decide(ctx, True)
+    window = desktop.telegram.main()
+    assert window is not None
+    desktop.telegram.open(window, "Папа")  # открыт другой чат — писать надо не в него
+    result = await _send(ctx, "@anya_sm", "Привет")
+    assert result.outcome == "done", result.summary
+    assert desktop.telegram.sent() == {"Аня Смирнова": ["Привет"]}
+    assert asked == ["Отправить в Telegram «Аня Смирнова» (@anya_sm)? | Будет отправлено: «Привет»"]
+    # нет такого имени — прежний чат не подставляется
+    desktop.telegram.open(window, "Папа")
+    result = await _send(ctx, "@nobody_here", "Привет")
+    assert result.outcome == "failed" and "не открылся" in result.summary
+    assert desktop.telegram.sent() == {"Аня Смирнова": ["Привет"]}
+
+
+async def test_old_telegram_without_ui_automation(ctx: AppContext, desktop: Desktop) -> None:
+    """Поля не видны UI Automation (старый Telegram): всё по распознанному тексту — и черновик человека в поле
+    тоже виден: его не трогаем и ничего не отправляем."""
+    desktop.telegram.fields_uia = False
+    asked = _decide(ctx, True)
+    result = await _send(ctx, "Маме", "Буду в 7")
+    assert result.outcome == "done", result.summary
+    assert desktop.telegram.sent() == {"Мама": ["Буду в 7"]}
+    window = desktop.telegram.main()
+    assert window is not None
+    window.values["draft:Папа"] = "Купи хлеба"
+    result = await _send(ctx, "Папе", "Буду в 7")
+    assert result.outcome == "failed", result.summary
+    assert "поле сообщения" in result.summary
+    assert window.values["draft:Папа"] == "Купи хлеба"
+    assert desktop.telegram.sent() == {"Мама": ["Буду в 7"]} and len(asked) == 1
+
+
+async def test_draft_seen_by_ui_automation_is_kept(ctx: AppContext, desktop: Desktop) -> None:
+    _decide(ctx, True)
+    window = desktop.telegram.main()
+    assert window is not None
+    window.values["draft:Мама"] = "Купи хлеба"
+    result = await _send(ctx, "Маме", "Буду в 7")
+    assert result.outcome == "failed" and "Купи хлеба" in result.summary
+    assert window.values["draft:Мама"] == "Купи хлеба" and desktop.telegram.sent() == {}
+
+
+async def test_chat_changed_while_asking(ctx: AppContext, desktop: Desktop) -> None:
+    """Пока человек решал, он открыл другой чат и набрал там своё — «Разрешить» не отправляет ни то, ни
+    другое."""
+    window = desktop.telegram.main()
+    assert window is not None
+
+    def answer(event: Any) -> None:
+        desktop.telegram.open(window, "Папа")
+        window.values["message"] = window.values["draft:Папа"] = "Моё"
+        ctx.confirmations.resolve(event.data["id"], True)
+
+    ctx.bus.on("confirm.request", answer)
+    result = await _send(ctx, "Маме", "Буду в 7")
+    assert result.outcome == "failed" and "не чат «Мама»" in result.summary
+    assert desktop.telegram.sent() == {}
+
+
+async def test_denied_with_another_window_in_front(ctx: AppContext, desktop: Desktop) -> None:
+    """Отказали, а впереди уже другая программа: стирать вслепую нельзя — набранное остаётся в Telegram, в
+    Блокноте ничего не меняется."""
+    notes: dict[str, Any] = {}
+
+    def answer(event: Any) -> None:
+        notes["window"] = pad = desktop.notepad.open_main()
+        pad.values["doc"] = "Мой список"
+        ctx.confirmations.resolve(event.data["id"], False)
+
+    ctx.bus.on("confirm.request", answer)
+    result = await _send(ctx, "Маме", "Буду в 7")
+    assert result.outcome == "failed"
+    assert notes["window"].values["doc"] == "Мой список"
+    window = desktop.telegram.main()
+    assert window is not None and window.values.get("draft:Мама") == "Буду в 7"
+    assert desktop.telegram.sent() == {}
+    agent: Any = ctx.agent
+    tools = [a for a in agent.current.actions if not a["ok"]]
+    assert tools  # карточка «не вышло»

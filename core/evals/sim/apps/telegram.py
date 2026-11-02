@@ -8,6 +8,9 @@
 tg://resolve?domain=имя открывает чат по @username.
 
 Отправка — рискованное действие мира (risky): прогон сверяет его с разрешением человека.
+
+fields_uia = False — как старые версии Telegram: и поля «Поиск» и сообщения UI Automation не видит, всё окно —
+только картинкой и распознанным текстом.
 """
 
 from dataclasses import dataclass, field
@@ -49,6 +52,7 @@ class Telegram(App):
         self.open_chat: str | None = None
         self.highlight = -1  # выделенный результат поиска (-1 — ещё не выбирали: Enter откроет первый)
         self.chat_search = False  # ctrl+f в открытом чате
+        self.fields_uia = True  # поля «Поиск» и сообщения видны UI Automation
 
     @property
     def path(self) -> str:
@@ -179,6 +183,7 @@ class Telegram(App):
                 placeholder="Поиск",
                 icon="search",
                 on_enter=None,
+                uia=self.fields_uia,
             ),
         ]
         results = self.results(window)
@@ -267,6 +272,7 @@ class Telegram(App):
                 (396, height - 58, width - 64, height - 10),
                 placeholder="Написать сообщение…",
                 multiline=True,
+                uia=self.fields_uia,
             ),
             Widget(
                 "send",

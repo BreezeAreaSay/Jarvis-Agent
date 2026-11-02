@@ -262,15 +262,27 @@ def test_wants_ocr_crop_and_lines() -> None:
     assert data[-4:] == bgra[last : last + 4]
     assert ocr.crop(bgra, size, area, (190, 140, 400, 400)) is None  # мелкий кусок
     assert ocr.clip((0, 0, 50, 50), (0, 0, 1920, 1080)) == (0, 0, 50, 50)
-    # строки: без повторов поля, по порядку сверху вниз, не больше MAX_LINES
-    snapshot = UiSnapshot("Окно", "app.exe", [UiElement("e1", "Поле", "Edit", (0, 0, 200, 40))])
+    # строки: без повторов элементов, по порядку сверху вниз, не больше MAX_LINES
+    snapshot = UiSnapshot(
+        "Окно",
+        "app.exe",
+        [
+            UiElement("e1", "Поле", "Edit", (0, 0, 200, 40), value="текст"),
+            UiElement("e2", "Кнопка", "Button", (300, 0, 400, 40)),
+        ],
+    )
     lines = [
         ocr.OcrLine(f"строка {i}", (10, 100 + 20 * i, 300, 115 + 20 * i)) for i in range(ocr.MAX_LINES + 5)
     ]
-    found, cut = ocr.to_elements(
-        [ocr.OcrLine("в поле", (10, 10, 100, 30)), *reversed(lines)], snapshot, (0, 0, 800, 4000)
-    )
+    repeats = [ocr.OcrLine("текст", (10, 10, 100, 30)), ocr.OcrLine("Кнопка", (310, 10, 390, 30))]
+    found, cut = ocr.to_elements([*repeats, *reversed(lines)], snapshot, (0, 0, 800, 4000))
     assert cut and len(found) == ocr.MAX_LINES and found[0].name == "строка 0" and all(e.ocr for e in found)
+    # поле, значения которого UI Automation не отдаёт: набранное в нём видно, подсказка (= имя поля) — нет
+    blank = UiSnapshot("Окно", "app.exe", [UiElement("e1", "Написать сообщение…", "Edit", (0, 0, 400, 40))])
+    hint = ocr.OcrLine("Написать сообщение...", (10, 10, 200, 30))
+    typed = ocr.OcrLine("Купи хлеба", (10, 10, 120, 30))
+    assert ocr.to_elements([hint], blank, (0, 0, 800, 600))[0] == []
+    assert [e.name for e in ocr.to_elements([typed], blank, (0, 0, 800, 600))[0]] == ["Купи хлеба"]
 
 
 def test_format_lists_recognized_lines_after_elements() -> None:

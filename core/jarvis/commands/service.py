@@ -229,6 +229,8 @@ class Commands(BaseService):
     def match(self, text: str) -> CommandMatch | None:
         self._refresh_apps_if_stale()
         found = self._matcher.match(self._index, text)
+        if found is not None:
+            found.said = text
         if found is None or "?" not in text or all(self._informational(p.command_id) for p in found.parts):
             return found
         # «открыть браузер?», «выключить компьютер?», «можешь закрыть окно?» — вопрос, а не просьба: действие
@@ -244,7 +246,7 @@ class Commands(BaseService):
 
     # --- выполнение -------------------------------------------------------------------------------
     async def execute(self, match: CommandMatch, source: Source) -> ExecResult:
-        return await self._execute_parts(match.parts, source, 0)
+        return await self._execute_parts(match.parts, source, 0, match.said)
 
     async def run_text(self, text: str, source: Source) -> ExecResult | None:
         found = self.match(text)
@@ -271,7 +273,9 @@ class Commands(BaseService):
             raise UserFacingError(f"Не нашёл команду «{target}»")
         return await self._execute_parts(found.parts, source, depth)
 
-    async def _execute_parts(self, parts: list[MatchedPart], source: Source, depth: int) -> ExecResult:
+    async def _execute_parts(
+        self, parts: list[MatchedPart], source: Source, depth: int, said: str = ""
+    ) -> ExecResult:
         results: list[ExecResult] = []
         for i, part in enumerate(parts):
             entry = self._entries.get(part.command_id)
@@ -311,7 +315,8 @@ class Commands(BaseService):
                     )
                 )
                 break
-            result = await self.executor.run_entry(entry, part.slots, source, depth)
+            slots = {**part.slots, "_said": said} if said else part.slots
+            result = await self.executor.run_entry(entry, slots, source, depth)
             results.append(result)
             if not result.ok:
                 rest = [p.text or p.title for p in parts[i + 1 :]]

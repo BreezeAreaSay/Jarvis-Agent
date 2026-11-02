@@ -211,7 +211,8 @@ def _reminder_text(text: str) -> str:
 
 
 # «напиши Ане в телеграме что буду в семь»: «что», «сообщение», «текст» перед словами сообщения — не они
-_MESSAGE_LEAD = ("что", "чтобы", "сообщение", "текст")
+# («чтобы купила хлеб» — не «Купила хлеб»: смысл другой; такой текст остаётся как есть)
+_MESSAGE_LEAD = ("что", "сообщение", "текст")
 
 
 def _chat_name(text: str) -> str:
@@ -220,11 +221,28 @@ def _chat_name(text: str) -> str:
     return name[:1].upper() + name[1:] if name and not name.startswith("@") else name
 
 
-def _message_text(text: str) -> str:
+def as_said(said: str, words: str) -> str:
+    """Слова слота (нормализованные: без регистра, «ё» и знаков) — как их сказали во фразе said: «буду в 7
+    позвоню из москвы» → «Буду в 7, позвоню из Москвы!». Не нашлись подряд — как есть."""
+    want = normalize(words).split()
+    if not said or not want:
+        return words
+    flat: list[tuple[str, int, int]] = []  # слово фразы после normalize → где его токен во фразе
+    for token in re.finditer(r"\S+", said):
+        flat.extend((w, token.start(), token.end()) for w in normalize(token.group()).split())
+    for i in range(len(flat) - len(want) + 1):
+        if [w for w, _, _ in flat[i : i + len(want)]] == want:
+            return said[flat[i][1] : flat[i + len(want) - 1][2]].strip(" ,:;—-«»\"'")
+    return words
+
+
+def _message_text(text: str, said: str = "") -> str:
+    """Текст сообщения: без «что», «сообщение» в начале, как сказали (если фраза известна), с большой
+    буквы."""
     words = text.strip(" ,:;«»\"'").split()
     while len(words) > 1 and words[0].casefold() in _MESSAGE_LEAD:
         words.pop(0)
-    message = " ".join(words)
+    message = as_said(said, " ".join(words))
     return message[:1].upper() + message[1:]
 
 
@@ -400,7 +418,9 @@ class Executor:
         assert entry.handler is not None
         cmd = entry.command
         try:
-            result = await entry.handler({**slots, "_source": source})
+            # «_said» (фраза как сказана) — встроенным действиям; обработчикам плагинов — слоты как раньше
+            values = {k: v for k, v in slots.items() if k != "_said"}
+            result = await entry.handler({**values, "_source": source})
         except (UserFacingError, PlatformError) as e:
             return ExecResult(False, title, str(e), icon=cmd.icon, command_ids=[cmd.id])
         except asyncio.CancelledError:
@@ -719,14 +739,15 @@ class Executor:
     async def _telegram_send(self, value: str, st: RunState) -> None:
         """«Аня | буду в семь» — агент сам найдёт чат, проверит и отправит (с подтверждением)."""
         who, sep, text = value.partition("|")
-        who, text = _chat_name(who), _message_text(text)
+        said = str(st.slots.get("_said") or "")
+        who, text = _chat_name(as_said(said, who)), _message_text(text, said)
         if not sep or not who or not text:
             raise UserFacingError("Не понял, кому и что написать в Telegram")
         task = f"Написать в Telegram «{who}»: «{one_line(text, 80)}»"
         await self._agent_steps(task, [("telegram_send", {"to": who, "text": text})], st)
 
     async def _telegram_read(self, value: str, st: RunState) -> None:
-        who = _chat_name(value)
+        who = _chat_name(as_said(str(st.slots.get("_said") or ""), value))
         if not who:
             raise UserFacingError("Не понял, какой чат Telegram прочитать")
         await self._agent_steps(f"Прочитать в Telegram чат «{who}»", [("telegram_read", {"chat": who})], st)
